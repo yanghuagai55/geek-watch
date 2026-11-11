@@ -40,7 +40,7 @@ tools/         OpenOCD 等（不入库）
 **首次克隆先自举字模**（字模表不入库，见下文「许可与字体」）：
 
 ```bat
-host\build.bat regen          :: 光栅字模（需本地字体，见 CONTRIBUTING 推荐开源字体）
+host\build.bat regen          :: 光栅字模（需本地字体，推荐开源字体见下文「许可与字体」）
 python host\subset_font.py    :: 生成默认子集（完整表留 font_data_full.c）
 ```
 
@@ -99,10 +99,13 @@ cd host\obj\device-baseline && python test_port.py         :: 端口寄存器 mo
 cd host && python benchmark_device.py --port COM5          :: 实机性能/截屏
 ```
 
-## 协作
+## 协作 / 两条路子
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)：分支/提交约定、代码规范、构建测试、烧录安全、
-字体工作流与预算（16KB 可移植 RAM 留 4KB、64KB Flash，链接脚本有 assert）。
+本仓库主线 = 可移植核心 `ui/` + STM32 参考端口。核心只认 `ui/hal.h`，可以各自 fork /
+另开一路（例如好友的 ESP32），**不强制并入主线**；想共用界面/动画/图标时直接复用 `ui/`。
+
+最小约定（保证可移植）：`ui/` 不 include 芯片头；SVG/像素缓冲静态存活到帧 flush；
+布局用千分比 `UI_MX/UI_MY`。其余随意。预算：16KB 可移植 RAM 留 4KB、64KB Flash（链接脚本有 assert）。
 
 ## 许可与字体
 
@@ -114,10 +117,10 @@ cd host && python benchmark_device.py --port COM5          :: 实机性能/截�
   - 标题/时钟显示字：**ZCOOL QingKe HuangYou（站酷庆科黄油体，OFL）**——粗圆显示体，接近原艺术字观感。
   - 小字中文：**Noto Sans SC / Source Han Sans（OFL）**。
   - 小字 ASCII：**Inter（OFL）**，仓库已带 `host/fonts/Inter-Medium.ttf`。
-  用这些字体重新光栅后，字模表即可安全入库（届时可取消 gitignore）。生成器与子集工具见
-  [CONTRIBUTING.md](CONTRIBUTING.md)「字体」一节。
+  用这些字体重新光栅后，字模表即可安全入库（届时可取消 gitignore）。工具：
+  `host/gen_font.c`（点阵）、`host/gen_clock.c`（显示字）、`host/subset_font.py`（子集）。
 
 ## 相关文档
 
 - [动画交接.md](动画交接.md) · [本轮动画优化测试报告](本轮动画优化测试报告-2026-11-11.md)
-- [ui/ICON_SVG_PROMPT.md](ui/ICON_SVG_PROMPT.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
+- [ui/ICON_SVG_PROMPT.md](ui/ICON_SVG_PROMPT.md)
