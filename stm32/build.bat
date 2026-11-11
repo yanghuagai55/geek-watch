@@ -1,40 +1,43 @@
 @echo off
 setlocal
-set GCC=D:\dev\arm-none-eabi-gcc\bin\arm-none-eabi-gcc.exe
-set OBJ=D:\dev\arm-none-eabi-gcc\bin\arm-none-eabi-objcopy.exe
-set SIZE=D:\dev\arm-none-eabi-gcc\bin\arm-none-eabi-size.exe
-cd /d "%~dp0.."
-if not exist stm32\obj mkdir stm32\obj
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -I stm32 -c stm32\startup.s -o stm32\obj\startup.o
+if not defined ARM_GCC_BIN set "ARM_GCC_BIN=D:\dev\arm-none-eabi-gcc\bin"
+set "GCC=%ARM_GCC_BIN%\arm-none-eabi-gcc.exe"
+set "AR=%ARM_GCC_BIN%\arm-none-eabi-ar.exe"
+set "OBJCOPY=%ARM_GCC_BIN%\arm-none-eabi-objcopy.exe"
+set "SIZE=%ARM_GCC_BIN%\arm-none-eabi-size.exe"
+set "NM=%ARM_GCC_BIN%\arm-none-eabi-nm.exe"
+set "ROOT=%~dp0.."
+set "OUT=%~dp0obj"
+set "ARCH=-mcpu=cortex-m3 -mthumb -mfloat-abi=soft"
+set "CFLAGS=%ARCH% -Os -std=c99 -ffunction-sections -fdata-sections -fno-common -fstack-usage -Wall -Wextra -Werror=implicit-function-declaration"
+if not exist "%OUT%" mkdir "%OUT%"
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -I stm32 -c stm32\syscalls.c -o stm32\obj\syscalls.o
+
+"%GCC%" %ARCH% -c "%~dp0startup.s" -o "%OUT%\startup.o"
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -I stm32 -c stm32\port.c -o stm32\obj\port.o
+for %%S in (syscalls port main) do (
+    "%GCC%" %CFLAGS% -I "%ROOT%\ui" -I "%~dp0." -c "%~dp0%%S.c" -o "%OUT%\%%S.o"
+    if errorlevel 1 exit /b 1
+)
+
+rem Rebuild a reusable Cortex-M3/soft-float UI archive without stale members.
+if exist "%OUT%\libui.a" del "%OUT%\libui.a"
+for %%S in (ui_mem ui_anim ui_draw ui_menu ui_trace ui_app song_draw song_data font_data link) do (
+    "%GCC%" %CFLAGS% -I "%ROOT%\ui" -c "%ROOT%\ui\src\%%S.c" -o "%OUT%\%%S.o"
+    if errorlevel 1 exit /b 1
+    "%AR%" rcs "%OUT%\libui.a" "%OUT%\%%S.o"
+    if errorlevel 1 exit /b 1
+)
+
+"%GCC%" %ARCH% -Os -Wl,--gc-sections -Wl,-Map="%OUT%\watch.map",--cref -T "%~dp0stm32.ld" -specs=nano.specs -specs=nosys.specs -o "%OUT%\watch.elf" "%OUT%\startup.o" "%OUT%\syscalls.o" "%OUT%\port.o" "%OUT%\main.o" "%OUT%\libui.a" -lc -lm -lgcc
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -I stm32 -c stm32\main.c -o stm32\obj\main.o
+"%OBJCOPY%" -O binary "%OUT%\watch.elf" "%OUT%\watch.bin"
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\ui_mem.c -o stm32\obj\ui_mem.o
+"%SIZE%" "%OUT%\watch.elf"
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\ui_anim.c -o stm32\obj\ui_anim.o
+"%SIZE%" -A "%OUT%\watch.elf" > "%OUT%\watch.size"
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\ui_draw.c -o stm32\obj\ui_draw.o
+"%NM%" -S --size-sort "%OUT%\watch.elf" > "%OUT%\watch.symbols"
 if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\ui_menu.c -o stm32\obj\ui_menu.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\ui_trace.c -o stm32\obj\ui_trace.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\ui_app.c -o stm32\obj\ui_app.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\song_draw.c -o stm32\obj\song_draw.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\song_data.c -o stm32\obj\song_data.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\font_data.c -o stm32\obj\font_data.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wall -I ui -c ui\src\link.c -o stm32\obj\link.o
-if errorlevel 1 exit /b 1
-%GCC% -mcpu=cortex-m3 -mthumb -mfloat-abi=soft -Os -std=c99 -ffunction-sections -fdata-sections -Wl,--gc-sections -T stm32\stm32.ld -specs=nano.specs -specs=nosys.specs -o stm32\obj\watch.elf stm32\obj\startup.o stm32\obj\syscalls.o stm32\obj\port.o stm32\obj\main.o stm32\obj\ui_mem.o stm32\obj\ui_anim.o stm32\obj\ui_draw.o stm32\obj\ui_menu.o stm32\obj\ui_trace.o stm32\obj\ui_app.o stm32\obj\song_draw.o stm32\obj\song_data.o stm32\obj\font_data.o stm32\obj\link.o -lc -lm -lgcc
-if errorlevel 1 exit /b 1
-%OBJ% -O binary stm32\obj\watch.elf stm32\obj\watch.bin
-%SIZE% stm32\obj\watch.elf
+rem Per-function stack estimates are in obj\*.su; they are not stack high-water measurements.
 exit /b 0

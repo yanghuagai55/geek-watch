@@ -117,7 +117,7 @@ void host_panel_paint(void *hdc_ptr, int x, int panel_w, int height) {
     text_w(hdc, x + 16, y, L"换芯片只改这些");
     y += 20;
     SetTextColor(hdc, RGB(236, 240, 244));
-    text_w(hdc, x + 16, y, L"hal_display_flush()  每次 8 行");
+    text_w(hdc, x + 16, y, L"hal_display_flush()  双缓冲 / 4 行");
     y += 18;
     text_w(hdc, x + 16, y, L"hal_tick_ms()  hal_key_level()");
     y += 18;

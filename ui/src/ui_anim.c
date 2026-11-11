@@ -127,7 +127,11 @@ void ui_anim_play_range(ui_anim_id_t id, ui_obj_t *obj, int16_t from, int16_t to
         }
     }
     if (idx < 0) {
-        idx = free_i >= 0 ? free_i : 0;
+        if (free_i < 0) {
+            ui_trace_emit("ui_anim: slots full");
+            return;
+        }
+        idx = free_i;
     }
     s = &slots[idx];
     s->obj = obj;
@@ -160,6 +164,18 @@ int ui_anim_busy(const ui_obj_t *obj) {
         }
     }
     return 0;
+}
+
+void ui_anim_stop(ui_obj_t *obj, int finish) {
+    int i;
+    if (!slots || !obj) return;
+    for (i = 0; i < SLOT_N; i++) {
+        if (slots[i].obj == obj) {
+            if (finish) apply(&slots[i], slots[i].to);
+            slots[i].active = 0;
+            slots[i].obj = 0;
+        }
+    }
 }
 
 void ui_anim_tick(uint32_t now_ms) {

@@ -24,6 +24,8 @@ enum {
     LINK_SNAP = 0x06,
     LINK_KEY = 0x07,
     LINK_DEBUG = 0x08,
+    LINK_PERF = 0x09,
+    LINK_STATS = 0x12,
     LINK_CTRL = 0x10,
     LINK_IMG = 0x11,
     LINK_PAY = 28,
@@ -45,6 +47,7 @@ static int playing;
 static int bright;
 static int snap_arm;
 static int snap_on;
+static int perf_requested;
 static uint8_t link_keys;
 static uint8_t link_down;
 static uint8_t link_up;
@@ -149,6 +152,10 @@ static void apply_frame(void) {
         link_keys = next;
         return;
     }
+    if (cmd == LINK_PERF && len == 0) {
+        perf_requested = 1;
+        return;
+    }
     if (cmd == LINK_DEBUG && len == 1) {
         ui_settings_set_debug(pay[0] ? 1 : 0);
     }
@@ -204,6 +211,10 @@ void link_snap_pixels(const uint16_t *px, int n) {
         snap_payload((uint8_t)(px[i] >> 8));
         snap_payload((uint8_t)px[i]);
     }
+}
+
+int link_snap_active(void) {
+    return snap_on;
 }
 
 void link_snap_end(void) {
@@ -268,6 +279,10 @@ void link_init(void) {
     lyric[0] = 0;
     playing = 0;
     bright = 1;
+    snap_arm = snap_on = perf_requested = 0;
+    snap_left = 0;
+    link_keys = link_down = link_up = 0;
+    ack_ok = ack_bad = 0;
     st = ST_MARK;
 }
 
@@ -315,7 +330,40 @@ void link_key_edges(uint8_t *down, uint8_t *up) {
     link_up = 0;
 }
 
+static void send_perf(void) {
+    ui_render_stats_t stats;
+    uint32_t values[8];
+    uint8_t frame[36];
+    uint8_t check;
+    unsigned i, j;
+    ui_render_get_stats(&stats);
+    values[0] = stats.prepare_us;
+    values[1] = stats.raster_us;
+    values[2] = stats.wait_us;
+    values[3] = stats.frame_us;
+    values[4] = stats.pixels;
+    values[5] = stats.bands | ((uint32_t)stats.dropped << 16);
+    ui_mem_get(&values[6], &values[7]);
+    frame[0] = LINK_MARK;
+    frame[1] = LINK_STATS;
+    frame[2] = 32;
+    check = (uint8_t)(frame[0] ^ frame[1] ^ frame[2]);
+    for (i = 0; i < 8; i++) {
+        for (j = 0; j < 4; j++) {
+            uint8_t b = (uint8_t)(values[i] >> (j * 8));
+            frame[3 + i * 4 + j] = b;
+            check ^= b;
+        }
+    }
+    frame[35] = check;
+    hal_link_write(frame, sizeof frame);
+}
+
 void link_ack_flush(void) {
+    if (perf_requested) {
+        perf_requested = 0;
+        send_perf();
+    }
     while (ack_ok > 0) {
         reply("ok\r\n");
         ack_ok--;

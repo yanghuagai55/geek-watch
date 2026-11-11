@@ -5,6 +5,18 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char *shot_dir;
+static int shot_errors;
+
+static void save_shot(const char *name) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s", shot_dir, name);
+    if (!hal_host_save_bmp(path)) {
+        fprintf(stderr, "FAIL: cannot save %s\n", path);
+        shot_errors++;
+    }
+}
+
 static void send_link(uint8_t cmd, const uint8_t *pay, int n) {
     uint8_t buf[40];
     int i;
@@ -37,7 +49,7 @@ static int region_diff(void) {
     bot = top + bh - 6;
     for (y = top + 8; y <= bot; y++) {
         for (x = UI_MX(16) + 4; x <= UI_MX(16) + 22; x++) {
-            if (hal_host_pixel(x, y) != hal_host_pixel(x + 96, y)) {
+            if (hal_host_pixel(x, y) != hal_host_pixel(x + UI_W * 3 / 4, y)) {
                 diff++;
             }
         }
@@ -123,7 +135,7 @@ static int fail(const char *msg) {
     return 1;
 }
 
-int host_self_test(void) {
+int host_self_test(const char *output_dir) {
     uint32_t used = 0;
     uint32_t total = 0;
     uint32_t used_later = 0;
@@ -135,8 +147,14 @@ int host_self_test(void) {
     int diff_off;
     uint16_t cpu;
 
+    shot_dir = output_dir;
+    shot_errors = 0;
     hal_host_init(0);
     hal_host_use_virtual_time();
+    {
+        const hal_clock_t clock = {2026, 11, 11, 8, 30, 0};
+        hal_clock_set(&clock);
+    }
     ui_init();
 
     ui_mem_get(&used, &total);
@@ -198,7 +216,7 @@ int host_self_test(void) {
     }
     ui_settings_set_debug(1);
     frames(20);
-    hal_host_save_bmp("host/obj/shot_launcher.bmp");
+    save_shot("shot_launcher.bmp");
     diff_on = region_diff();
     printf("overlay diff %d\n", diff_on);
     if (diff_on < 30) {
@@ -208,7 +226,7 @@ int host_self_test(void) {
     tap(HAL_KEY3);
     tap(HAL_KEY3);
     frames(24);
-    hal_host_save_bmp("host/obj/shot_focus.bmp");
+    save_shot("shot_focus.bmp");
     {
         int dx, dy;
         dot_at(2, &dx, &dy);
@@ -226,10 +244,10 @@ int host_self_test(void) {
     frames(16);
     tap(HAL_KEY2);
     frames(8);
-    hal_host_save_bmp("host/obj/shot_push.bmp");
+    save_shot("shot_push.bmp");
     frames(16);
-    hal_host_save_bmp("host/obj/shot_settings.bmp");
-    hal_host_save_bmp("host/obj/shot_settings_stack.bmp");
+    save_shot("shot_settings.bmp");
+    save_shot("shot_settings_stack.bmp");
     {
         int cx, cy;
         int header = UI_MY(150);
@@ -288,8 +306,8 @@ int host_self_test(void) {
             pose = (int)((hal_tick_ms() / 70u) % 8u);
             if (!seen[pose]) {
                 char path[64];
-                snprintf(path, sizeof path, "host/obj/shot_run_%d.bmp", pose);
-                hal_host_save_bmp(path);
+                snprintf(path, sizeof path, "shot_run_%d.bmp", pose);
+                save_shot(path);
                 seen[pose] = 1;
                 got++;
             }
@@ -331,7 +349,7 @@ int host_self_test(void) {
                 return fail("msg list is not the stack");
             }
         }
-        hal_host_save_bmp("host/obj/shot_msg.bmp");
+        save_shot("shot_msg.bmp");
         tap(HAL_KEY2);
         frames(20);
         {
@@ -343,7 +361,7 @@ int host_self_test(void) {
                 return 1;
             }
         }
-        hal_host_save_bmp("host/obj/shot_msg_detail.bmp");
+        save_shot("shot_msg_detail.bmp");
         hal_host_set_keys(HAL_KEY2);
         frames(32);
         hal_host_set_keys(0);
@@ -420,7 +438,8 @@ int host_self_test(void) {
         frames(1);
         hal_host_link_tx_take(tx, 16, &tx_n);
         if (tx_n < 11 || tx[0] != 0xA5 || tx[1] != 0x11 || tx[2] != 0xFF ||
-            tx[6] != 128 || tx[7] != 0 || tx[8] != 160 || tx[9] != 0) {
+            tx[6] != (UI_W & 255) || tx[7] != (UI_W >> 8) ||
+            tx[8] != (UI_H & 255) || tx[9] != (UI_H >> 8)) {
             return fail("snap");
         }
     }
@@ -436,6 +455,7 @@ int host_self_test(void) {
     if (cpu > 1000) {
         return fail("cpu range");
     }
-    printf("PASS\n");
+    if (shot_errors) return fail("screenshot output");
+    printf("Behavior PASS %dx%d\n", UI_W, UI_H);
     return 0;
 }

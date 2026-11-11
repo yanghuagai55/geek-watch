@@ -25,7 +25,11 @@ g_pfnVectors:
     .word 0
     .word PendSV_Handler
     .word SysTick_Handler
-    .rept 38
+    .rept 13
+    .word Default_Handler
+    .endr
+    .word DMA1_Channel3_IRQHandler
+    .rept 24
     .word Default_Handler
     .endr
     .word USART2_IRQHandler
@@ -55,6 +59,15 @@ Reset_Handler:
     str r3, [r1], #4
     b 3b
 4:
+    ldr r1, =_stack_limit
+    ldr r2, =_estack
+    ldr r3, =0xA5A5A5A5
+6:
+    cmp r1, r2
+    bcs 7f
+    str r3, [r1], #4
+    b 6b
+7:
     bl main
 5:
     b 5b

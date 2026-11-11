@@ -668,10 +668,12 @@ static void on_key(uint8_t pressed, int long_enter) {
 }
 
 void ui_init(void) {
-    ui_mem_init();
-    ui_anim_init();
-    ui_draw_init();
+    ui_core_init();
     st = ui_mem_alloc(sizeof *st, 8);
+    if (!st) {
+        ui_trace_emit("ui_init: RAM budget exceeded");
+        return;
+    }
 
     col_bg = rgb565(6, 12, 28);
     col_text = rgb565(236, 244, 255);
@@ -692,6 +694,7 @@ void ui_nav_goto(ui_page_id_t page) {
         ui_menu_level(&st->messages) > UI_MENU_ICON || (unsigned)page >= HOME_N) {
         return;
     }
+    ui_anim_stop(&st->scroll, 0);
     st->focus = (int)page;
     st->scroll.x = (int16_t)((int)page * 256);
 }

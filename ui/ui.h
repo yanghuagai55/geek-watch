@@ -4,26 +4,29 @@
 #include "hal.h"
 #include <stdint.h>
 
-/* 手表界面系统。主循环只做这两句：
-       ui_init();
-       for (;;) ui_frame();
-   换页、动画、调试开关用下面的函数，不要在页面里直接画点。
-
-   调试模式打开后，左下角一直显示 RAM 和 CPU。
-   CPU 大约每 0.5 秒才换一次数字。
-   字模放在 Flash 里，不计入这 16KB。
-
-   最外层左右翻页，内容直接画在背景上。
-   进入下一级时，新页面从右往左盖住，上一页缩小后退。
-
-   GIF / DMA 要抢屏幕时调用 ui_output_preempt()，
-   当前帧还没送出的色带会停掉。主循环里再用 ui_gif_post()
-   把一块 RGB565 贴上去。 */
+/* Call ui_init() once, then ui_frame(); all hardware access stays in hal.h. */
 
 #define UI_W HAL_LCD_W
 #define UI_H HAL_LCD_H
-#define UI_BAND_H 8
-#define UI_RAM_BUDGET (16 * 1024)
+#define UI_BAND_H 4
+#define UI_RAM_BUDGET (4864u + 4u * UI_W * UI_BAND_H)
+
+typedef struct ui_render_stats {
+    uint32_t prepare_us;
+    uint32_t raster_us;
+    uint32_t wait_us;
+    uint32_t frame_us;
+    uint32_t pixels;
+    uint16_t bands;
+    uint16_t items;
+    uint16_t dropped;
+} ui_render_stats_t;
+
+void ui_render_get_stats(ui_render_stats_t *out);
+void ui_draw_invalidate(void);
+/* Short cooperative work only: do not reenter UI or take ownership of the display. */
+void ui_set_service(void (*fn)(void));
+void ui_service(void);
 
 /* 屏幕长边竖着放。页面按千分比排，不写死某一块屏幕的像素。
    0 贴着左或上，1000 贴着右或下。 */
@@ -59,8 +62,16 @@ typedef void (*ui_trace_fn)(const char *message);
 
 void ui_set_trace(ui_trace_fn fn);
 
+/* ui_core_init omits the demo app; follow with begin/draw/flush for custom pages. */
+void ui_core_init(void);
 void ui_init(void);
 void ui_frame(void);
+void ui_draw_begin(void);
+void ui_draw_xform(int scale256, int ox, int oy);
+void ui_draw_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t opacity);
+void ui_draw_round(int16_t x, int16_t y, int16_t w, int16_t h, int16_t radius, uint16_t color, uint8_t opacity);
+void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color, uint8_t opacity);
+void ui_draw_flush(void);
 
 void ui_nav_goto(ui_page_id_t page);
 
@@ -69,6 +80,7 @@ void ui_nav_goto(ui_page_id_t page);
 void ui_anim_play(ui_anim_id_t id, ui_obj_t *obj);
 void ui_anim_play_range(ui_anim_id_t id, ui_obj_t *obj, int16_t from, int16_t to);
 int ui_anim_busy(const ui_obj_t *obj);
+void ui_anim_stop(ui_obj_t *obj, int finish);
 void ui_anim_tick(uint32_t now_ms);
 uint16_t ui_anim_duration_ms(ui_anim_id_t id);
 

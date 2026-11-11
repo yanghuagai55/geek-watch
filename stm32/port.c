@@ -1,4 +1,4 @@
-#include "hal.h"
+#include "ui.h"
 
 /* STM32F103C8。SPI1：SCL PA5，SDA PA7，CS PA4。DC PB6，RES PB7，背光 PB1，PA14 也拉高。
    串口 USART2：PA2 发送，PA3 接收，115200。 */
@@ -34,7 +34,18 @@
 #define STK_CTRL     REG(0xE000E010)
 #define STK_LOAD     REG(0xE000E014)
 #define STK_VAL      REG(0xE000E018)
+#define SCB_ICSR     REG(0xE000ED04)
+#define NVIC_ISER0   REG(0xE000E100)
 #define NVIC_ISER1   REG(0xE000E104)
+
+#define DMA_TC3      (1u << 9)
+#define DMA_FLAGS3   (0xFu << 8)
+#define DMA_TCIE     (1u << 1)
+#define SPI_TXE      (1u << 1)
+#define SPI_BSY      (1u << 7)
+#define SPI_TXDMAEN  (1u << 1)
+#define SPI_SPE      (1u << 6)
+#define SPI_DFF      (1u << 11)
 
 #define PIN_CS   (1u << 4)
 #define PIN_RST  (1u << 7)
@@ -44,6 +55,10 @@
 static volatile unsigned int tick_ms;
 static unsigned int pace_ms;
 static unsigned int meter_t0;
+static unsigned int idle_us;
+static unsigned int meter_idle0;
+/* Only the main context owns completion/CS/DFF; the IRQ just wakes WFI. */
+static int display_active;
 static unsigned int cpu_smooth;
 static unsigned int cpu_shown;
 static unsigned int cpu_shown_ms;
@@ -55,8 +70,24 @@ static unsigned char rx_q[128];
 static volatile unsigned char rx_r;
 static volatile unsigned char rx_n;
 
+static unsigned int irq_save(void) {
+    unsigned int mask;
+    __asm volatile("mrs %0, primask\n\tcpsid i" : "=r"(mask) :: "memory");
+    return mask;
+}
+
+static void irq_restore(unsigned int mask) {
+    __asm volatile("msr primask, %0" :: "r"(mask) : "memory");
+}
+
 void SysTick_Handler(void) {
     tick_ms++;
+}
+
+void DMA1_Channel3_IRQHandler(void) {
+    /* Keep TCIF3 latched for hal_display_busy(). TC is NOT SPI completion.
+       Mask this source to avoid re-entering while the final word shifts out. */
+    DMA1_CCR3 &= ~DMA_TCIE;
 }
 
 static int clock_72;
@@ -151,20 +182,20 @@ static void uart_puts(const char *s) {
     }
 }
 
-static void service_uart(void) {
-}
-
 static void delay_ms(unsigned int ms) {
     unsigned int t = tick_ms;
     while ((tick_ms - t) < ms) {
-        service_uart();
+        hal_idle();
     }
 }
 
 static void spi_setup(void) {
     /* SPI1 在 APB2。72MHz 除以 4 是 18MHz。像素走 DMA1 通道 3。 */
     RCC_AHBENR |= 1u;
+    DMA1_CCR3 = 0;
+    DMA1_IFCR = DMA_FLAGS3;
     DMA1_CPAR3 = 0x4001300C;
+    NVIC_ISER0 = 1u << 13; /* DMA1 channel 3: completion wake-up. */
     SPI1_CR1 = (1u << 9) | (1u << 8) | (1u << 3) | (1u << 2);
     SPI1_CR1 |= 1u << 6;
 }
@@ -179,19 +210,17 @@ static void spi_wait(void) {
 }
 
 static void spi_dma(const uint16_t *px, int n) {
-    DMA1_CCR3 &= ~1u;
-    DMA1_IFCR = 1u << 9;
+    DMA1_CCR3 = 0;
+    DMA1_IFCR = DMA_FLAGS3;
     DMA1_CMAR3 = (unsigned int)px;
     DMA1_CNDTR3 = (unsigned int)n;
-    DMA1_CCR3 = (1u << 12) | (1u << 10) | (1u << 8) | (1u << 7) | (1u << 4);
-    SPI1_CR2 |= 1u << 1;
+    DMA1_CCR3 = (1u << 12) | (1u << 10) | (1u << 8) | (1u << 7) |
+                (1u << 4) | DMA_TCIE;
+    display_active = 1;
+    /* Publish all pixel writes before the peripheral borrows the buffer. */
+    __asm volatile("dmb" ::: "memory");
+    SPI1_CR2 |= SPI_TXDMAEN;
     DMA1_CCR3 |= 1u;
-    while ((DMA1_ISR & (1u << 9)) == 0) {
-    }
-    DMA1_CCR3 &= ~1u;
-    SPI1_CR2 &= ~(1u << 1);
-    DMA1_IFCR = 1u << 9;
-    spi_wait();
 }
 
 static void spi_byte(unsigned char data) {
@@ -237,20 +266,20 @@ static void lcd_dat16(unsigned short data) {
 }
 
 static void lcd_window(int x, int y, int w, int h) {
-    unsigned int x0 = (unsigned int)x;
-    unsigned int y0 = (unsigned int)y;
+    unsigned int x0 = (unsigned int)x + 2u;
+    unsigned int y0 = (unsigned int)y + 1u;
     unsigned int x1 = x0 + (unsigned int)w - 1u;
     unsigned int y1 = y0 + (unsigned int)h - 1u;
     lcd_cmd(0x2A);
     lcd_data(0);
     lcd_data((unsigned char)x0);
     lcd_data(0);
-    lcd_data((unsigned char)(x1 + 2u));
+    lcd_data((unsigned char)x1);
     lcd_cmd(0x2B);
     lcd_data(0);
     lcd_data((unsigned char)y0);
     lcd_data(0);
-    lcd_data((unsigned char)(y1 + 1u));
+    lcd_data((unsigned char)y1);
     lcd_cmd(0x2C);
 }
 
@@ -335,6 +364,45 @@ uint32_t hal_tick_ms(void) {
     return tick_ms;
 }
 
+uint32_t hal_tick_us(void) {
+    unsigned int mask = irq_save();
+    unsigned int ms = tick_ms;
+    unsigned int load = STK_LOAD;
+    unsigned int val = STK_VAL;
+    unsigned int per_us = (load + 1u) / 1000u;
+
+    /* Account for a reload whose handler has not run yet. Sampling VAL again
+       after the pending bit avoids pairing a new millisecond with old VAL. */
+    if (SCB_ICSR & (1u << 26)) {
+        ms++;
+        val = STK_VAL;
+    }
+    irq_restore(mask);
+    if (per_us == 0) {
+        per_us = 1;
+    }
+    /* VAL is briefly zero at the tick boundary, before hardware reloads it.
+       That instant belongs to the new millisecond, not its last microsecond. */
+    return ms * 1000u + (val ? (load - val) / per_us : 0u);
+}
+
+void hal_idle(void) {
+    unsigned int mask = irq_save();
+    unsigned int before;
+
+    /* Check with interrupts masked so a DMA/UART IRQ cannot be consumed
+       between the readiness check and WFI. Masked pending IRQs still wake
+       Cortex-M3 WFI. SysTick also bounds idle latency to one millisecond. */
+    if (rx_n || (display_active && (DMA1_ISR & DMA_TC3))) {
+        irq_restore(mask);
+        return;
+    }
+    before = hal_tick_us();
+    __asm volatile("dsb\n\twfi" ::: "memory");
+    idle_us += hal_tick_us() - before;
+    irq_restore(mask);
+}
+
 void hal_clock_set(const hal_clock_t *in) {
     if (!in) {
         return;
@@ -368,57 +436,65 @@ uint8_t hal_key_level(void) {
 }
 
 void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels) {
-    int n;
-    if (!pixels || w <= 0 || h <= 0) {
+    if (!pixels || x < 0 || y < 0 || w <= 0 || h <= 0 ||
+        x + w > HAL_LCD_W || y + h > HAL_LCD_H) {
+        return;
+    }
+    /* The caller waits before submitting again. Reject an overlapping call
+       without touching the previous window, DMA source, CS or word size. */
+    if (hal_display_busy()) {
         return;
     }
     lcd_window(x, y, w, h);
-    n = w * h;
     spi_bits(1);
     GPIOA_BRR = PIN_CS;
     GPIOB_BSRR = PIN_DC;
-    spi_dma(pixels, n);
-    GPIOA_BSRR = PIN_CS;
-    spi_bits(0);
+    spi_dma(pixels, w * h);
+    /* Return with CS asserted and 16-bit SPI still active. */
     (void)lcd_dat16;
 }
 
 int hal_display_busy(void) {
+    unsigned int sr;
+    if (!display_active) {
+        return 0;
+    }
+    if ((DMA1_ISR & DMA_TC3) == 0) {
+        return 1;
+    }
+    sr = SPI1_SR;
+    /* TC only means the last halfword reached DR, not the LCD. Both the
+       transmit register and the shifter must drain before the next command. */
+    if ((sr & SPI_TXE) == 0 || (sr & SPI_BSY)) {
+        return 1;
+    }
+    DMA1_CCR3 = 0;
+    SPI1_CR2 &= ~SPI_TXDMAEN;
+    (void)SPI1_DR;
+    (void)SPI1_SR; /* Clear receive overrun, as in the synchronous path. */
+    GPIOA_BSRR = PIN_CS;
+    SPI1_CR1 &= ~SPI_SPE;
+    SPI1_CR1 &= ~SPI_DFF;
+    SPI1_CR1 |= SPI_SPE;
+    DMA1_IFCR = DMA_FLAGS3;
+    __asm volatile("dmb" ::: "memory");
+    display_active = 0;
     return 0;
 }
 
-/* SysTick is 1 ms. VAL counts down inside that millisecond, so a frame
-   shorter than 1 ms is still visible. The old meter stored milliseconds*10
-   and treated them as microseconds, which pinned the badge near 0%. */
-static unsigned int cycle_now(void) {
-    unsigned int load = STK_LOAD;
-    unsigned int span = load + 1u;
-    unsigned int ms = tick_ms;
-    unsigned int val = STK_VAL;
-
-    if (ms != tick_ms) {
-        ms = tick_ms;
-        val = STK_VAL;
-    }
-    return ms * span + (load - val);
-}
-
 void hal_meter_begin(void) {
-    meter_t0 = cycle_now();
+    meter_t0 = hal_tick_us();
+    meter_idle0 = idle_us;
 }
 
 void hal_meter_end(void) {
-    unsigned int dt = cycle_now() - meter_t0;
-    unsigned int span = STK_LOAD + 1u;
-    unsigned int per_us = span / 1000u;
-    unsigned int us;
+    unsigned int dt = hal_tick_us() - meter_t0;
+    unsigned int slept = idle_us - meter_idle0;
+    unsigned int us = dt >= slept ? dt - slept : 0;
     unsigned int tenths;
     unsigned int now;
 
-    if (per_us == 0) {
-        per_us = 1;
-    }
-    us = dt / per_us;
+    /* Keep the public 16.7 ms work-budget denominator, excluding WFI time. */
     if (us >= 16667u) {
         tenths = 1000u;
     } else {
@@ -442,26 +518,30 @@ uint16_t hal_cpu_tenths(void) {
 }
 
 void hal_frame_pace(void) {
-    service_uart();
-    while ((tick_ms - pace_ms) < 16u) {
-        service_uart();
+    for (;;) {
+        ui_service();
+        if ((tick_ms - pace_ms) >= 16u) {
+            break;
+        }
+        hal_idle();
     }
     pace_ms = tick_ms;
 }
 
 int hal_link_read(uint8_t *out) {
+    unsigned int mask;
     if (!out) {
         return 0;
     }
-    __asm volatile("cpsid i");
+    mask = irq_save();
     if (rx_n == 0) {
-        __asm volatile("cpsie i");
+        irq_restore(mask);
         return 0;
     }
     *out = rx_q[rx_r];
     rx_r = (unsigned char)((rx_r + 1u) % sizeof rx_q);
     rx_n--;
-    __asm volatile("cpsie i");
+    irq_restore(mask);
     return 1;
 }
 

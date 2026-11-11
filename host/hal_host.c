@@ -9,8 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* 把 8 行像素拼成 240x240，再放大画到窗口左半边。
-   右半边交给 host/panel.c，那一段不进固件。 */
+/* Assemble dirty rectangles into a persistent framebuffer. Only the host
+   owns a full frame; firmware uses borrowed asynchronous band buffers. */
 
 enum {
     FB_W = HAL_LCD_W,
@@ -29,7 +29,18 @@ static volatile int running;
 static uint8_t key_level;
 static uint8_t test_keys;
 static int use_virtual;
-static uint32_t virtual_ms;
+static uint64_t virtual_us;
+static uint32_t frame_step_us = 16000;
+static uint32_t async_delay_us;
+static struct {
+    const uint16_t *pixels;
+    uint16_t snapshot[FB_W * FB_H];
+    int x, y, w, h, corrupted;
+    uint32_t due_us;
+} transfer;
+static hal_host_display_stats_t display_stats;
+static const uint16_t *last_pixels;
+static void finish_transfer(void);
 static DWORD frame_start;
 static LARGE_INTEGER meter_t0;
 static LARGE_INTEGER meter_freq;
@@ -46,7 +57,7 @@ enum { HOST_LINK_N = 128 };
 static uint8_t link_rx[HOST_LINK_N];
 static int link_rx_r;
 static int link_rx_n;
-static uint8_t link_tx[HOST_LINK_N];
+static uint8_t link_tx[FB_W * FB_H * 2 + 4096];
 static int link_tx_n;
 
 static int month_days(int year, int month) {
@@ -229,6 +240,17 @@ void hal_host_init(int create_window_flag) {
     QueryPerformanceFrequency(&meter_freq);
     meter_ready = meter_freq.QuadPart != 0;
     frame_start = GetTickCount();
+    use_virtual = 0;
+    virtual_us = 0;
+    frame_step_us = 16000;
+    async_delay_us = 0;
+    transfer.pixels = NULL;
+    key_level = test_keys = 0;
+    clock_override = 0;
+    cpu_smooth = cpu_shown = cpu_shown_ms = 0;
+    cpu_shown_ok = 0;
+    hal_host_link_clear();
+    hal_host_display_reset_stats();
     for (i = 0; i < FB_W * FB_H; i++) {
         fb[i] = 0;
     }
@@ -241,15 +263,62 @@ void hal_host_init(int create_window_flag) {
 }
 
 void hal_host_shutdown(void) {
+    while (hal_display_busy()) {
+        hal_idle();
+    }
     if (have_window) {
         timeEndPeriod(1);
         have_window = 0;
+        if (IsWindow(hwnd)) DestroyWindow(hwnd);
     }
+    if (dib) DeleteObject(dib);
+    if (mem_dc) DeleteDC(mem_dc);
+    dib = NULL;
+    mem_dc = NULL;
+    dib_bits = NULL;
+    hwnd = NULL;
 }
 
 void hal_host_use_virtual_time(void) {
     use_virtual = 1;
-    virtual_ms = 0;
+    virtual_us = 0;
+}
+
+void hal_host_set_time_us(uint64_t us) {
+    virtual_us = us;
+}
+
+void hal_host_advance_us(uint32_t us) {
+    virtual_us += us;
+    finish_transfer();
+}
+
+void hal_host_set_frame_step_us(uint32_t us) {
+    frame_step_us = us;
+}
+
+void hal_host_set_async_delay_us(uint32_t us) {
+    while (hal_display_busy()) hal_idle();
+    async_delay_us = us;
+}
+
+void hal_host_display_reset_stats(void) {
+    memset(&display_stats, 0, sizeof display_stats);
+    display_stats.min_x = FB_W;
+    display_stats.min_y = FB_H;
+    last_pixels = NULL;
+}
+
+void hal_host_display_get_stats(hal_host_display_stats_t *out) {
+    if (out) *out = display_stats;
+}
+
+void hal_host_copy_frame(uint16_t *out) {
+    if (out) memcpy(out, fb, sizeof fb);
+}
+
+void hal_host_link_clear(void) {
+    link_rx_r = link_rx_n = link_tx_n = 0;
 }
 
 void hal_host_set_keys(uint8_t level) {
@@ -348,9 +417,30 @@ void hal_host_set_painter(void (*fn)(void *hdc, int x, int panel_w, int height))
 
 uint32_t hal_tick_ms(void) {
     if (use_virtual) {
-        return virtual_ms;
+        return (uint32_t)(virtual_us / 1000u);
     }
     return GetTickCount();
+}
+
+uint32_t hal_tick_us(void) {
+    LARGE_INTEGER now;
+    if (use_virtual) return (uint32_t)virtual_us;
+    if (!meter_ready) {
+        QueryPerformanceFrequency(&meter_freq);
+        meter_ready = meter_freq.QuadPart != 0;
+    }
+    if (!meter_ready) return GetTickCount() * 1000u;
+    QueryPerformanceCounter(&now);
+    return (uint32_t)(((uint64_t)now.QuadPart / (uint64_t)meter_freq.QuadPart) * 1000000ull +
+                     ((uint64_t)now.QuadPart % (uint64_t)meter_freq.QuadPart) * 1000000ull /
+                     (uint64_t)meter_freq.QuadPart);
+}
+
+void hal_idle(void) {
+    if (use_virtual) virtual_us += 50;
+    else Sleep(0);
+    finish_transfer();
+    if (have_window) hal_host_pump();
 }
 
 void hal_clock_set(const hal_clock_t *in) {
@@ -400,7 +490,7 @@ void hal_link_write(const uint8_t *data, int len) {
     if (!data || len <= 0) {
         return;
     }
-    for (i = 0; i < len && link_tx_n < HOST_LINK_N; i++) {
+    for (i = 0; i < len && link_tx_n < (int)sizeof link_tx; i++) {
         link_tx[link_tx_n++] = data[i];
     }
 }
@@ -441,35 +531,76 @@ uint8_t hal_key_level(void) {
     return key_level;
 }
 
+static void copy_region(int x, int y, int w, int h, const uint16_t *pixels) {
+    int row, col;
+    for (row = 0; row < h; row++) {
+        for (col = 0; col < w; col++) {
+            int dx = x + col, dy = y + row;
+            if (dx >= 0 && dx < FB_W && dy >= 0 && dy < FB_H)
+                fb[dy * FB_W + dx] = pixels[row * w + col];
+        }
+    }
+    /* Coalesce repaint requests; dirty updates need not reach the bottom. */
+    if (have_window) InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void finish_transfer(void) {
+    if (!transfer.pixels) return;
+    if (!transfer.corrupted && memcmp(transfer.pixels, transfer.snapshot,
+            (size_t)transfer.w * transfer.h * sizeof(uint16_t)) != 0) {
+        transfer.corrupted = 1;
+        display_stats.overwrites++;
+    }
+    if ((int32_t)(hal_tick_us() - transfer.due_us) < 0) return;
+    /* Read the BORROWED memory on completion, never the safety snapshot. */
+    copy_region(transfer.x, transfer.y, transfer.w, transfer.h, transfer.pixels);
+    transfer.pixels = NULL;
+    display_stats.completed++;
+}
+
 void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint16_t *pixels) {
-    int row;
-
-    if (!pixels || w <= 0 || h <= 0) {
+    if (transfer.pixels) {
+        display_stats.submit_while_busy++;
         return;
     }
-    for (row = 0; row < h; row++) {
-        int dy = y + row;
-        int col;
-        if (dy < 0 || dy >= FB_H) {
-            continue;
-        }
-        for (col = 0; col < w; col++) {
-            int dx = x + col;
-            if (dx < 0 || dx >= FB_W) {
-                continue;
-            }
-            fb[dy * FB_W + dx] = pixels[row * w + col];
-        }
+    if (!pixels || w <= 0 || h <= 0 || (uint32_t)w * h > FB_W * FB_H) {
+        display_stats.invalid_regions++;
+        return;
     }
-    if (have_window && y + h >= FB_H) {
-        InvalidateRect(hwnd, NULL, FALSE);
-        UpdateWindow(hwnd);
+    if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
+        display_stats.invalid_regions++;
+    display_stats.calls++;
+    display_stats.pixels += (uint32_t)w * h;
+    if (last_pixels && last_pixels != pixels) display_stats.pointer_changes++;
+    last_pixels = pixels;
+    if (x < display_stats.min_x) display_stats.min_x = x;
+    if (y < display_stats.min_y) display_stats.min_y = y;
+    if (x + w > display_stats.max_x) display_stats.max_x = x + w;
+    if (y + h > display_stats.max_y) display_stats.max_y = y + h;
+    if (w > display_stats.max_w) display_stats.max_w = w;
+    if (h > display_stats.max_h) display_stats.max_h = h;
+    if (!async_delay_us) {
+        copy_region(x, y, w, h, pixels);
+        display_stats.completed++;
+        return;
     }
+    transfer.x = x;
+    transfer.y = y;
+    transfer.w = w;
+    transfer.h = h;
+    transfer.corrupted = 0;
+    memcpy(transfer.snapshot, pixels, (size_t)w * h * sizeof(uint16_t));
+    transfer.due_us = hal_tick_us() + async_delay_us;
+    transfer.pixels = pixels;
 }
 
 int hal_display_busy(void) {
-    return 0;
+    display_stats.busy_polls++;
+    /* Deterministic progress also catches legacy spin-waits without idle. */
+    if (use_virtual && transfer.pixels) virtual_us += 25;
+    finish_transfer();
+    return transfer.pixels != NULL;
 }
 
 void hal_meter_begin(void) {
@@ -516,7 +647,7 @@ void hal_frame_pace(void) {
     DWORD elapsed;
 
     if (use_virtual) {
-        virtual_ms += 16;
+        hal_host_advance_us(frame_step_us);
         return;
     }
     now = GetTickCount();
