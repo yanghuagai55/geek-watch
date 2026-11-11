@@ -15,3 +15,8 @@ driver/
 *.pyc
 .vs/
 .idea/
+
+# Commercial-font raster tables: not redistributable. Generate locally (see CONTRIBUTING).
+ui/src/font_data.c
+ui/src/font_data_full.c
+ui/src/song_data.c
