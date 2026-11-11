@@ -1,0 +1,8 @@
+{
+    "C_Cpp.default.configurationProvider": "cl.eide",
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.autoGuessEncoding": true,
+    "cortex-debug.gdbPath": "D:\\dev\\arm-none-eabi-gcc\\bin\\arm-none-eabi-gdb.exe",
+    "cortex-debug.armToolchainPath": "D:\\dev\\arm-none-eabi-gcc\\bin",
+    "cortex-debug.pyocdPath": "D:\\dev\\miniconda3\\Scripts\\pyocd.exe"
+}

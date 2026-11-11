@@ -1,0 +1,3 @@
+# pyOCD 配置（Release 模式）：加载工程内的 AT32F421 芯片支持包
+pack:
+  - D:/dev/class/at32/packs/ArteryTek.AT32F421_DFP.2.2.0.pack

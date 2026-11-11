@@ -1,0 +1,120 @@
+version: "4.1"
+name: template
+type: ARM
+deviceName: -AT32F421K8T7
+packDir: .pack/ArteryTek/AT32F421_DFP.2.2.0
+srcDirs: []
+virtualFolder:
+  name: <virtual_root>
+  files: []
+  folders:
+    - name: user
+      files:
+        - path: src/at32f421_clock.c
+        - path: src/at32f421_int.c
+        - path: src/main.c
+      folders: []
+    - name: bsp
+      files:
+        - path: bsp/at32f421_board.c
+      folders: []
+    - name: firmware
+      files:
+        - path: libraries/drivers/src/at32f421_adc.c
+        - path: libraries/drivers/src/at32f421_crc.c
+        - path: libraries/drivers/src/at32f421_crm.c
+        - path: libraries/drivers/src/at32f421_debug.c
+        - path: libraries/drivers/src/at32f421_dma.c
+        - path: libraries/drivers/src/at32f421_ertc.c
+        - path: libraries/drivers/src/at32f421_exint.c
+        - path: libraries/drivers/src/at32f421_flash.c
+        - path: libraries/drivers/src/at32f421_gpio.c
+        - path: libraries/drivers/src/at32f421_i2c.c
+        - path: libraries/drivers/src/at32f421_misc.c
+        - path: libraries/drivers/src/at32f421_pwc.c
+        - path: libraries/drivers/src/at32f421_spi.c
+        - path: libraries/drivers/src/at32f421_tmr.c
+        - path: libraries/drivers/src/at32f421_usart.c
+        - path: libraries/drivers/src/at32f421_wdt.c
+        - path: libraries/drivers/src/at32f421_wwdt.c
+        - path: libraries/drivers/src/at32f421_scfg.c
+        - path: libraries/drivers/src/at32f421_cmp.c
+      folders: []
+    - name: cmsis
+      files:
+        - path: libraries/cmsis/cm4/device_support/system_at32f421.c
+        - path: libraries/cmsis/cm4/device_support/startup/gcc/startup_at32f421.s
+      folders: []
+dependenceList: []
+outDir: build
+miscInfo:
+  uid: 8b356dda586e662d6dc96b5bfdd72c82
+targets:
+  template:
+    cppPreprocessAttrs:
+      defineList:
+        - AT32F421C8T7
+        - USE_STDPERIPH_DRIVER
+        - AT_START_F421_V1
+        - AT32F421K8T7
+      incList:
+        - .
+        - inc
+        - bsp
+        - libraries/drivers/inc
+        - libraries/cmsis/cm4/core_support
+        - libraries/cmsis/cm4/device_support
+        - .cmsis/include
+        - RTE/_template
+      libList: []
+    excludeList: []
+    settings:
+      debugger: cortex-debug
+    toolchain: GCC
+    toolchainConfigMap:
+      GCC:
+        archExtensions: ""
+        cpuType: Cortex-M4
+        floatingPointHardware: none
+        options:
+          version: 5
+          afterBuildTasks: []
+          asm-compiler:
+            ASM_FLAGS: ""
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            CXX_FLAGS: ""
+            C_FLAGS: ""
+            language-c: c11
+            language-cpp: c++11
+            one-elf-section-per-data: true
+            one-elf-section-per-function: true
+            optimization: level-debug
+            warnings: all-warnings
+          global:
+            $float-abi-type: soft
+            misc-control: ""
+            not-use-syscalls: true
+            output-debug-info: enable
+            use-newlib-nano: true
+          linker:
+            $outputTaskExcludes:
+              - .bin
+            LD_FLAGS: "-T AT32F421x8_FLASH.ld"
+            LIB_FLAGS: -lm
+            output-format: elf
+            remove-unused-input-sections: true
+        scatterFilePath: ""
+        storageLayout:
+          RAM: []
+          ROM: []
+        useCustomScatterFile: false
+    uploadConfigMap:
+      pyOCD:
+        baseAddr: "0x08000000"
+        bin: ""
+        config: .eide/debug.pyocd.yaml
+        otherCmds: ""
+        speed: 4M
+        targetName: _at32f421k8t7
+    uploader: pyOCD

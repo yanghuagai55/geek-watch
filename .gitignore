@@ -1,0 +1,17 @@
+**/obj/
+at32/build/
+tools/openocd/
+tools/*.zip
+driver/
+*.exe
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.bmp
+*.png
+*.zip
+*.pyc
+.vs/
+.idea/
