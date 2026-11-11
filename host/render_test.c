@@ -145,6 +145,11 @@ static int test_core_drawing(void) {
         hal_host_display_reset_stats();
         ui_draw_flush();
         hal_host_display_get_stats(&display);
+        REQUIRE(display.pixels == (uint32_t)UI_W * UI_H && display.calls == render.bands,
+                "settled content did not receive one full heal repaint");
+        hal_host_display_reset_stats();
+        ui_draw_flush();
+        hal_host_display_get_stats(&display);
         REQUIRE(!display.calls && !display.pixels, "core-only unchanged flush transferred pixels");
         ui_mem_get(&after, NULL);
         REQUIRE(after == used, "public drawing allocated demo or per-frame RAM");
@@ -269,7 +274,8 @@ static int test_perf_request(void) {
                including a dropped count greater than one byte. */
             ui_draw_begin();
             for (i = 0; i < 400; i++) ui_draw_fill(5, 6, 2, 2, (uint16_t)i, 255);
-        } /* Pass 2 retains identical commands: the latest frame must report zero pixels. */
+        } /* Pass 2 retains identical commands: settle once, then the latest frame must report zero pixels. */
+        if (pass == 2) ui_draw_flush();
         ui_draw_flush();
         ui_render_get_stats(&stats);
         if (pass < 2) {
@@ -533,17 +539,22 @@ static int test_dirty(void) {
     ui_draw_flush();
     hal_host_display_get_stats(&stats);
     ui_render_get_stats(&render);
-    REQUIRE(stats.pixels > 0 && stats.pixels <= 9u * UI_BAND_H * 2u,
-            "small change did not use narrow dirty band");
-    REQUIRE(stats.min_x > 0 && stats.max_x < UI_W && stats.max_y < UI_H,
-            "dirty rectangle widened to screen edges");
+    REQUIRE(stats.pixels == (uint32_t)UI_W * UI_BAND_H && stats.calls == 1,
+            "small change did not use one full-width dirty band");
+    REQUIRE(stats.min_x == 0 && stats.max_x == UI_W && stats.max_y < UI_H,
+            "dirty band must span full width without covering the screen");
     REQUIRE(stats.pixels == render.pixels && stats.calls == render.bands,
             "renderer statistics disagree with HAL");
-    REQUIRE(!compare_full("narrow changed fill"), "narrow fill differs");
+    REQUIRE(!compare_full("full-width changed fill"), "full-width fill differs");
     ui_draw_begin();
     ui_draw_fill(0, 0, UI_W, UI_H, 0x0863, 255);
     ui_draw_flush();
     REQUIRE(!compare_full("removed fill"), "removed fill trails");
+    hal_host_display_reset_stats();
+    ui_draw_flush();
+    hal_host_display_get_stats(&stats);
+    REQUIRE(stats.pixels == (uint32_t)UI_W * UI_H,
+            "settle heal did not repaint the full screen once");
     hal_host_display_reset_stats();
     ui_draw_flush();
     hal_host_display_get_stats(&stats);
@@ -664,6 +675,7 @@ static int test_face_snapshot_and_keys(void) {
     step(32);
     hal_host_set_frame_step_us(0);
     ui_frame();
+    ui_frame(); /* consume the one settle heal repaint before measuring idle */
     hal_host_display_reset_stats();
     step(5);
     hal_host_display_get_stats(&stats);

@@ -56,6 +56,7 @@ static history_t *history;
 static dirty_band_t *dirty;
 static int history_n;
 static int invalidated;
+static int heal_pending;
 static int clip_x0, clip_x1, clip_y1;
 static ui_render_stats_t stats;
 static uint16_t dropped;
@@ -136,6 +137,7 @@ void ui_draw_init(void) {
     dirty = ui_mem_alloc(sizeof(dirty_band_t) * BAND_N, 2);
     history_n = 0;
     invalidated = 1;
+    heal_pending = 0;
     output_preempt = 0;
     gif_px = 0;
     gif_w = gif_h = 0;
@@ -874,10 +876,13 @@ static void flush_gif(void) {
     y1 = gif_y + gif_h;
     if (x1 > UI_W) x1 = UI_W;
     if (y1 > UI_H) y1 = UI_H;
-    if (gif_px && gif_w > 0 && gif_h > 0 && x1 > x0) {
+    if (gif_px && gif_w > 0 && gif_h > 0 && x1 > x0 && buffers[0]) {
+        /* Full-width rows: narrow column windows mis-address this panel. */
         for (y = y0; y < y1; y++) {
-            hal_display_flush((int16_t)x0, (int16_t)y, (int16_t)(x1 - x0), 1,
-                              gif_px + (y - gif_y) * gif_w + x0 - gif_x);
+            memset(buffers[0], 0, (unsigned)UI_W * 2u);
+            memcpy(buffers[0] + x0, gif_px + (y - gif_y) * gif_w + x0 - gif_x,
+                   (unsigned)(x1 - x0) * 2u);
+            hal_display_flush(0, (int16_t)y, UI_W, 1, buffers[0]);
             wait_display();
         }
     }
@@ -888,7 +893,7 @@ static void flush_gif(void) {
 
 void ui_draw_flush(void) {
     int y, n, row, next_buffer = 0;
-    int snapshot;
+    int snapshot, heal = 0;
     uint32_t start = hal_tick_us(), t0;
     memset(&stats, 0, sizeof stats);
     stats.items = (uint16_t)item_n;
@@ -903,6 +908,18 @@ void ui_draw_flush(void) {
     t0 = hal_tick_us();
     prepare(snapshot);
     stats.prepare_us = hal_tick_us() - t0;
+    if (!snapshot && heal_pending) {
+        int any = 0;
+        for (y = 0; y < BAND_N; y++) {
+            if (dirty[y].x1 > dirty[y].x0) { any = 1; break; }
+        }
+        if (!any) {
+            /* One full repaint when motion settles, so panel write errors
+               cannot persist in regions that stop updating. */
+            prepare(1);
+            heal = 1;
+        }
+    }
     for (y = 0; y < UI_H; y += UI_BAND_H) {
         int first = 0;
         int w, h = UI_H - y;
@@ -911,15 +928,16 @@ void ui_draw_flush(void) {
             break;
         }
         if (h > UI_BAND_H) h = UI_BAND_H;
-        clip_x0 = dirty[y / UI_BAND_H].x0;
-        clip_x1 = dirty[y / UI_BAND_H].x1;
+        if (dirty[y / UI_BAND_H].x1 <= dirty[y / UI_BAND_H].x0) continue;
+        /* Full-width bands: narrow column windows mis-address this panel. */
+        clip_x0 = 0;
+        clip_x1 = UI_W;
         clip_y1 = y + h;
-        w = clip_x1 - clip_x0;
-        if (w <= 0) continue;
+        w = UI_W;
         band = buffers[next_buffer];
         t0 = hal_tick_us();
         for (row = 0; row < h; row++) {
-            memset(band + row * UI_W + clip_x0, 0, (unsigned)w * 2u);
+            memset(band + row * UI_W, 0, (unsigned)w * 2u);
         }
         for (n = 0; n < item_n; n++) {
             const draw_item_t *it = &items[n];
@@ -942,9 +960,6 @@ void ui_draw_flush(void) {
             case KIND_MASK: raster_mask(&items[n], y); break;
             }
         }
-        for (row = 0; row < h; row++) {
-            memmove(band + row * w, band + row * UI_W + clip_x0, (unsigned)w * 2u);
-        }
         stats.raster_us += hal_tick_us() - t0;
         wait_display();
         hal_display_flush((int16_t)clip_x0, (int16_t)y, (int16_t)w, (int16_t)h, band);
@@ -957,5 +972,6 @@ void ui_draw_flush(void) {
     wait_display();
     link_snap_end();
     flush_gif();
+    heal_pending = (stats.bands > 0 && !heal && !snapshot);
     stats.frame_us = hal_tick_us() - start;
 }

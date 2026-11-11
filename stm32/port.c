@@ -266,20 +266,24 @@ static void lcd_dat16(unsigned short data) {
 }
 
 static void lcd_window(int x, int y, int w, int h) {
-    unsigned int x0 = (unsigned int)x + 2u;
-    unsigned int y0 = (unsigned int)y + 1u;
+    /* This CTC180 panel latches an internal GRAM offset: the start address
+       must stay unoffset while the end needs +2 columns / +1 row. Making the
+       offsets "symmetric" shifts the start and shortens each row by 2, which
+       smears every band into comb teeth. Verified against the baseline. */
+    unsigned int x0 = (unsigned int)x;
+    unsigned int y0 = (unsigned int)y;
     unsigned int x1 = x0 + (unsigned int)w - 1u;
     unsigned int y1 = y0 + (unsigned int)h - 1u;
     lcd_cmd(0x2A);
     lcd_data(0);
     lcd_data((unsigned char)x0);
     lcd_data(0);
-    lcd_data((unsigned char)x1);
+    lcd_data((unsigned char)(x1 + 2u));
     lcd_cmd(0x2B);
     lcd_data(0);
     lcd_data((unsigned char)y0);
     lcd_data(0);
-    lcd_data((unsigned char)y1);
+    lcd_data((unsigned char)(y1 + 1u));
     lcd_cmd(0x2C);
 }
 
