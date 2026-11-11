@@ -53,6 +53,27 @@ static uint8_t ease_out(uint32_t t) {
     return (uint8_t)e;
 }
 
+/* Cubic ease-in-out, integer port of LVGL's lv_anim_path_ease_in_out (MIT).
+   t is 0..256 over the whole move; returns 0..255 of the travelled fraction. */
+uint8_t ui_ease_in_out(uint32_t t) {
+    uint32_t u;
+    uint32_t e;
+
+    if (t >= 256) {
+        return 255;
+    }
+    if (t < 128) {
+        e = (t * t * t) / 16384u;
+    } else {
+        u = 256 - t;
+        e = 256 - (u * u * u) / 16384u;
+    }
+    if (e > 255) {
+        e = 255;
+    }
+    return (uint8_t)e;
+}
+
 static void apply(slot_t *s, int16_t value) {
     if (!s->obj) {
         return;

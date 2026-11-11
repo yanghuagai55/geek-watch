@@ -1,5 +1,6 @@
 #include "ui_internal.h"
 #include "ui_menu.h"
+#include "ui_icons.h"
 
 #include "hal.h"
 
@@ -36,6 +37,9 @@ typedef struct app {
     int key2_long;
     uint32_t dot_ms;
     int dot_page;
+    uint32_t fps_window;
+    uint16_t fps_frames;
+    uint8_t fps;
 } app_t;
 
 static app_t *st;
@@ -48,6 +52,7 @@ static uint16_t col_blue_dim;
 static uint16_t col_ring;
 static uint16_t col_badge;
 static uint16_t col_dot;
+static uint16_t col_accent;
 
 static const char *const set_name[SET_N] = {"调试模式", "亮度", "关于"};
 static const char *const bright_name[DETAIL_N] = {"低", "中", "高"};
@@ -123,23 +128,38 @@ static void home_icon_rect(int *x, int *y, int *w, int *h) {
     }
 }
 
+static int wrap_mod(int v, int m) {
+    v %= m;
+    if (v < 0) {
+        v += m;
+    }
+    return v;
+}
+
 static int vis_index(int scroll, int n) {
-    int vis = (scroll + 128) / 256;
-    if (vis < 0) {
-        vis = 0;
-    }
-    if (vis >= n) {
-        vis = n - 1;
-    }
-    return vis;
+    int idx = wrap_mod(scroll, n * 256);
+    return ((idx + 128) / 256) % n;
 }
 
 static void slide_to(ui_obj_t *obj, int *focus, int dir, int n) {
     int next = *focus + dir;
-    if (next < 0 || next >= n) {
-        return;
+    int span = n * 256;
+    int target;
+    if (next < 0) {
+        next = n - 1;
+    } else if (next >= n) {
+        next = 0;
     }
-    ui_anim_play_range(UI_ANIM_STACK, obj, obj->x, (int16_t)(next * 256));
+    /* Aim at the wrapped copy of the destination nearest the current scroll so
+       the seam crossing takes the short way; settling renormalises to focus. */
+    target = next * 256;
+    while (target - obj->x > span / 2) {
+        target -= span;
+    }
+    while (obj->x - target > span / 2) {
+        target += span;
+    }
+    ui_anim_play_range(UI_ANIM_STACK, obj, obj->x, (int16_t)target);
     *focus = next;
 }
 
@@ -171,7 +191,11 @@ static void draw_outer_pages(int scale, int extra_dx) {
     int margin_y = (UI_H - UI_H * scale / 256) / 2;
 
     for (i = 0; i < HOME_N; i++) {
-        int page_ox = (i * 256 - st->scroll.x) * UI_W / 256;
+        int delta = i * 256 - st->scroll.x;
+        int page_ox;
+        /* Nearest wrapped copy so the home ring is seamless in both directions. */
+        delta = wrap_mod(delta + HOME_N * 128, HOME_N * 256) - HOME_N * 128;
+        page_ox = delta * UI_W / 256;
         if (page_ox <= -UI_W || page_ox >= UI_W) {
             continue;
         }
@@ -282,95 +306,111 @@ static void draw_header(const char *title, uint8_t a, int song) {
     ui_draw_text((int16_t)UI_MX(60), (int16_t)y, title, col_text, a, 1);
 }
 
-static void draw_face_pair(int x, int y, int value, uint8_t a) {
+static void draw_face_pair(int x, int y, int value, uint16_t color, uint8_t a) {
     char text[3];
 
     text[0] = (char)('0' + (value / 10) % 10);
     text[1] = (char)('0' + value % 10);
     text[2] = 0;
-    ui_song_draw(UI_SONG_CLOCK, (int16_t)x, (int16_t)y, text, col_text, a);
+    ui_song_draw(UI_SONG_CLOCK, (int16_t)x, (int16_t)y, text, color, a);
+}
+
+static int face_weekday(int y, int m, int d) {
+    static const int t[12] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    if (m < 3) {
+        y--;
+    }
+    return (y + y / 4 - y / 100 + y / 400 + t[m - 1] + d) % 7;
 }
 
 static void draw_face_app(uint8_t a) {
+    static const char *const wd[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     hal_clock_t clock;
-    int gap_y = UI_MY(70);
     int row_w = ui_song_width(UI_SONG_CLOCK, "00");
     int row_h = ui_song_height(UI_SONG_CLOCK);
+    int area_top = UI_MY(20);
+    int area_bot = content_bottom();
+    int top = area_top + 6;
+    int bot = area_bot - 6;
+    int gap_y;
     int block_h;
     int x0;
     int y0;
-    int area_top = UI_MY(20);
-    int area_bot = content_bottom();
     int dot;
     int cx;
     int mid;
+    uint32_t now = hal_tick_ms();
+    uint32_t phase;
+    uint32_t t;
+    uint8_t colon_a;
+    char line[40];
+    int16_t tw;
 
+    hal_clock_get(&clock);
+    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+
+    if (link_media_lyric()[0]) {
+        snprintf(line, sizeof line, "%s %s",
+                 link_media_playing() ? "Play" : "Pause", link_media_lyric());
+    } else {
+        snprintf(line, sizeof line, "%s %02u-%02u",
+                 wd[face_weekday(clock.year, clock.month, clock.day)],
+                 clock.month, clock.day);
+    }
+    tw = ui_text_width(line, 1);
+    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)UI_MY(30), line, col_dim, a, 1);
+
+    gap_y = UI_MY(60);
     if (gap_y < 10) {
         gap_y = 10;
     }
     block_h = row_h * 2 + gap_y;
-    x0 = (UI_W - row_w) / 2;
-    if (area_top + block_h > area_bot) {
-        gap_y = area_bot - area_top - row_h * 2;
+    if (top + block_h > bot) {
+        gap_y = bot - top - row_h * 2;
         if (gap_y < 4) {
             gap_y = 4;
         }
         block_h = row_h * 2 + gap_y;
     }
-    y0 = area_top + (area_bot - area_top - block_h) / 2;
+    y0 = top + (bot - top - block_h) / 2;
     if (y0 < 0) {
         y0 = 0;
     }
-    dot = gap_y / 4;
+    x0 = (UI_W - row_w) / 2;
+    draw_face_pair(x0, y0, clock.hour, col_text, a);
+    draw_face_pair(x0, y0 + row_h + gap_y, clock.minute, col_ring, a);
+
+    phase = now % 2000u;
+    t = phase < 1000u ? phase * 256u / 1000u : (2000u - phase) * 256u / 1000u;
+    colon_a = (uint8_t)(120 + (int)ui_ease_in_out(t) * (255 - 120) / 255);
+    colon_a = (uint8_t)((int)colon_a * a / 255);
+    dot = gap_y / 3;
     if (dot < 3) {
         dot = 3;
-    }
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    hal_clock_get(&clock);
-    draw_face_pair(x0, y0, clock.hour, a);
-    draw_face_pair(x0, y0 + row_h + gap_y, clock.minute, a);
-    if (link_media_lyric()[0]) {
-        int text_y = y0 + block_h + 2;
-        char line[40];
-        if (text_y + 16 < content_bottom()) {
-            snprintf(line, sizeof line, "%s %s",
-                     link_media_playing() ? "Play" : "Pause",
-                     link_media_lyric());
-            ui_text_draw(4, (int16_t)text_y, line, col_dim, a, 1);
-        }
     }
     cx = x0 + row_w / 2 - dot / 2;
     mid = y0 + row_h + gap_y / 2;
     ui_draw_round((int16_t)cx, (int16_t)(mid - dot - 2), (int16_t)dot, (int16_t)dot,
-                  (int16_t)(dot / 2), col_text, a);
+                  (int16_t)(dot / 2), col_ring, colon_a);
     ui_draw_round((int16_t)cx, (int16_t)(mid + 2), (int16_t)dot, (int16_t)dot,
-                  (int16_t)(dot / 2), col_text, a);
+                  (int16_t)(dot / 2), col_ring, colon_a);
 }
 
-/* 八拍跑步，关节和 ui/run.svg 一致。脚着地时 y=42。 */
-#define SVG_LINE(x0, y0, x1, y1) { (int8_t)(x0), (int8_t)(y0), (int8_t)(x1), (int8_t)(y1), 0 }
-#define SVG_DOT(x, y, r) { (int8_t)(x), (int8_t)(y), 0, 0, (int8_t)(r) }
-#define RUN_POSE(hx, hy, sx, sy, px, py, k1x, k1y, f1x, f1y, k2x, k2y, f2x, f2y, e1x, e1y, h1x, h1y, e2x, e2y, h2x, h2y) \
-    SVG_LINE(sx, sy, px, py), SVG_LINE(px, py, k1x, k1y), SVG_LINE(k1x, k1y, f1x, f1y), \
-    SVG_LINE(px, py, k2x, k2y), SVG_LINE(k2x, k2y, f2x, f2y), \
-    SVG_LINE(sx, sy, e1x, e1y), SVG_LINE(e1x, e1y, h1x, h1y), \
-    SVG_LINE(sx, sy, e2x, e2y), SVG_LINE(e2x, e2y, h2x, h2y), \
-    SVG_DOT(hx, hy, 3)
-
-static const ui_svg_cmd_t run_svg[8][10] = {
-    { RUN_POSE(20, 6, 19, 12, 16, 22, 24, 32, 30, 42, 10, 30, 4, 40, 26, 16, 28, 22, 12, 18, 6, 26) },
-    { RUN_POSE(19, 8, 18, 14, 16, 25, 22, 34, 28, 42, 12, 28, 8, 36, 24, 18, 26, 26, 14, 18, 10, 26) },
-    { RUN_POSE(18, 10, 18, 16, 16, 28, 20, 36, 26, 42, 14, 30, 12, 34, 22, 20, 22, 28, 14, 20, 12, 28) },
-    { RUN_POSE(19, 7, 19, 12, 16, 23, 25, 26, 21, 34, 7, 30, 2, 41, 23, 15, 25, 20, 13, 17, 8, 25) },
-    { RUN_POSE(20, 5, 20, 11, 17, 21, 27, 23, 24, 32, 5, 27, 0, 37, 24, 13, 26, 18, 14, 16, 9, 24) },
-    { RUN_POSE(21, 4, 21, 10, 18, 18, 28, 21, 30, 31, 8, 22, 2, 30, 28, 11, 32, 15, 11, 14, 4, 21) },
-    { RUN_POSE(22, 3, 22, 9, 18, 17, 28, 22, 26, 32, 8, 20, 4, 28, 28, 10, 32, 14, 10, 14, 4, 22) },
-    { RUN_POSE(21, 5, 20, 11, 17, 21, 26, 30, 30, 40, 10, 26, 6, 36, 28, 14, 30, 20, 12, 16, 6, 24) }
+/* 跑步采用外部 AI 按 ui/ICON_SVG_PROMPT.md 产出的关键帧（已人工预览验收）。
+   ci: 0=主色(橙) 1=白 2=橙。脚着地时 y=42。 */
+static const uint16_t icon_pal[] = {0xEFBF, 0xFCE1, 0x969F, 0x0063, 0x039C};
+static const ui_svg_cmd_t run_svg[5][10] = {
+    { {21,13,14,24,0,0}, {14,24,21,32,0,0}, {21,32,23,42,0,0}, {14,24,7,28,0,2}, {7,28,2,21,0,2},
+      {20,15,25,21,0,2}, {25,21,29,15,0,1}, {20,15,13,20,0,0}, {13,20,17,26,0,1}, {24,8,0,0,3,1} },
+    { {21,15,15,26,0,0}, {15,26,22,34,0,0}, {22,34,19,42,0,0}, {15,26,15,34,0,2}, {15,34,9,32,0,2},
+      {20,17,19,24,0,2}, {19,24,25,23,0,1}, {20,17,17,24,0,0}, {17,24,23,25,0,1}, {24,10,0,0,3,1} },
+    { {22,12,15,23,0,0}, {15,23,10,32,0,0}, {10,32,5,42,0,0}, {15,23,24,23,0,2}, {24,23,22,32,0,2},
+      {21,14,13,18,0,2}, {13,18,16,25,0,1}, {21,14,27,19,0,0}, {27,19,31,12,0,1}, {25,7,0,0,3,1} },
+    { {23,10,16,21,0,0}, {16,21,8,26,0,0}, {8,26,1,23,0,0}, {16,21,26,22,0,2}, {26,22,29,31,0,2},
+      {22,12,13,16,0,2}, {13,16,17,22,0,1}, {22,12,28,17,0,0}, {28,17,32,11,0,1}, {26,5,0,0,3,1} },
+    { {22,11,15,22,0,0}, {15,22,9,29,0,0}, {9,29,4,24,0,0}, {15,22,23,28,0,2}, {23,28,28,37,0,2},
+      {21,13,15,19,0,2}, {15,19,20,24,0,1}, {21,13,26,19,0,0}, {26,19,29,14,0,1}, {25,6,0,0,3,1} }
 };
-
-#undef RUN_POSE
-#undef SVG_DOT
-#undef SVG_LINE
 
 #define SCENE_SKY 0x551B
 #define SCENE_SUN 0xFE84
@@ -400,34 +440,28 @@ static const uint16_t scene_px[16 * 12] = {
 #undef SCENE_SUN
 #undef SCENE_SKY
 
-static const ui_svg_cmd_t mail_svg[] = {
-    {0, 0, 48, 0, 0},
-    {48, 0, 48, 28, 0},
-    {48, 28, 0, 28, 0},
-    {0, 28, 0, 0, 0},
-    {0, 0, 24, 16, 0},
-    {48, 0, 24, 16, 0}
-};
-
 static int run_frame(void) {
-    return (int)((hal_tick_ms() / 70u) % 8u);
+    return (int)((hal_tick_ms() / 60u) % 5u);
 }
 
 static void draw_sport_app(uint8_t a) {
     int frame = run_frame();
     int scale = UI_MY(560) / 42;
-    int ground = content_bottom() - 2;
+    int title_h = ui_song_height(UI_SONG_TITLE);
+    int title_y = dots_y() - title_h - 2;
+    int ground = title_y - UI_MY(24);
     int shift;
     int x;
     int ox;
     int oy;
+    int16_t tw;
 
     if (scale < 1) {
         scale = 1;
     }
     shift = (frame * UI_MX(80)) & 15;
     {
-        int top = UI_MY(8) + ui_song_height(UI_SONG_TITLE) + UI_MY(12);
+        int top = UI_MY(8);
         int room = ground - top;
         int fit = room / 42;
         if (fit < 1) {
@@ -440,11 +474,13 @@ static void draw_sport_app(uint8_t a) {
     ox = (UI_W - 32 * scale) / 2;
     oy = ground - 42 * scale;
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    ui_song_draw(UI_SONG_TITLE, (int16_t)UI_MX(40), (int16_t)UI_MY(8), "运动", col_text, a);
-    ui_svg_draw((int16_t)ox, (int16_t)oy, (uint8_t)scale, run_svg[frame], 10, col_text, a);
+    ui_svg_draw_p((int16_t)ox, (int16_t)oy, (uint8_t)scale, run_svg[frame], 10,
+                  icon_pal, 5, col_accent, a, (uint8_t)(scale + 3 > 8 ? 8 : scale + 3));
     for (x = -shift; x < UI_W; x += UI_MX(125)) {
         ui_draw_line((int16_t)x, (int16_t)ground, (int16_t)(x + UI_MX(60)), (int16_t)ground, col_dim, a);
     }
+    tw = ui_song_width(UI_SONG_TITLE, "运动");
+    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)title_y, "运动", col_text, a);
 }
 
 static void draw_mail_icon(void) {
@@ -453,50 +489,29 @@ static void draw_mail_icon(void) {
 
     home_icon_rect(&x, &y, &w, &h);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    ui_svg_draw((int16_t)x, (int16_t)y, (uint8_t)mail_scale(), mail_svg, 6, col_text, 255);
+    ui_icon_mail((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
+                 hal_tick_ms(), col_ring, col_text, col_bg, 255);
     tw = ui_song_width(UI_SONG_TITLE, "消息");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(12)),
+    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(40)),
                  "消息", col_text, 255);
 }
 
 static void draw_gear_icon(void) {
     int x, y, w, h;
-    int cx, cy, rad, hole, tooth_d;
+    int cx, cy, rad;
     int16_t tw;
-    int i;
-    static const int8_t tooth[8][2] = {
-        {18, -4}, {14, 12}, {-4, 18}, {-16, 12},
-        {-22, -4}, {-16, -16}, {-4, -22}, {14, -16}
-    };
 
     home_icon_rect(&x, &y, &w, &h);
     cx = x + w / 2;
     cy = y + h / 2;
-    rad = UI_MX(140);
-    if (rad > h / 2 - UI_MY(20)) {
-        rad = h / 2 - UI_MY(20);
-    }
+    rad = (w < h ? w : h) / 2;
     if (rad < 8) {
         rad = 8;
     }
-    hole = rad * 6 / 16;
-    tooth_d = rad / 2;
-    if (tooth_d < 4) {
-        tooth_d = 4;
-    }
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    for (i = 0; i < 8; i++) {
-        int tx = cx + tooth[i][0] * rad / 16;
-        int ty = cy + tooth[i][1] * rad / 16;
-        ui_draw_round((int16_t)(tx - tooth_d / 2), (int16_t)(ty - tooth_d / 2),
-                      (int16_t)tooth_d, (int16_t)tooth_d, (int16_t)(tooth_d / 4), col_text, 255);
-    }
-    ui_draw_round((int16_t)(cx - rad), (int16_t)(cy - rad),
-                  (int16_t)(rad * 2), (int16_t)(rad * 2), (int16_t)rad, col_text, 255);
-    ui_draw_round((int16_t)(cx - hole), (int16_t)(cy - hole),
-                  (int16_t)(hole * 2), (int16_t)(hole * 2), (int16_t)hole, col_bg, 255);
+    ui_icon_gear((int16_t)cx, (int16_t)cy, (int16_t)rad, hal_tick_ms(), col_ring, col_bg, 255);
     tw = ui_song_width(UI_SONG_TITLE, "设置");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(12)),
+    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(40)),
                  "设置", col_text, 255);
 }
 
@@ -570,6 +585,7 @@ static void draw_badge(void) {
     uint16_t cpu;
     char ram[24];
     char cpu_line[24];
+    char fps_line[8];
     int16_t y;
 
     if (!st || st->overlay.opacity == 0) {
@@ -582,11 +598,27 @@ static void draw_badge(void) {
     }
     snprintf(ram, sizeof ram, "RAM %lu", (unsigned long)used);
     snprintf(cpu_line, sizeof cpu_line, "CPU %u.%u%%", cpu / 10u, cpu % 10u);
+    snprintf(fps_line, sizeof fps_line, "%2u", st->fps);
     y = (int16_t)badge_y();
-    ui_draw_round((int16_t)UI_MX(16), y, (int16_t)UI_MX(M_BADGE_W), (int16_t)badge_h(),
-                  6, col_badge, st->overlay.opacity);
-    ui_draw_text((int16_t)(UI_MX(16) + 4), (int16_t)(y + 2), ram, col_ring, st->overlay.opacity, 1);
-    ui_draw_text((int16_t)(UI_MX(16) + 4), (int16_t)(y + 18), cpu_line, col_ring, st->overlay.opacity, 1);
+    {
+        int bx = UI_MX(16);
+        int bw = UI_MX(M_BADGE_W);
+        int fw = ui_text_width(fps_line, 1);
+        int need = 4 + ui_text_width(cpu_line, 1) + 6 + fw + 4;
+        int maxw = UI_W - 2 * bx;
+        if (need > bw) {
+            bw = need;
+        }
+        if (bw > maxw) {
+            bw = maxw;
+        }
+        ui_draw_round((int16_t)bx, y, (int16_t)bw, (int16_t)badge_h(),
+                      6, col_badge, st->overlay.opacity);
+        ui_draw_text((int16_t)(bx + 4), (int16_t)(y + 2), ram, col_ring, st->overlay.opacity, 1);
+        ui_draw_text((int16_t)(bx + 4), (int16_t)(y + 18), cpu_line, col_ring, st->overlay.opacity, 1);
+        ui_draw_text((int16_t)(bx + bw - 4 - fw), (int16_t)(y + 18),
+                     fps_line, col_text, st->overlay.opacity, 1);
+    }
 }
 
 static ui_menu_t *live_menu(void) {
@@ -683,9 +715,11 @@ void ui_init(void) {
     col_ring = rgb565(150, 210, 255);
     col_badge = rgb565(4, 18, 40);
     col_dot = rgb565(110, 160, 210);
+    col_accent = rgb565(255, 159, 10);
     ui_menu_init(&st->settings, SET_N);
     ui_menu_init(&st->messages, MSG_N);
     link_init();
+    st->fps_window = hal_tick_ms();
     ui_trace_emit("ui_init");
 }
 
@@ -814,6 +848,13 @@ void ui_frame(void) {
     hal_meter_begin();
     link_poll();
     now = hal_tick_ms();
+    st->fps_frames++;
+    if (now - st->fps_window >= 1000u) {
+        uint32_t rate = (uint32_t)st->fps_frames * 1000u / (now - st->fps_window);
+        st->fps = (uint8_t)(rate > 99u ? 99u : rate);
+        st->fps_frames = 0;
+        st->fps_window = now;
+    }
     level = hal_key_level();
     if (st->debug) {
         level = (uint8_t)(level | link_key_level());
@@ -837,6 +878,9 @@ void ui_frame(void) {
     }
     on_key(pressed, long_enter);
     ui_anim_tick(now);
+    if (!ui_anim_busy(&st->scroll)) {
+        st->scroll.x = (int16_t)wrap_mod(st->scroll.x, HOME_N * 256);
+    }
     ui_menu_tick(&st->settings);
     ui_menu_tick(&st->messages);
 

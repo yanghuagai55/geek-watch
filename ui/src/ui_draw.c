@@ -14,7 +14,7 @@ enum {
     KIND_MASK = 7,
     ITEM_MAX = 96,
     STR_MAX = 640,
-    PIC_MAX = 16
+    PIC_MAX = 24
 };
 
 typedef struct draw_item {
@@ -24,6 +24,8 @@ typedef struct draw_item {
     int16_t h;
     uint16_t color;
     uint16_t str_off;
+    uint16_t pal_off;
+    uint8_t pal_n;
     uint8_t kind;
     uint8_t opacity;
     uint8_t scale;
@@ -65,6 +67,8 @@ static int tf_ox;
 static int tf_oy;
 
 static void stamp(draw_item_t *it) {
+    it->pal_off = 0;
+    it->pal_n = 0;
     it->tf_s = (uint16_t)(tf_s < 1 ? 1 : tf_s);
     it->tf_ox = (int16_t)tf_ox;
     it->tf_oy = (int16_t)tf_oy;
@@ -271,9 +275,10 @@ void ui_draw_text(int16_t x, int16_t y, const char *utf8,
     strs[str_n++] = 0;
 }
 
-void ui_svg_draw(int16_t x, int16_t y, uint8_t scale,
-                 const ui_svg_cmd_t *cmd, int count,
-                 uint16_t color, uint8_t opacity) {
+void ui_svg_draw_p(int16_t x, int16_t y, uint8_t scale,
+                   const ui_svg_cmd_t *cmd, int count,
+                   const uint16_t *pal, uint8_t npal,
+                   uint16_t color, uint8_t opacity, uint8_t width) {
     draw_item_t *it;
     int ref;
 
@@ -291,13 +296,32 @@ void ui_svg_draw(int16_t x, int16_t y, uint8_t scale,
     it->x = x;
     it->y = y;
     it->w = (int16_t)count;
-    it->h = 0;
+    it->h = (int16_t)width;
     it->color = color;
     it->str_off = (uint16_t)ref;
     it->kind = KIND_SVG;
     it->opacity = opacity;
     it->scale = scale ? scale : 1;
     stamp(it);
+    if (pal && npal) {
+        int pref = pic_add(pal);
+        if (pref >= 0) {
+            it->pal_off = (uint16_t)(pref + 1);
+            it->pal_n = npal;
+        }
+    }
+}
+
+void ui_svg_draw_w(int16_t x, int16_t y, uint8_t scale,
+                   const ui_svg_cmd_t *cmd, int count,
+                   uint16_t color, uint8_t opacity, uint8_t width) {
+    ui_svg_draw_p(x, y, scale, cmd, count, 0, 0, color, opacity, width);
+}
+
+void ui_svg_draw(int16_t x, int16_t y, uint8_t scale,
+                 const ui_svg_cmd_t *cmd, int count,
+                 uint16_t color, uint8_t opacity) {
+    ui_svg_draw_w(x, y, scale, cmd, count, color, opacity, 0);
 }
 
 void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
@@ -596,9 +620,42 @@ static void raster_line(const draw_item_t *it, int band_y) {
     stroke(it->x, it->y, it->w, it->h, band_y, it->color, it->opacity);
 }
 
+/* Thick stroke: lay 2px centerlines along the normal, then round the caps.
+   width is the target thickness in the same units stroke() receives. */
+static int round_div(int n, int d) {
+    return n >= 0 ? (n + d / 2) / d : -((-n + d / 2) / d);
+}
+
+static void stroke_w(int x0, int y0, int x1, int y1, int width,
+                     int band_y, uint16_t color, uint8_t opacity) {
+    int dx = x1 - x0, dy = y1 - y0;
+    int r, o, len, nx, ny;
+
+    if (width <= 2) {
+        stroke(x0, y0, x1, y1, band_y, color, opacity);
+        return;
+    }
+    r = (width - 1) / 2;
+    len = (int)isqrt((unsigned)(dx * dx + dy * dy));
+    if (len < 1) {
+        len = 1;
+    }
+    nx = -dy * 256 / len;
+    ny = dx * 256 / len;
+    for (o = -r; o <= r; o++) {
+        int ox = round_div(nx * o, 256);
+        int oy = round_div(ny * o, 256);
+        stroke(x0 + ox, y0 + oy, x1 + ox, y1 + oy, band_y, color, opacity);
+    }
+    fill_disc(x0, y0, r, band_y, color, opacity);
+    fill_disc(x1, y1, r, band_y, color, opacity);
+}
+
 static void raster_svg(const draw_item_t *it, int band_y) {
     const ui_svg_cmd_t *cmd;
+    const uint16_t *pal = 0;
     int scale = it->scale ? it->scale : 1;
+    int width = it->h > 0 ? it->h : 2;
     int n = it->w;
     int i;
 
@@ -609,15 +666,22 @@ static void raster_svg(const draw_item_t *it, int band_y) {
     if (!cmd) {
         return;
     }
+    if (it->pal_off && it->pal_off <= PIC_MAX) {
+        pal = (const uint16_t *)pic_ref[it->pal_off - 1];
+    }
     use_item_xform(it);
     for (i = 0; i < n; i++) {
+        uint16_t color = it->color;
+        if (pal && cmd[i].ci >= 1 && cmd[i].ci <= it->pal_n) {
+            color = pal[cmd[i].ci - 1];
+        }
         if (cmd[i].r > 0) {
             fill_disc(it->x + cmd[i].x0 * scale, it->y + cmd[i].y0 * scale,
-                      cmd[i].r * scale, band_y, it->color, it->opacity);
+                      cmd[i].r * scale, band_y, color, it->opacity);
         } else {
-            stroke(it->x + cmd[i].x0 * scale, it->y + cmd[i].y0 * scale,
-                   it->x + cmd[i].x1 * scale, it->y + cmd[i].y1 * scale,
-                   band_y, it->color, it->opacity);
+            stroke_w(it->x + cmd[i].x0 * scale, it->y + cmd[i].y0 * scale,
+                     it->x + cmd[i].x1 * scale, it->y + cmd[i].y1 * scale,
+                     width, band_y, color, it->opacity);
         }
     }
 }
@@ -742,6 +806,8 @@ static history_t describe(const draw_item_t *it) {
     fields[7] = (int16_t)it->tf_s;
     fields[8] = it->tf_ox; fields[9] = it->tf_oy;
     h = hash_bytes(h, fields, sizeof fields);
+    h = hash_bytes(h, &it->pal_off, sizeof it->pal_off);
+    h = hash_bytes(h, &it->pal_n, sizeof it->pal_n);
     if (it->kind == KIND_TEXT) {
         const char *s = strs + it->str_off;
         int pen = x0;
@@ -773,10 +839,18 @@ static history_t describe(const draw_item_t *it) {
             } else {
                 int ex = it->x + cmd[i].x1 * it->scale;
                 int ey = it->y + cmd[i].y1 * it->scale;
-                extend(&x0, &x1, x, x + 2);
-                extend(&x0, &x1, ex, ex + 2);
-                extend(&y0, &y1, y, y + 1);
-                extend(&y0, &y1, ey, ey + 1);
+                if (it->h > 2) {
+                    int half = it->h / 2 + 1;
+                    extend(&x0, &x1, x - half, x + half);
+                    extend(&x0, &x1, ex - half, ex + half);
+                    extend(&y0, &y1, y - half, y + half);
+                    extend(&y0, &y1, ey - half, ey + half);
+                } else {
+                    extend(&x0, &x1, x, x + 2);
+                    extend(&x0, &x1, ex, ex + 2);
+                    extend(&y0, &y1, y, y + 1);
+                    extend(&y0, &y1, ey, ey + 1);
+                }
             }
         }
     } else {
