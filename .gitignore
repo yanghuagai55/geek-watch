@@ -20,3 +20,6 @@ driver/
 ui/src/font_data.c
 ui/src/font_data_full.c
 ui/src/song_data.c
+host/build/
+host/dist/
+.workbuddy/
