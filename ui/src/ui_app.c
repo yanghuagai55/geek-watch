@@ -63,12 +63,11 @@ static uint16_t rgb565(int r, int g, int b) {
 }
 
 static int badge_h(void) {
-    int h = UI_MY(M_BADGE_H);
-    return h < 28 ? 28 : h;
+    return 18;   /* 单行，只压页面点，不顶内容 */
 }
 
 static int badge_y(void) {
-    return UI_H - badge_h() - UI_MY(M_BADGE_GAP);
+    return UI_H - badge_h() - 2;
 }
 
 static int dot_h(void) {
@@ -83,18 +82,13 @@ static int dots_y(void) {
     if (gap < 6) {
         gap = 6;
     }
-    /* 调试角标没打开时，页面点贴着底边。打开后才抬到角标上面。 */
-    base = (st && st->debug) ? badge_y() : UI_H - 4;
+    /* 布局与调试角标无关：角标是盖在上面的，绝不推动内容。 */
+    base = UI_H - 4;
     return base - gap - dot_h();
 }
 
 static int content_bottom(void) {
-    int y;
-
-    if (st && st->debug) {
-        y = dots_y() - 4;
-        return y > 0 ? y : 0;
-    }
+    /* 固定，不随调试角标变化 */
     return UI_H - 6;
 }
 
@@ -583,9 +577,7 @@ static void draw_badge(void) {
     uint32_t used = 0;
     uint32_t total = 0;
     uint16_t cpu;
-    char ram[24];
-    char cpu_line[24];
-    char fps_line[8];
+    char ram[32];
     int16_t y;
 
     if (!st || st->overlay.opacity == 0) {
@@ -596,28 +588,20 @@ static void draw_badge(void) {
     if (cpu > 1000) {
         cpu = 1000;
     }
-    snprintf(ram, sizeof ram, "RAM %lu", (unsigned long)used);
-    snprintf(cpu_line, sizeof cpu_line, "CPU %u.%u%%", cpu / 10u, cpu % 10u);
-    snprintf(fps_line, sizeof fps_line, "%2u", st->fps);
+    snprintf(ram, sizeof ram, "R%lu C%u.%u%% %u",
+             (unsigned long)used, cpu / 10u, cpu % 10u, (unsigned)st->fps);
     y = (int16_t)badge_y();
     {
         int bx = UI_MX(16);
-        int bw = UI_MX(M_BADGE_W);
-        int fw = ui_text_width(fps_line, 1);
-        int need = 4 + ui_text_width(cpu_line, 1) + 6 + fw + 4;
+        int bw = ui_text_width(ram, 1) + 10;
         int maxw = UI_W - 2 * bx;
-        if (need > bw) {
-            bw = need;
-        }
         if (bw > maxw) {
             bw = maxw;
         }
         ui_draw_round((int16_t)bx, y, (int16_t)bw, (int16_t)badge_h(),
-                      6, col_badge, st->overlay.opacity);
-        ui_draw_text((int16_t)(bx + 4), (int16_t)(y + 2), ram, col_ring, st->overlay.opacity, 1);
-        ui_draw_text((int16_t)(bx + 4), (int16_t)(y + 18), cpu_line, col_ring, st->overlay.opacity, 1);
-        ui_draw_text((int16_t)(bx + bw - 4 - fw), (int16_t)(y + 18),
-                     fps_line, col_text, st->overlay.opacity, 1);
+                      5, col_badge, st->overlay.opacity);
+        ui_draw_text((int16_t)(bx + 5), (int16_t)(y + 5), ram,
+                     col_ring, st->overlay.opacity, 1);
     }
 }
 
