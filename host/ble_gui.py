@@ -169,6 +169,22 @@ class Worker(threading.Thread):
             self.log("连接失败：%s: %s" % (type(e).__name__, e))
             self.emit("status", False)
 
+    async def unpair(self):
+        """清掉系统配对，修 start notify Unreachable（不需要管理员）。"""
+        try:
+            d = await BluetoothLEDevice.from_bluetooth_address_async(addr_to_int(self.addr))
+            if d is None:
+                self.log("系统里没有该设备，无法解绑")
+                return
+            info = d.device_information
+            if info.pairing.is_paired:
+                await info.pairing.unpair_async()
+                self.log("已解除系统配对，准备重连")
+            else:
+                self.log("没有配对记录，跳过解绑")
+        except Exception as e:
+            self.log("解绑失败：%s" % e)
+
     async def disconnect(self):
         try:
             if self.bleak is not None:
@@ -510,6 +526,9 @@ class App:
                     if payload == "connecting":
                         self.lbl_state.config(text="● 连接中", fg=ACC)
                     else:
+                        self.connected = bool(payload)
+                        if payload:
+                            self.retries = 0
                         self.lbl_state.config(text="● 已连接" if payload else "● 未连接",
                                               fg="#5cb85c" if payload else "#c0564a")
                 elif kind == "image":
@@ -539,6 +558,18 @@ class App:
         else:
             self.worker.submit(method(*args))
 
+    def _auto_tick(self):
+        """开机时蓝牙可能还没就绪：没连上就每 5 秒重试，最多 15 次。"""
+        if self.auto and not self.connected and self.retries < 15:
+            self.retries += 1
+            if self.retries == 3 and not self.unpaired:
+                self.unpaired = True
+                self.worker.log("连续失败，试着解除系统配对（自愈）")
+                self._dispatch(self.worker.unpair)
+            self.worker.log("自动重连 %d/15" % self.retries)
+            self.on_connect()
+        self.root.after(5000, self._auto_tick)
+
     def on_connect(self):
         if self.mode.get() == "ser":
             w = SerialWorker(self.q)
@@ -557,6 +588,8 @@ class App:
             w.submit(w.connect())
 
     def on_disconnect(self):
+        self.auto = False
+        self.retries = 15
         self._dispatch(self.worker.disconnect)
 
     def on_send(self, data):

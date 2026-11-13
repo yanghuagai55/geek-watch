@@ -137,6 +137,21 @@ async def main() -> int:
         print(__doc__)
         return 1
 
+    if args.cmd == "unpair":
+        from winrt.windows.devices.bluetooth import BluetoothLEDevice
+        d = await BluetoothLEDevice.from_bluetooth_address_async(
+            int(args.addr.replace(":", ""), 16))
+        if d is None:
+            print("系统里没有这台设备")
+            return 2
+        info = d.device_information
+        if info.pairing.is_paired:
+            await info.pairing.unpair_async()
+            print("已解除配对（Windows 会重新发现它）")
+        else:
+            print("本来就没配对")
+        return 0
+
     dev = await pick_device(args)
     if dev is None:
         print("找不到 %s（确认模块上电、没被 HC-PC 占用）" % args.name)

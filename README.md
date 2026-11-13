@@ -176,18 +176,33 @@ cd host && python benchmark_device.py --port COM5          :: 实机性能/截�
 
 ### 2. BLE 能连上但收不到数据（`start notify ... Unreachable`）
 
-Windows 缓存了旧的 GATT 句柄（句柄号常见为 `0035`）。按顺序恢复：
+Windows 缓存了旧的 GATT 句柄（句柄号常见为 `0035`）。
 
-1. **板子断电 3 秒再上电**（让模块彻底重启）
-2. 关掉再打开电脑蓝牙（或跑 `Radio.set_state_async(OFF/ON)`）
-3. 删掉 BLE 配对记录（**管理员** PowerShell）：
-   ```powershell
-   reg delete "HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\c4260108020c" /f
-   ```
-4. 仍然不行就换 CH340 有线
+**真正有效的做法：解除系统配对 —— 不需要管理员权限**
 
-工具本身已做容错：启动后 0.6 秒自动连接，失败则每 5 秒重试一次、最多 15 次
-（开机时蓝牙服务通常要几秒才就绪）。
+```bash
+python host/ble_tool.py --addr C4:26:01:08:02:0C unpair
+```
+
+实测对比（2026-11-13）：
+
+| 做法 | 结果 |
+| --- | --- |
+| 板子断电 3 秒再上电 | ❌ 仍然 `Unreachable` |
+| 重启蓝牙无线电（`Radio.set_state_async` OFF→ON） | ❌ 无效 |
+| **`unpair_async()` 解除 BLE 配对** | ✅ **立刻恢复，ping 108 ms** |
+| 管理员删注册表 bond | ✅ 有效，但需要提权，现在没必要 |
+
+`AT32Debugger.exe` 已内置自愈：连续 3 次连不上会自动解绑一次再重连；
+启动时 0.6 秒自动连接，失败每 5 秒重试，最多 15 次。
+
+仍然不行再按顺序兜底：断电重启 → 关开蓝牙 → 管理员删 bond：
+
+```powershell
+reg delete "HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\c4260108020c" /f
+```
+
+最后兜底：换 CH340 有线。
 
 ### 3. 按键点一下没反应
 
