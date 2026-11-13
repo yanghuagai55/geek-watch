@@ -807,6 +807,32 @@ void hal_backlight_set(uint8_t level) {
     backlight_set(level);
 }
 
+void hal_ram_get(uint32_t *used, uint32_t *total) {
+    extern uint32_t _sdata;
+    extern uint32_t _ebss;
+    extern uint32_t _estack;
+    uint32_t base = (uint32_t)&_sdata;
+    uint32_t end = (uint32_t)&_ebss;
+    uint32_t top = (uint32_t)&_estack;
+    uint32_t static_used = end - base;
+    uint32_t msp;
+    uint32_t stack_used;
+    uint32_t all = top - base;
+
+    __asm volatile("mrs %0, msp" : "=r"(msp));
+    if(msp > top) {
+        msp = top;
+    }
+    stack_used = top - msp;
+    if(used) {
+        uint32_t v = static_used + stack_used;
+        *used = v > all ? all : v;
+    }
+    if(total) {
+        *total = all;
+    }
+}
+
 const char *hal_fw_version(void) {
     return "1.0.0";
 }

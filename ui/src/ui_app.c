@@ -944,8 +944,8 @@ static void draw_detail(uint8_t a) {
 }
 
 static void draw_badge(void) {
-    uint32_t used = 0;
-    uint32_t total = 0;
+    uint32_t ram_used = 0;
+    uint32_t ram_total = 0;
     uint16_t cpu;
     char ram[32];
     int16_t y;
@@ -953,13 +953,15 @@ static void draw_badge(void) {
     if (!st || st->overlay.opacity == 0) {
         return;
     }
-    ui_mem_get(&used, &total);
+    hal_ram_get(&ram_used, &ram_total);
     cpu = hal_cpu_tenths();
     if (cpu > 1000) {
         cpu = 1000;
     }
-    snprintf(ram, sizeof ram, "R%lu C%u.%u%% %u",
-             (unsigned long)used, cpu / 10u, cpu % 10u, (unsigned)st->fps);
+    snprintf(ram, sizeof ram, "R%lu/%luK C%u%% %u",
+             (unsigned long)((ram_used + 512u) / 1024u),
+             (unsigned long)((ram_total + 512u) / 1024u),
+             (unsigned)cpu / 10u, (unsigned)st->fps);
     y = (int16_t)badge_y();
     {
         int bx = UI_MX(16);

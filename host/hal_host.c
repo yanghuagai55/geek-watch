@@ -785,6 +785,15 @@ void hal_backlight_set(uint8_t level) {
     sim_backlight = level;
 }
 
+void hal_ram_get(uint32_t *used, uint32_t *total) {
+    if (used) {
+        *used = 10816;   /* 模拟 MCU：静态 10048 + 当前栈 */
+    }
+    if (total) {
+        *total = 16384;
+    }
+}
+
 const char *hal_fw_version(void) {
     return "1.0.0";
 }
