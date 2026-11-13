@@ -82,16 +82,21 @@ static void dot_at(int page, int *x, int *y) {
     *y = UI_H - 4 - lift - h + h / 2;
 }
 
+static int header_h(void) {
+    return ui_song_height(UI_SONG_TITLE) + UI_MY(60);
+}
+
 static void card_at(int *x, int *y) {
-    int header = UI_MY(150);
-    int ch = UI_MY(210);
-    int cw = UI_MX(840);
+    int header = header_h();
+    int ch = UI_MY(200);
+    int cw = UI_MX(860);
     int y0 = header + (UI_H - header) / 2;
     int card_y = y0 - ch / 2;
     int card_x = (UI_W - cw) / 2;
 
-    *x = card_x + (cw - 16) / 2;
-    *y = card_y + (ch - 16) / 2;
+    /* Sample the label, not the empty middle of the row. */
+    *x = card_x + UI_MX(85);
+    *y = card_y + (ch - 8) / 2;
 }
 
 static void frames(int n) {
@@ -106,10 +111,6 @@ static void tap(uint8_t key) {
     ui_frame();
     hal_host_set_keys(0);
     ui_frame();
-}
-
-static uint16_t rgb565(int r, int g, int b) {
-    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xFF) >> 3));
 }
 
 static uint32_t region_sig(int x, int y, int w, int h) {
@@ -228,7 +229,7 @@ int host_self_test(const char *output_dir) {
     {
         int dx, dy;
         dot_at(2, &dx, &dy);
-        if (hal_host_pixel(dx, dy) != rgb565(150, 210, 255)) {
+        if (hal_host_pixel(dx, dy) != UI_COL_MINT) {
             fprintf(stderr, "FAIL: page dot=%04x at %d,%d\n", hal_host_pixel(dx, dy), dx, dy);
             return 1;
         }
@@ -253,13 +254,13 @@ int host_self_test(const char *output_dir) {
     save_shot("shot_settings_stack.bmp");
     {
         int cx, cy;
-        int header = UI_MY(150);
+        int header = header_h();
         int y0 = header + (UI_H - header) / 2;
-        int fill_x = (UI_W - UI_MX(840)) / 2 + UI_MX(60);
+        int border_x = (UI_W - UI_MX(860)) / 2;
         card_at(&cx, &cy);
-        if (hal_host_pixel(fill_x, y0) != rgb565(0, 114, 230)) {
-            fprintf(stderr, "FAIL: bright stack=%04x at %d,%d\n",
-                    hal_host_pixel(fill_x, y0), fill_x, y0);
+        if (hal_host_pixel(border_x, y0) != UI_COL_MINT) {
+            fprintf(stderr, "FAIL: focused card=%04x at %d,%d\n",
+                    hal_host_pixel(border_x, y0), border_x, y0);
             return 1;
         }
         sub_card = region_sig(cx, cy, 16, 16);
@@ -290,7 +291,7 @@ int host_self_test(const char *output_dir) {
     {
         int dx, dy;
         dot_at(0, &dx, &dy);
-        if (hal_host_pixel(dx, dy) == rgb565(150, 210, 255)) {
+        if (hal_host_pixel(dx, dy) == UI_COL_MINT) {
             return fail("clock shows dots");
         }
     }
@@ -346,14 +347,10 @@ int host_self_test(const char *output_dir) {
             return fail("msg list did not open");
         }
         {
-            int header = ui_song_height(UI_SONG_TITLE) + UI_MY(20);
-            int y0;
-            if (header < UI_MY(150)) {
-                header = UI_MY(150);
-            }
-            y0 = header + (UI_H - header) / 2;
-            int fill_x = (UI_W - UI_MX(840)) / 2 + UI_MX(60);
-            if (hal_host_pixel(fill_x, y0) != rgb565(0, 114, 230)) {
+            int header = header_h();
+            int y0 = header + (UI_H - header) / 2;
+            int border_x = (UI_W - UI_MX(860)) / 2;
+            if (hal_host_pixel(border_x, y0) != UI_COL_MINT) {
                 return fail("msg list is not the stack");
             }
         }
@@ -361,10 +358,10 @@ int host_self_test(const char *output_dir) {
         tap(HAL_KEY2);
         frames(20);
         {
-            int px = (UI_W - 16 * 4) / 2 + 11 * 4;
-            int py = UI_MY(280) + 2 * 4;
-            if (hal_host_pixel(px, py) != 0xFE84) {
-                fprintf(stderr, "FAIL: msg detail image=%04x at %d,%d\n",
+            int px = UI_MX(70) + UI_MX(30);
+            int py = header_h() + UI_MY(25) + UI_MY(170);
+            if (hal_host_pixel(px, py) != UI_COL_SURFACE) {
+                fprintf(stderr, "FAIL: msg detail card=%04x at %d,%d\n",
                         hal_host_pixel(px, py), px, py);
                 return 1;
             }
@@ -378,24 +375,18 @@ int host_self_test(const char *output_dir) {
         frames(32);
         hal_host_set_keys(0);
         frames(40);
-        /* 消息图标是动画，区域签名随时间变；改用“列表蓝卡消失”判断已关闭。 */
+        /* 焦点边框与详情卡都消失，才说明两级页面均已退出。 */
         {
-            int header = ui_song_height(UI_SONG_TITLE) + UI_MY(20);
-            int y0, fill_x;
-            if (header < UI_MY(150)) {
-                header = UI_MY(150);
-            }
-            y0 = header + (UI_H - header) / 2;
-            fill_x = (UI_W - UI_MX(840)) / 2 + UI_MX(60);
-            if (hal_host_pixel(fill_x, y0) == rgb565(0, 114, 230)) {
+            int header = header_h();
+            int y0 = header + (UI_H - header) / 2;
+            int border_x = (UI_W - UI_MX(860)) / 2;
+            int px = UI_MX(70) + UI_MX(30);
+            int py = header_h() + UI_MY(25) + UI_MY(170);
+            if (hal_host_pixel(border_x, y0) == UI_COL_MINT) {
                 return fail("long enter did not close msg");
             }
-        }
-        {
-            int px = (UI_W - 16 * 4) / 2 + 11 * 4;
-            int py = UI_MY(280) + 2 * 4;
-            if (hal_host_pixel(px, py) == 0xFE84) {
-                return fail("msg image stayed on icon");
+            if (hal_host_pixel(px, py) == UI_COL_SURFACE) {
+                return fail("msg card stayed on icon");
             }
         }
     }

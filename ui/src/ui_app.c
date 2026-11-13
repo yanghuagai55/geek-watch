@@ -23,10 +23,11 @@ enum {
     M_BADGE_GAP = 16,
     M_DOT_LIFT = 50,
     M_DOT_GAP = 110,
-    M_HEADER = 150,
-    M_CARD_W = 840,
-    M_CARD_H = 210,
-    M_PITCH = 240
+    M_MARGIN = UI_LAYOUT_MARGIN_M,
+    M_HEADER = 200,
+    M_CARD_W = 860,
+    M_CARD_H = 200,
+    M_PITCH = 230
 };
 
 typedef struct app {
@@ -43,6 +44,7 @@ typedef struct app {
     int key2_long;
     uint32_t dot_ms;
     int dot_page;
+    uint32_t reveal_ms;
     uint32_t fps_window;
     uint16_t fps_frames;
     uint8_t fps;
@@ -53,19 +55,15 @@ static app_t *st;
 static uint16_t col_bg;
 static uint16_t col_text;
 static uint16_t col_dim;
-static uint16_t col_blue;
 static uint16_t col_blue_dim;
 static uint16_t col_ring;
 static uint16_t col_badge;
 static uint16_t col_dot;
 static uint16_t col_accent;
+static uint16_t col_line;
 
 static const char *const set_name[SET_N] = {"调试模式", "抬腕亮屏", "按键音", "亮度", "蓝牙", "关于"};
 static const char *const bright_name[DETAIL_N] = {"低", "中", "高"};
-
-static uint16_t rgb565(int r, int g, int b) {
-    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xFF) >> 3));
-}
 
 static int badge_h(void) {
     return 18;   /* 单行，只压页面点，不顶内容 */
@@ -92,15 +90,8 @@ static int dots_y(void) {
     return base - gap - dot_h();
 }
 
-static int content_bottom(void) {
-    /* 固定，不随调试角标变化 */
-    return UI_H - 6;
-}
-
 static int title_header_h(void) {
-    int h = ui_song_height(UI_SONG_TITLE) + UI_MY(20);
-    int min_h = UI_MY(M_HEADER);
-    return h > min_h ? h : min_h;
+    return ui_song_height(UI_SONG_TITLE) + UI_MY(60);
 }
 
 static void list_place(int header, int *y0, int *pitch) {
@@ -111,20 +102,47 @@ static void list_place(int header, int *y0, int *pitch) {
     *y0 = header + (UI_H - header) / 2;
 }
 
-static int mail_scale(void) {
-    int s = UI_MX(750) / 48;
-    return s < 1 ? 1 : s;
+static void home_icon_rect(int *x, int *y, int *w, int *h) {
+    *w = UI_MX(500);
+    *h = UI_MY(400);
+    if (*w < 48) *w = 48;
+    if (*h < 48) *h = 48;
+    *x = (UI_W - *w) / 2;
+    *y = UI_MY(100);
 }
 
-static void home_icon_rect(int *x, int *y, int *w, int *h) {
-    int s = mail_scale();
-    *w = 48 * s;
-    *h = 28 * s;
-    *x = (UI_W - *w) / 2;
-    *y = (content_bottom() - *h - ui_song_height(UI_SONG_TITLE) - UI_MY(28)) / 2;
-    if (*y < UI_MY(16)) {
-        *y = UI_MY(16);
-    }
+static void home_art_rect(int *x, int *y, int *w, int *h) {
+    int tx, ty, tw, th;
+    home_icon_rect(&tx, &ty, &tw, &th);
+    *w = tw * 3 / 4;
+    *h = th * 2 / 3;
+    *x = tx + (tw - *w) / 2;
+    *y = ty + (th - *h) / 2;
+}
+
+static void home_tile(uint8_t a) {
+    int x, y, w, h;
+    home_icon_rect(&x, &y, &w, &h);
+    ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
+                  (int16_t)(h / 4), col_line, a);
+    ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
+                  (int16_t)(w - 2), (int16_t)(h - 2),
+                  (int16_t)(h / 4 - 1), col_blue_dim, a);
+}
+
+static void home_caption(const char *name, uint8_t a) {
+    int x, y, w, h;
+    int cy;
+    int16_t tw;
+    home_icon_rect(&x, &y, &w, &h);
+    cy = y + h + UI_MY(60);
+    tw = ui_song_width(UI_SONG_TITLE, name);
+    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)cy,
+                 name, col_text, a);
+    ui_draw_round((int16_t)(UI_W / 2 - UI_MX(60)),
+                  (int16_t)(cy + ui_song_height(UI_SONG_TITLE) + UI_MY(25)),
+                  (int16_t)UI_MX(120), (int16_t)UI_MY(16),
+                  1, col_accent, a);
 }
 
 static int wrap_mod(int v, int m) {
@@ -166,13 +184,16 @@ static void blue_card(int x, int y, int w, int h, int hot, int radius, uint8_t a
     if (w < 8 || h < 8 || a == 0) {
         return;
     }
-    if (hot) {
-        ui_draw_round((int16_t)(x - 3), (int16_t)(y - 3),
-                      (int16_t)(w + 6), (int16_t)(h + 6),
-                      (int16_t)(radius + 3), col_ring, a);
-    }
     ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
-                  (int16_t)radius, hot ? col_blue : col_blue_dim, a);
+                  (int16_t)radius, hot ? col_ring : col_line, a);
+    ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
+                  (int16_t)(w - 2), (int16_t)(h - 2),
+                  (int16_t)(radius - 1), col_blue_dim, a);
+    if (hot) {
+        ui_draw_round((int16_t)(x + UI_MX(35)),
+                      (int16_t)(y + h / 4), (int16_t)UI_MX(20),
+                      (int16_t)(h / 2), 1, col_ring, a);
+    }
 }
 
 static int run_frame(void);
@@ -262,20 +283,25 @@ static void stack_box(int scroll, int index, int y0, int pitch,
 
 static void draw_labeled_card(int x, int y, int w, int h, int hot,
                               const char *name, const char *side, uint8_t a) {
-    int16_t tw;
+    char label[40];
+    int pad = UI_MX(55);
+    int right = x + w - pad;
+    int ty = y + (h - ui_text_height(name, 1)) / 2;
+    int max_w;
 
-    blue_card(x, y, w, h, hot, 10, a);
-    if (side) {
-        int16_t sw = ui_text_width(side, 1);
-        ui_draw_text((int16_t)(x + UI_MX(60)), (int16_t)(y + (h - 16) / 2),
-                     name, col_text, a, 1);
-        ui_draw_text((int16_t)(x + w - sw - UI_MX(60)), (int16_t)(y + (h - 16) / 2),
-                     side, col_text, a, 1);
-        return;
+    blue_card(x, y, w, h, hot, (int)(h / 3), a);
+    if (side && side[0]) {
+        ui_text_draw_right((int16_t)right, (int16_t)ty, side,
+                           hot ? col_ring : col_dim, a, 1);
+        right -= ui_text_width(side, 1) + UI_MX(35);
+    } else {
+        ui_text_draw_right((int16_t)right, (int16_t)ty, ">", col_dim, a, 1);
+        right -= ui_text_width(">", 1) + UI_MX(30);
     }
-    tw = ui_text_width(name, 1);
-    ui_draw_text((int16_t)(x + (w - tw) / 2), (int16_t)(y + (h - 16) / 2),
-                 name, col_text, a, 1);
+    max_w = right - (x + pad);
+    ui_text_fit(label, sizeof label, name, (int16_t)max_w, 1);
+    ui_draw_text((int16_t)(x + pad), (int16_t)ty, label,
+                 hot ? col_text : col_dim, a, 1);
 }
 
 static void draw_stack(int scroll, int n, int focus_vis, int y0, int pitch,
@@ -296,18 +322,20 @@ static void draw_stack(int scroll, int n, int focus_vis, int y0, int pitch,
 }
 
 static void draw_header(const char *title, uint8_t a, int song) {
-    int band = song ? title_header_h() : UI_MY(M_HEADER);
-    int y = song ? (band - ui_song_height(UI_SONG_TITLE)) / 2 : UI_MY(30);
+    int band = title_header_h();
+    int x = UI_MX(M_MARGIN);
+    int y = UI_MY(25);
+    int title_h = ui_song_height(UI_SONG_TITLE);
+    (void)song;
 
-    if (y < 0) {
-        y = 0;
-    }
     ui_draw_fill(0, 0, UI_W, (int16_t)band, col_bg, a);
-    if (song) {
-        ui_song_draw(UI_SONG_TITLE, (int16_t)UI_MX(40), (int16_t)y, title, col_text, a);
-        return;
-    }
-    ui_draw_text((int16_t)UI_MX(60), (int16_t)y, title, col_text, a, 1);
+    ui_draw_round((int16_t)x, (int16_t)(y + UI_MY(10)),
+                  (int16_t)UI_MX(24), (int16_t)(title_h - UI_MY(60)),
+                  1, col_accent, a);
+    ui_song_draw(UI_SONG_TITLE, (int16_t)(x + UI_MX(70)), (int16_t)y,
+                 title, col_text, a);
+    ui_draw_line((int16_t)x, (int16_t)(band - UI_MY(12)),
+                 (int16_t)(UI_W - x), (int16_t)(band - UI_MY(12)), col_line, a);
 }
 
 static void draw_face_pair(int x, int y, int value, uint16_t color, uint8_t a) {
@@ -330,79 +358,70 @@ static int face_weekday(int y, int m, int d) {
 static void draw_face_app(uint8_t a) {
     static const char *const wd[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     hal_clock_t clock;
+    sport_stats_t sport;
     int row_w = ui_song_width(UI_SONG_CLOCK, "00");
     int row_h = ui_song_height(UI_SONG_CLOCK);
-    int area_top = UI_MY(20);
-    int area_bot = content_bottom();
-    int top = area_top + 6;
-    int bot = area_bot - 6;
-    int gap_y;
-    int block_h;
-    int x0;
-    int y0;
-    int dot;
-    int cx;
-    int mid;
-    uint32_t now = hal_tick_ms();
-    uint32_t phase;
-    uint32_t t;
+    int gap_y = UI_MY(45);
+    int x0 = (UI_W - row_w) / 2;
+    int y0 = UI_MY(220);
+    int mid = y0 + row_h + gap_y / 2;
+    int dot = UI_MX(24);
+    int cx = (UI_W - dot) / 2;
+    int bar_x = UI_MX(M_MARGIN);
+    int bar_w = UI_W - bar_x * 2;
+    int bar_y = UI_MY(875);
+    int percent;
     uint8_t colon_a;
     char line[40];
-    int16_t tw;
+    char fitted[40];
+    char value[16];
 
+    if (gap_y < 5) gap_y = 5;
+    if (dot < 2) dot = 2;
     hal_clock_get(&clock);
+    sport_get(&sport);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
 
     if (link_media_lyric()[0]) {
         snprintf(line, sizeof line, "%s %s",
                  link_media_playing() ? "Play" : "Pause", link_media_lyric());
     } else {
-        snprintf(line, sizeof line, "%s %02u-%02u",
+        snprintf(line, sizeof line, "%s  %02u.%02u",
                  wd[face_weekday(clock.year, clock.month, clock.day)],
                  clock.month, clock.day);
     }
-    tw = ui_text_width(line, 1);
-    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)UI_MY(30), line, col_dim, a, 1);
+    ui_text_fit(fitted, sizeof fitted, line, (int16_t)(UI_W - bar_x * 2), 1);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(70), fitted, col_dim, a, 1);
 
-    gap_y = UI_MY(60);
-    if (gap_y < 10) {
-        gap_y = 10;
-    }
-    block_h = row_h * 2 + gap_y;
-    if (top + block_h > bot) {
-        gap_y = bot - top - row_h * 2;
-        if (gap_y < 4) {
-            gap_y = 4;
-        }
-        block_h = row_h * 2 + gap_y;
-    }
-    y0 = top + (bot - top - block_h) / 2;
-    if (y0 < 0) {
-        y0 = 0;
-    }
-    x0 = (UI_W - row_w) / 2;
     draw_face_pair(x0, y0, clock.hour, col_text, a);
     draw_face_pair(x0, y0 + row_h + gap_y, clock.minute, col_ring, a);
+    colon_a = (uint8_t)((100 + ui_anim_pulse(hal_tick_ms(), 2000u) * 155 / 255) * a / 255);
+    ui_draw_round((int16_t)cx, (int16_t)(mid - dot), (int16_t)dot, (int16_t)dot,
+                  (int16_t)(dot / 2), col_ring, colon_a);
+    ui_draw_round((int16_t)cx, (int16_t)(mid + dot / 2), (int16_t)dot, (int16_t)dot,
+                  (int16_t)(dot / 2), col_ring, colon_a);
 
-    phase = now % 2000u;
-    t = phase < 1000u ? phase * 256u / 1000u : (2000u - phase) * 256u / 1000u;
-    colon_a = (uint8_t)(120 + (int)ui_ease_in_out(t) * (255 - 120) / 255);
-    colon_a = (uint8_t)((int)colon_a * a / 255);
-    dot = gap_y / 3;
-    if (dot < 3) {
-        dot = 3;
+    percent = sport.goal ? (int)(sport.steps * 100u / sport.goal) : 0;
+    if (percent > 100) percent = 100;
+    ui_draw_round((int16_t)bar_x, (int16_t)bar_y, (int16_t)bar_w,
+                  (int16_t)UI_MY(16), 1, col_blue_dim, a);
+    if (percent > 0) {
+        int fill = bar_w * percent / 100;
+        if (fill < 2) fill = 2;
+        ui_draw_round((int16_t)bar_x, (int16_t)bar_y, (int16_t)fill,
+                      (int16_t)UI_MY(16), 1, col_ring, a);
     }
-    cx = x0 + row_w / 2 - dot / 2;
-    mid = y0 + row_h + gap_y / 2;
-    ui_draw_round((int16_t)cx, (int16_t)(mid - dot - 2), (int16_t)dot, (int16_t)dot,
-                  (int16_t)(dot / 2), col_ring, colon_a);
-    ui_draw_round((int16_t)cx, (int16_t)(mid + 2), (int16_t)dot, (int16_t)dot,
-                  (int16_t)(dot / 2), col_ring, colon_a);
+    snprintf(value, sizeof value, "%d%%", percent);
+    ui_draw_text((int16_t)bar_x, (int16_t)UI_MY(890), "STEPS", col_dim, a, 1);
+    ui_text_draw_right((int16_t)(bar_x + bar_w), (int16_t)UI_MY(890),
+                       value, col_text, a, 1);
 }
 
 /* 跑步采用外部 AI 按 ui/ICON_SVG_PROMPT.md 产出的关键帧（已人工预览验收）。
    ci: 0=主色(橙) 1=白 2=橙。脚着地时 y=42。 */
-static const uint16_t icon_pal[] = {0xEFBF, 0xFCE1, 0x969F, 0x0063, 0x039C};
+static const uint16_t icon_pal[] = {
+    UI_COL_TEXT, UI_COL_AMBER, UI_COL_MINT, UI_COL_BG, UI_COL_MINT
+};
 static const ui_svg_cmd_t run_svg[5][10] = {
     { {21,13,14,24,0,0}, {14,24,21,32,0,0}, {21,32,23,42,0,0}, {14,24,7,28,0,2}, {7,28,2,21,0,2},
       {20,15,25,21,0,2}, {25,21,29,15,0,1}, {20,15,13,20,0,0}, {13,20,17,26,0,1}, {24,8,0,0,3,1} },
@@ -416,33 +435,6 @@ static const ui_svg_cmd_t run_svg[5][10] = {
       {21,13,15,19,0,2}, {15,19,20,24,0,1}, {21,13,26,19,0,0}, {26,19,29,14,0,1}, {25,6,0,0,3,1} }
 };
 
-#define SCENE_SKY 0x551B
-#define SCENE_SUN 0xFE84
-#define SCENE_CLD 0xDF7F
-#define SCENE_HILL 0x3668
-#define SCENE_GRN 0x2C66
-#define S16(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p) \
-    a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p
-static const uint16_t scene_px[16 * 12] = {
-    S16(SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY),
-    S16(SCENE_SKY, SCENE_SKY, SCENE_CLD, SCENE_CLD, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SUN, SCENE_SUN, SCENE_SUN, SCENE_SKY, SCENE_SKY, SCENE_SKY),
-    S16(SCENE_SKY, SCENE_SKY, SCENE_CLD, SCENE_CLD, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SUN, SCENE_SUN, SCENE_SUN, SCENE_SKY, SCENE_SKY, SCENE_SKY),
-    S16(SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SUN, SCENE_SUN, SCENE_SUN, SCENE_SKY, SCENE_SKY, SCENE_SKY),
-    S16(SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY),
-    S16(SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY, SCENE_SKY),
-    S16(SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL),
-    S16(SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL, SCENE_HILL),
-    S16(SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN),
-    S16(SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN),
-    S16(SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN),
-    S16(SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN, SCENE_GRN)
-};
-#undef S16
-#undef SCENE_GRN
-#undef SCENE_HILL
-#undef SCENE_CLD
-#undef SCENE_SUN
-#undef SCENE_SKY
 
 static int run_frame(void) {
     return (int)((hal_tick_ms() / 60u) % 5u);
@@ -453,18 +445,20 @@ static void draw_sport_app(uint8_t a) {
     uint32_t bars[SPORT_BARS];
     hal_clock_t clk;
     char line[40];
-    int title_h = ui_song_height(UI_SONG_TITLE);
-    int title_y = dots_y() - title_h - 2;
-    int top = UI_MY(24);
-    int chart_top = top + UI_MY(280);
-    int chart_bot = title_y - UI_MY(110);
-    int chart_h = chart_bot - chart_top;
-    int x0 = UI_MX(60);
-    int x1 = UI_W - UI_MX(60);
-    int bw = (x1 - x0) / SPORT_BARS;
+    char goal[32];
+    int margin = UI_MX(M_MARGIN);
+    int header = title_header_h();
+    int number_y = header + UI_MY(20);
+    int label_y = number_y + ui_song_height(UI_SONG_CLOCK) + UI_MY(10);
+    int footer_y = UI_H - ui_text_height("0 m   0 kcal", 1) - UI_MY(20);
+    int chart_bot = footer_y - UI_MY(60);
+    int chart_h = chart_bot - (label_y + ui_text_height("今日步数", 1) + UI_MY(35));
+    int pitch = (UI_W - margin * 2) / SPORT_BARS;
+    int bw = pitch - UI_MX(24);
+    int percent;
     uint32_t max = 1;
-    int cur, i, bh, bx, by;
-    int16_t tw;
+    uint32_t elapsed = hal_tick_ms() - st->reveal_ms;
+    int cur, i;
 
     sport_get(&ss);
     sport_get_bars(bars, SPORT_BARS);
@@ -474,107 +468,123 @@ static void draw_sport_app(uint8_t a) {
         if (bars[i] > max) max = bars[i];
     }
     if (chart_h < 8) chart_h = 8;
+    if (bw < 2) bw = 2;
+    percent = ss.goal ? (int)(ss.steps * 100u / ss.goal) : 0;
+    if (percent > 100) percent = 100;
 
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    ui_text_draw((int16_t)UI_MX(60), (int16_t)top, "今日步数", col_dim, a, 1);
+    draw_header("运动", a, 0);
     snprintf(line, sizeof line, "%lu", (unsigned long)ss.steps);
-    tw = ui_text_width(line, 2);
-    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)(top + UI_MY(60)), line, col_ring, a, 2);
+    if (ss.steps < 1000u) {
+        int16_t nw = ui_song_width(UI_SONG_CLOCK, line);
+        ui_song_draw(UI_SONG_CLOCK, (int16_t)((UI_W - nw) / 2),
+                     (int16_t)number_y, line, col_text, a);
+    } else {
+        int th;
+        ui_text_fit(goal, sizeof goal, line,
+                    (int16_t)(UI_W - margin * 2), 2);
+        th = ui_text_height(goal, 2);
+        ui_text_draw_center((int16_t)(UI_W / 2),
+                            (int16_t)(number_y + (ui_song_height(UI_SONG_CLOCK) - th) / 2),
+                            goal, col_text, a, 2);
+    }
+    ui_draw_text((int16_t)margin, (int16_t)label_y, "今日步数", col_dim, a, 1);
+    snprintf(goal, sizeof goal, "%d%%", percent);
+    ui_text_draw_right((int16_t)(UI_W - margin), (int16_t)label_y, goal, col_ring, a, 1);
 
     for (i = 0; i < SPORT_BARS; i++) {
-        bh = (int)(bars[i] * (uint32_t)chart_h / max);
-        if (bars[i] > 0 && bh < 2) bh = 2;
-        bx = x0 + i * bw + 1;
-        by = chart_bot - bh;
-        ui_draw_round((int16_t)bx, (int16_t)by, (int16_t)(bw - 2), (int16_t)bh,
-                      2, i == cur ? col_accent : col_blue, a);
+        uint32_t local = elapsed > (uint32_t)i * 28u ? elapsed - (uint32_t)i * 28u : 0;
+        int grow = ui_ease_in_out(local * 256u / 420u);
+        int bh = (int)(bars[i] * (uint32_t)chart_h / max);
+        int bx = margin + i * pitch;
+        uint8_t bar_a = (uint8_t)((int)a * (i == cur ? 255 : 155) / 255);
+        bh = bh * grow / 255;
+        if (bars[i] > 0 && grow > 160 && bh < 2) bh = 2;
+        if (bars[i] == 0) {
+            ui_draw_fill((int16_t)bx, (int16_t)(chart_bot - 1),
+                         (int16_t)bw, 1, col_line, a);
+        } else if (bh > 0) {
+            ui_draw_round((int16_t)bx, (int16_t)(chart_bot - bh),
+                          (int16_t)bw, (int16_t)bh, 2,
+                          i == cur ? col_accent : col_ring, bar_a);
+        }
     }
-    ui_draw_line((int16_t)x0, (int16_t)chart_bot, (int16_t)x1, (int16_t)chart_bot, col_dim, a);
+    ui_draw_line((int16_t)margin, (int16_t)chart_bot,
+                 (int16_t)(UI_W - margin), (int16_t)chart_bot, col_line, a);
 
-    snprintf(line, sizeof line, "%lum  %lukcal",
+    snprintf(line, sizeof line, "%lu m   %lu kcal",
              (unsigned long)ss.distance_m, (unsigned long)ss.calories);
-    tw = ui_text_width(line, 1);
-    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)(chart_bot + UI_MY(30)), line, col_dim, a, 1);
-
-    tw = ui_song_width(UI_SONG_TITLE, "运动");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)title_y, "运动", col_text, a);
+    ui_text_fit(goal, sizeof goal, line, (int16_t)(UI_W - margin * 2), 1);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)footer_y, goal, col_dim, a, 1);
 }
 
 static void draw_mail_icon(void) {
     int x, y, w, h;
-    int16_t tw;
 
-    home_icon_rect(&x, &y, &w, &h);
+    home_art_rect(&x, &y, &w, &h);
+    y += h / 6;
+    h = h * 2 / 3;
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
+    home_tile(255);
     ui_icon_mail((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
-                 hal_tick_ms(), col_ring, col_text, col_bg, 255);
-    tw = ui_song_width(UI_SONG_TITLE, "消息");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(40)),
-                 "消息", col_text, 255);
+                 hal_tick_ms(), col_ring, col_text, col_blue_dim, 255);
+    home_caption("消息", 255);
 }
 
 static void draw_gear_icon(void) {
     int x, y, w, h;
     int cx, cy, rad;
-    int16_t tw;
 
-    home_icon_rect(&x, &y, &w, &h);
+    home_art_rect(&x, &y, &w, &h);
     cx = x + w / 2;
     cy = y + h / 2;
     rad = (w < h ? w : h) / 2;
-    if (rad < 8) {
-        rad = 8;
-    }
+    if (rad < 8) rad = 8;
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    ui_icon_gear((int16_t)cx, (int16_t)cy, (int16_t)rad, hal_tick_ms(), col_ring, col_bg, 255);
-    tw = ui_song_width(UI_SONG_TITLE, "设置");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(40)),
-                 "设置", col_text, 255);
+    home_tile(255);
+    ui_icon_gear((int16_t)cx, (int16_t)cy, (int16_t)rad,
+                 hal_tick_ms(), col_ring, col_blue_dim, 255);
+    home_caption("设置", 255);
 }
 
 static void draw_sport_icon(void) {
     int x, y, w, h;
     int scale;
-    int16_t tw;
 
-    home_icon_rect(&x, &y, &w, &h);
+    home_art_rect(&x, &y, &w, &h);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
+    home_tile(255);
     scale = w / 32;
-    if (h / 42 < scale) {
-        scale = h / 42;
-    }
-    if (scale < 1) {
-        scale = 1;
-    }
-    ui_svg_draw_p((int16_t)(x + (w - 32 * scale) / 2), (int16_t)(y + (h - 42 * scale) / 2),
+    if (h / 42 < scale) scale = h / 42;
+    if (scale < 1) scale = 1;
+    ui_svg_draw_p((int16_t)(x + (w - 32 * scale) / 2),
+                  (int16_t)(y + (h - 42 * scale) / 2),
                   (uint8_t)scale, run_svg[run_frame()], 10, icon_pal, 5, col_accent, 255,
                   (uint8_t)(scale + 3 > 8 ? 8 : scale + 3));
-    tw = ui_song_width(UI_SONG_TITLE, "运动");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(40)),
-                 "运动", col_text, 255);
+    home_caption("运动", 255);
 }
 
 static void draw_music_icon(void) {
     int x, y, w, h;
     int cx, cy, r;
-    int16_t tw;
+    int pulse;
 
-    home_icon_rect(&x, &y, &w, &h);
+    home_art_rect(&x, &y, &w, &h);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
+    home_tile(255);
     cx = x + w / 2;
     cy = y + h / 2;
-    cy += ((hal_tick_ms() / 250u) % 2u) ? 2 : -2;   /* 音符跳动动画 */
+    pulse = ui_anim_pulse(hal_tick_ms(), 1600u);
+    cy += (pulse - 128) * UI_MY(18) / 128;
     r = (w < h ? w : h) / 5;
-    if (r < 4) {
-        r = 4;
-    }
-    /* 音符：符头+符干+符尾 */
-    ui_draw_round((int16_t)(cx - r), (int16_t)cy, (int16_t)(r * 2), (int16_t)(r * 2), r, col_ring, 255);
-    ui_draw_line((int16_t)(cx + r), (int16_t)(cy + r), (int16_t)(cx + r), (int16_t)(cy - r * 2), col_ring, 255);
-    ui_draw_line((int16_t)(cx + r), (int16_t)(cy - r * 2), (int16_t)(cx + r * 2), (int16_t)(cy - r), col_ring, 255);
-    tw = ui_song_width(UI_SONG_TITLE, "音乐");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)(y + h + UI_MY(40)),
-                 "音乐", col_text, 255);
+    if (r < 4) r = 4;
+    ui_draw_round((int16_t)(cx - r), (int16_t)cy,
+                  (int16_t)(r * 2), (int16_t)(r * 2), (int16_t)r, col_accent, 255);
+    ui_draw_line((int16_t)(cx + r), (int16_t)(cy + r),
+                 (int16_t)(cx + r), (int16_t)(cy - r * 2), col_ring, 255);
+    ui_draw_line((int16_t)(cx + r), (int16_t)(cy - r * 2),
+                 (int16_t)(cx + r * 2), (int16_t)(cy - r), col_ring, 255);
+    home_caption("音乐", 255);
 }
 
 static void draw_sport_child(uint8_t a) {
@@ -587,20 +597,20 @@ static void draw_sport_child(uint8_t a) {
     int y0, pitch, i, x, y, w, h;
 
     sport_get(&ss);
-    snprintf(l0, sizeof l0, "清零今日 %lu步", (unsigned long)ss.steps);
-    names[0] = l0;
-    names[1] = "+1000步";
-    list_place(UI_MY(M_HEADER), &y0, &pitch);
+    snprintf(l0, sizeof l0, "%lu步", (unsigned long)ss.steps);
+    names[0] = "重置";
+    names[1] = "加1000步";
+    list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     for (i = 0; i < n; i++) {
         if (i == vis) {
             continue;
         }
         stack_box(scroll, i, y0, pitch, &x, &y, &w, &h);
-        draw_labeled_card(x, y, w, h, 0, names[i], 0, a);
+        draw_labeled_card(x, y, w, h, 0, names[i], i == 0 ? l0 : 0, a);
     }
     stack_box(scroll, vis, y0, pitch, &x, &y, &w, &h);
-    draw_labeled_card(x, y, w, h, 1, names[vis], 0, a);
+    draw_labeled_card(x, y, w, h, 1, names[vis], vis == 0 ? l0 : 0, a);
     draw_header("运动", a, 0);
 }
 
@@ -665,16 +675,33 @@ static void draw_settings_app(uint8_t a) {
 }
 
 static void draw_message_page(uint8_t a) {
-    enum { PW = 16, PH = 12, PS = 4 };
-    int x = (UI_W - PW * PS) / 2;
-    int y = UI_MY(280);
     const char *caption = link_message(st->messages.child);
-    int16_t tw = ui_text_width(caption, 1);
+    char body[40];
+    char meta[24];
+    int margin = UI_MX(M_MARGIN);
+    int x = margin;
+    int y = title_header_h() + UI_MY(25);
+    int w = UI_W - margin * 2;
+    int h = UI_MY(470);
+    int pad = UI_MX(90);
 
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    ui_image_draw((int16_t)x, (int16_t)y, PW, PH, PS, scene_px, a);
-    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)(y + PH * PS + UI_MY(40)),
-                 caption, col_text, a, 1);
+    ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
+                  (int16_t)(h / 6), col_line, a);
+    ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
+                  (int16_t)(w - 2), (int16_t)(h - 2),
+                  (int16_t)(h / 6 - 1), col_blue_dim, a);
+    snprintf(meta, sizeof meta, "MESSAGE %02d", st->messages.child + 1);
+    ui_draw_text((int16_t)(x + pad), (int16_t)(y + UI_MY(55)), meta, col_accent, a, 1);
+    ui_text_fit(body, sizeof body, caption, (int16_t)(w - pad * 2), 1);
+    ui_text_draw_center((int16_t)(UI_W / 2),
+                        (int16_t)(y + h / 2 + UI_MY(25)),
+                        body, col_text, a, 1);
+    ui_draw_line((int16_t)(x + pad), (int16_t)(y + h / 2 - UI_MY(20)),
+                 (int16_t)(x + w - pad), (int16_t)(y + h / 2 - UI_MY(20)),
+                 col_line, a);
+    ui_draw_round((int16_t)(x + pad), (int16_t)(y + h - UI_MY(75)),
+                  (int16_t)UI_MX(140), (int16_t)UI_MY(14), 1, col_ring, a);
     draw_header("消息", a, 0);
 }
 
@@ -706,7 +733,7 @@ static void draw_about_page(uint8_t a) {
         names[i] = lines[i];
     }
 
-    list_place(UI_MY(M_HEADER), &y0, &pitch);
+    list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     for (i = 0; i < ABOUT_N; i++) {
         if (i == vis) {
@@ -737,7 +764,7 @@ static void draw_detail(uint8_t a) {
         draw_about_page(a);
         return;
     }
-    list_place(UI_MY(M_HEADER), &y0, &pitch);
+    list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     draw_stack(scroll, DETAIL_N, vis_index(scroll, DETAIL_N), y0, pitch, bright_name, 0, a);
     draw_header("亮度", a, 0);
@@ -824,6 +851,9 @@ static void on_confirm(ui_menu_t *menu) {
         return;
     }
     result = ui_menu_confirm(menu);
+    if (result == UI_MENU_OPENED) {
+        st->reveal_ms = hal_tick_ms();
+    }
     if (result != UI_MENU_ROW) {
         return;
     }
@@ -922,15 +952,15 @@ void ui_init(void) {
         return;
     }
 
-    col_bg = rgb565(6, 12, 28);
-    col_text = rgb565(236, 244, 255);
-    col_dim = rgb565(150, 190, 230);
-    col_blue = rgb565(0, 114, 230);
-    col_blue_dim = rgb565(14, 42, 84);
-    col_ring = rgb565(150, 210, 255);
-    col_badge = rgb565(4, 18, 40);
-    col_dot = rgb565(110, 160, 210);
-    col_accent = rgb565(255, 159, 10);
+    col_bg = UI_COL_BG;
+    col_text = UI_COL_TEXT;
+    col_dim = UI_COL_MUTED;
+    col_blue_dim = UI_COL_SURFACE;
+    col_ring = UI_COL_MINT;
+    col_badge = UI_COL_SURFACE;
+    col_dot = UI_COL_LINE;
+    col_accent = UI_COL_AMBER;
+    col_line = UI_COL_LINE;
     ui_menu_init(&st->settings, SET_N);
     ui_menu_init(&st->messages, MSG_N);
     ui_menu_init(&st->sport, 1);

@@ -482,9 +482,10 @@ int main(int argc, char **argv) {
     }
     {
         static const uint32_t title_cp[] = {
-            0x8FD0, 0x52A8, 0x6D88, 0x606F, 0x8BBE, 0x7F6E
+            0x8FD0, 0x52A8, 0x6D88, 0x606F, 0x8BBE, 0x7F6E,
+            0x97F3, 0x4E50, 0x5173, 0x4E8E, 0x4EAE, 0x5EA6
         };
-        enum { TITLE_N = 6, TITLE_EM = 40 };
+        enum { TITLE_N = 12, TITLE_EM = 40 };
         digit_t titles[TITLE_N];
         int tx[TITLE_N];
         int ty[TITLE_N];

@@ -398,6 +398,67 @@ int16_t ui_text_width(const char *utf8, uint8_t scale) {
     return (int16_t)width;
 }
 
+int16_t ui_text_height(const char *utf8, uint8_t scale) {
+    int height = 0;
+    const char *s = utf8;
+
+    if (!s) return 0;
+    if (!scale) scale = 1;
+    while (*s) {
+        uint32_t cp = utf8_next(&s);
+        const ui_glyph_t *g = ui_font_find(cp);
+        int h = (g ? g->h : 16) * scale;
+        if (h > height) height = h;
+    }
+    return (int16_t)height;
+}
+
+void ui_text_draw_center(int16_t cx, int16_t y, const char *utf8,
+                         uint16_t color, uint8_t opacity, uint8_t scale) {
+    ui_text_draw((int16_t)(cx - ui_text_width(utf8, scale) / 2), y,
+                 utf8, color, opacity, scale);
+}
+
+void ui_text_draw_right(int16_t right, int16_t y, const char *utf8,
+                        uint16_t color, uint8_t opacity, uint8_t scale) {
+    ui_text_draw((int16_t)(right - ui_text_width(utf8, scale)), y,
+                 utf8, color, opacity, scale);
+}
+
+void ui_text_fit(char *out, int capacity, const char *utf8,
+                 int16_t max_width, uint8_t scale) {
+    int n;
+    int suffix = ui_text_width("...", scale);
+
+    if (!out || capacity <= 0) return;
+    out[0] = 0;
+    if (!utf8) return;
+    n = 0;
+    while (*utf8) {
+        const char *next = utf8;
+        int bytes;
+        utf8_next(&next);
+        bytes = (int)(next - utf8);
+        if (n + bytes >= capacity) break;
+        memcpy(out + n, utf8, (size_t)bytes);
+        n += bytes;
+        utf8 = next;
+    }
+    out[n] = 0;
+    if (ui_text_width(out, scale) <= max_width) return;
+    while (n > 0) {
+        int width;
+        n--;
+        while (n > 0 && (((unsigned char)out[n] & 0xC0) == 0x80)) n--;
+        out[n] = 0;
+        width = ui_text_width(out, scale) + suffix;
+        if (width <= max_width) {
+            if (n + 4 <= capacity) memcpy(out + n, "...", 4);
+            return;
+        }
+    }
+}
+
 static void pixel(int x, int y, int band_y, uint16_t color, uint8_t opacity) {
     uint16_t *dst;
     uint16_t d;

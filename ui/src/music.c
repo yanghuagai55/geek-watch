@@ -1,59 +1,90 @@
 #include "music.h"
 #include "ui.h"
 
-static uint16_t rgb565(int r, int g, int b) {
-    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xFF) >> 3));
-}
+#include <stdio.h>
 
-/* 左/右双三角（上一首/下一首）图标，dir=-1 左 / +1 右。 */
+/* Two line-drawn skip marks: dir=-1 previous / +1 next. */
 static void skip_icon(int cx, int cy, int s, int dir, uint16_t col, uint8_t a) {
-    int x0 = cx - s, x1 = cx + s;
+    int x0 = cx - s;
+    int x1 = cx + s;
     int tip = dir < 0 ? x0 : x1;
     int base = dir < 0 ? x1 : x0;
+
     ui_draw_line((int16_t)base, (int16_t)(cy - s), (int16_t)tip, (int16_t)cy, col, a);
     ui_draw_line((int16_t)tip, (int16_t)cy, (int16_t)base, (int16_t)(cy + s), col, a);
     ui_draw_line((int16_t)base, (int16_t)(cy + s), (int16_t)base, (int16_t)(cy - s), col, a);
 }
 
+/* Five small bars breathe on a shared integer pulse. Paused state settles
+   into a quiet line, so the animation carries state instead of decoration. */
+static void equalizer(int y, int h, int playing, uint8_t a) {
+    enum { BARS = 5 };
+    int pitch = UI_MX(130);
+    int bw = UI_MX(50);
+    int x0 = (UI_W - (BARS - 1) * pitch - bw) / 2;
+    int i;
+
+    if (pitch < bw + 2) pitch = bw + 2;
+    x0 = (UI_W - (BARS - 1) * pitch - bw) / 2;
+    for (i = 0; i < BARS; i++) {
+        int pulse = playing ? ui_anim_pulse(hal_tick_ms() + (uint32_t)i * 173u,
+                                            720u + (uint32_t)i * 80u) : 0;
+        int bh = 3 + pulse * h / 255;
+        int x = x0 + i * pitch;
+        ui_draw_round((int16_t)x, (int16_t)(y + h - bh), (int16_t)bw, (int16_t)bh,
+                      2, i == BARS / 2 ? UI_COL_AMBER : UI_COL_MINT,
+                      (uint8_t)((int)a * 220 / 255));
+    }
+}
+
 void music_page_draw(uint8_t a) {
-    uint16_t bg = rgb565(6, 12, 28);
-    uint16_t text = rgb565(236, 244, 255);
-    uint16_t dim = rgb565(150, 190, 230);
-    uint16_t blue = rgb565(0, 114, 230);
-    uint16_t ring = rgb565(150, 210, 255);
     const char *lyric = link_media_lyric();
+    char fitted[64];
+    int margin = UI_MX(UI_LAYOUT_MARGIN_M);
+    int header = ui_song_height(UI_SONG_TITLE) + UI_MY(20);
+    int divider = header + UI_MY(20);
+    int cx = UI_W / 2;
+    int by = UI_H - UI_MY(190);
+    int r = UI_MX(110);
     int playing = link_media_playing();
     int16_t tw;
-    int cx = UI_W / 2;
-    int by = UI_H - UI_MY(200);
-    int r = UI_MX(120);
-    const char *state = playing ? "播放中" : "已暂停";
-
-    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
-
-    tw = ui_song_width(UI_SONG_TITLE, "音乐");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)UI_MY(40), "音乐", text, a);
 
     if (!lyric[0]) lyric = "暂无歌词";
-    tw = ui_text_width(lyric, 1);
-    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)UI_MY(400), lyric, ring, a, 1);
+    if (r < 12) r = 12;
 
-    tw = ui_text_width(state, 1);
-    ui_text_draw((int16_t)((UI_W - tw) / 2), (int16_t)(by - r - UI_MY(110)), state, dim, a, 1);
+    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, a);
+    tw = ui_song_width(UI_SONG_TITLE, "音乐");
+    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2),
+                 (int16_t)UI_MY(25), "音乐", UI_COL_TEXT, a);
+    ui_draw_line((int16_t)margin, (int16_t)divider,
+                 (int16_t)(UI_W - margin), (int16_t)divider, UI_COL_LINE, a);
 
-    /* 上一首 / 播放暂停 / 下一首 */
-    skip_icon(cx - UI_MX(300), by, UI_MX(60), -1, ring, a);
-    skip_icon(cx + UI_MX(300), by, UI_MX(60), +1, ring, a);
-    ui_draw_round((int16_t)(cx - r), (int16_t)(by - r), (int16_t)(r * 2), (int16_t)(r * 2), r, blue, a);
+    ui_text_fit(fitted, sizeof fitted, lyric,
+                (int16_t)(UI_W - margin * 2), 1);
+    ui_text_draw_center((int16_t)cx, (int16_t)(divider + UI_MY(90)), fitted,
+                        UI_COL_TEXT, a, 1);
+    equalizer(UI_MY(560), UI_MY(120), playing, a);
+
+    skip_icon(cx - UI_MX(310), by, UI_MX(55), -1, UI_COL_MINT, a);
+    skip_icon(cx + UI_MX(310), by, UI_MX(55), +1, UI_COL_MINT, a);
+    ui_draw_round((int16_t)(cx - r), (int16_t)(by - r),
+                  (int16_t)(r * 2), (int16_t)(r * 2), (int16_t)r, UI_COL_MINT, a);
     if (playing) {
-        int bw = r / 3, bh = r, gap = r / 2;
-        ui_draw_round((int16_t)(cx - gap / 2 - bw), (int16_t)(by - bh / 2), (int16_t)bw, (int16_t)bh, 2, text, a);
-        ui_draw_round((int16_t)(cx + gap / 2), (int16_t)(by - bh / 2), (int16_t)bw, (int16_t)bh, 2, text, a);
+        int bw = r / 4;
+        int bh = r;
+        int gap = r / 2;
+        ui_draw_round((int16_t)(cx - gap / 2 - bw), (int16_t)(by - bh / 2),
+                      (int16_t)bw, (int16_t)bh, 2, UI_COL_BG, a);
+        ui_draw_round((int16_t)(cx + gap / 2), (int16_t)(by - bh / 2),
+                      (int16_t)bw, (int16_t)bh, 2, UI_COL_BG, a);
     } else {
-        int x0 = cx - r / 3, x1 = cx + r / 2, y0 = by - r / 2, y1 = by + r / 2;
-        ui_draw_line((int16_t)x0, (int16_t)y0, (int16_t)x0, (int16_t)y1, text, a);
-        ui_draw_line((int16_t)x0, (int16_t)y1, (int16_t)x1, (int16_t)by, text, a);
-        ui_draw_line((int16_t)x1, (int16_t)by, (int16_t)x0, (int16_t)y0, text, a);
+        int x0 = cx - r / 3;
+        int x1 = cx + r / 2;
+        int y0 = by - r / 2;
+        int y1 = by + r / 2;
+        ui_draw_line((int16_t)x0, (int16_t)y0, (int16_t)x0, (int16_t)y1, UI_COL_BG, a);
+        ui_draw_line((int16_t)x0, (int16_t)y1, (int16_t)x1, (int16_t)by, UI_COL_BG, a);
+        ui_draw_line((int16_t)x1, (int16_t)by, (int16_t)x0, (int16_t)y0, UI_COL_BG, a);
     }
 }
 

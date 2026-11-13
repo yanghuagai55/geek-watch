@@ -59,6 +59,19 @@ void ui_draw_invalidate(void);
    屏幕长边竖着放。0 贴着左或上，1000 贴着右或下。 */
 #define UI_MX(m) ((m) * UI_W / 1000)
 #define UI_MY(m) ((m) * UI_H / 1000)
+#define UI_LAYOUT_MARGIN_M 70
+
+/* One quiet palette for every page: warm white, mint and amber on graphite.
+   Compile-time RGB565 keeps the theme out of RAM and avoids per-page drift. */
+#define UI_RGB565(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | \
+                                      (((g) & 0xFC) << 3) | ((b) >> 3)))
+#define UI_COL_BG       UI_RGB565(10, 15, 16)
+#define UI_COL_SURFACE  UI_RGB565(24, 33, 32)
+#define UI_COL_LINE     UI_RGB565(49, 65, 60)
+#define UI_COL_TEXT     UI_RGB565(240, 241, 228)
+#define UI_COL_MUTED    UI_RGB565(135, 151, 143)
+#define UI_COL_MINT     UI_RGB565(115, 212, 174)
+#define UI_COL_AMBER    UI_RGB565(255, 177, 94)
 
 /* ---- pages & navigation ---- */
 typedef enum {
@@ -100,6 +113,8 @@ void ui_anim_tick(uint32_t now_ms);
 uint16_t ui_anim_duration_ms(ui_anim_id_t id);
 /* Reusable easing, t 0..256 -> travelled 0..255. Cubic ease-in-out (LVGL, MIT). */
 uint8_t ui_ease_in_out(uint32_t t);
+/* Allocation-free 0..255..0 pulse for small ambient motions. period_ms must > 0. */
+uint8_t ui_anim_pulse(uint32_t now_ms, uint32_t period_ms);
 
 /* ---- drawing primitives (record into the current frame) ---- */
 void ui_draw_begin(void);
@@ -141,9 +156,17 @@ void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
 void ui_text_draw(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale);
 int16_t ui_text_width(const char *utf8, uint8_t scale);
+int16_t ui_text_height(const char *utf8, uint8_t scale);
+void ui_text_draw_center(int16_t cx, int16_t y, const char *utf8,
+                         uint16_t color, uint8_t opacity, uint8_t scale);
+void ui_text_draw_right(int16_t right, int16_t y, const char *utf8,
+                        uint16_t color, uint8_t opacity, uint8_t scale);
+/* UTF-8 safe single-line fitting. Output is always NUL terminated. */
+void ui_text_fit(char *out, int capacity, const char *utf8,
+                 int16_t max_width, uint8_t scale);
 
 /* ---- checked-in song font (Flash, 1:1) ----
-   华文琥珀。0 是中文标题，1 是表盘数字。小字号的中文也从华文琥珀取。 */
+   华文琥珀。0 是中文标题，1 是表盘数字；小字号中文仍走点阵字模。 */
 enum { UI_SONG_TITLE = 0, UI_SONG_CLOCK = 1 };
 void ui_song_draw(int face, int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity);

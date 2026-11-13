@@ -74,6 +74,19 @@ uint8_t ui_ease_in_out(uint32_t t) {
     return (uint8_t)e;
 }
 
+uint8_t ui_anim_pulse(uint32_t now_ms, uint32_t period_ms) {
+    uint32_t phase;
+
+    if (period_ms < 2u) {
+        return 0;
+    }
+    phase = now_ms % period_ms;
+    if (phase > period_ms / 2u) {
+        phase = period_ms - phase;
+    }
+    return ui_ease_in_out(phase * 256u / (period_ms / 2u));
+}
+
 static void apply(slot_t *s, int16_t value) {
     if (!s->obj) {
         return;
