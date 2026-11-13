@@ -55,6 +55,11 @@ typedef struct ui_render_stats {
 void ui_render_get_stats(ui_render_stats_t *out);
 void ui_draw_invalidate(void);
 
+/* 供调试链路读取的实时帧率（每秒刷新一次） */
+uint8_t ui_app_get_fps(void);
+/* 强制回到表盘主页（关闭子页/菜单） */
+void ui_app_go_home(void);
+
 /* ---- layout: permille of the panel, never hard-coded pixels ----
    屏幕长边竖着放。0 贴着左或上，1000 贴着右或下。 */
 #define UI_MX(m) ((m) * UI_W / 1000)

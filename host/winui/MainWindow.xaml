@@ -1,0 +1,1434 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="At32Debugger.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:svc="using:At32Debugger.Services">
+
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 自定义标题栏：去掉系统边框和标题栏 -->
+        <Grid
+            x:Name="AppTitleBar"
+            Grid.Row="0"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="0,0,0,1">
+
+            <Grid x:Name="TitleBarDragArea" Background="Transparent">
+                <StackPanel
+                    Margin="14,0,0,0"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="10">
+                    <Image
+                        x:Name="TitleBarIcon"
+                        Width="22"
+                        Height="22"
+                        Stretch="Uniform" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontSize="13"
+                        FontWeight="SemiBold"
+                        Text="AT32 手表调试台" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontSize="11"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Text="调试启动器" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <NavigationView
+            x:Name="Nav"
+            Grid.Row="1"
+            IsBackButtonVisible="Collapsed"
+            IsPaneOpen="True"
+            IsPaneToggleButtonVisible="False"
+            IsSettingsVisible="False"
+            OpenPaneLength="236"
+            PaneDisplayMode="Left"
+            SelectionChanged="Nav_SelectionChanged">
+
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="HomeItem" Content="主页" Tag="home">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Home" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="DebugItem" Content="调试" Tag="debug">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Edit" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="ScreenItem" Content="屏幕" Tag="screen">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Camera" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="LogItem" Content="日志" Tag="log">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Document" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem x:Name="SettingsItem" Content="设置" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Setting" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="AboutItem" Content="关于" Tag="about">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Help" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+
+            <NavigationView.PaneFooter>
+                <StackPanel Padding="12,8,12,14" Spacing="8">
+                    <Border
+                        Padding="10,5"
+                        HorizontalAlignment="Stretch"
+                        Background="{ThemeResource ControlFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="14">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Ellipse
+                                x:Name="StatusDot"
+                                Width="8"
+                                Height="8"
+                                Fill="{StaticResource StatusIdleBrush}" />
+                            <TextBlock
+                                x:Name="StatusText"
+                                FontSize="12"
+                                Foreground="{StaticResource StatusIdleBrush}"
+                                Text="未连接" />
+                        </StackPanel>
+                    </Border>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button
+                            x:Name="ConnectButton"
+                            HorizontalAlignment="Stretch"
+                            Click="Connect_Click"
+                            Content="连接"
+                            Style="{StaticResource AccentButtonStyle}"
+                            FontWeight="SemiBold"
+                            Foreground="#141414" />
+                        <Button
+                            x:Name="DisconnectButton"
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            Click="Disconnect_Click"
+                            Content="断开" />
+                    </Grid>
+                    <TextBlock
+                        FontSize="11"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Text="v0.2 · BLE / SPP / 串口" />
+                </StackPanel>
+            </NavigationView.PaneFooter>
+
+            <Grid>
+                <!-- 主页 -->
+                <ScrollViewer
+                    x:Name="HomePanel"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+                    <StackPanel Padding="24,16,24,24" Spacing="16">
+
+                        <!-- Hero -->
+                        <Border
+                            Height="250"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Offset="0" Color="#1B2330" />
+                                    <GradientStop Offset="0.6" Color="#24201A" />
+                                    <GradientStop Offset="1" Color="#33200E" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Grid>
+                                <StackPanel
+                                    MaxWidth="520"
+                                    Margin="28,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Spacing="8">
+                                    <TextBlock FontSize="30" FontWeight="Bold" Text="AT32 手表" />
+                                    <TextBlock
+                                        FontSize="13"
+                                        Foreground="#C3CAD4"
+                                        Text="AT32F421 · 128×160 彩屏 · 61 fps" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        Foreground="#98A2AE"
+                                        Text="按键、校时、消息、屏幕镜像与原始命令，都在这里。"
+                                        TextWrapping="Wrap" />
+                                    <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10">
+                                        <Button
+                                            x:Name="HeroConnectButton"
+                                            Height="40"
+                                            Padding="20,0"
+                                            Click="Connect_Click"
+                                            Content="连接设备"
+                                            Style="{StaticResource AccentButtonStyle}"
+                            FontWeight="SemiBold"
+                            Foreground="#141414" />
+                                        <Button
+                                            Height="40"
+                                            Padding="18,0"
+                                            Click="OpenScreen_Click"
+                                            Content="打开屏幕" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <Border
+                                    Width="176"
+                                    Height="220"
+                                    Margin="0,0,40,0"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Background="#0B0C0E"
+                                    BorderBrush="#3A3226"
+                                    BorderThickness="1"
+                                    CornerRadius="14">
+                                    <Grid>
+                                        <Image
+                                            x:Name="HeroImage"
+                                            Margin="8"
+                                            Stretch="Uniform"
+                                            Visibility="Collapsed" />
+                                        <TextBlock
+                                            x:Name="HeroPlaceholder"
+                                            Margin="14"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            FontSize="11"
+                                            Foreground="#6B7078"
+                                            Text="连接后显示手表主页"
+                                            TextAlignment="Center"
+                                            TextWrapping="Wrap" />
+                                        <Border
+                                            Padding="6,2"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Bottom"
+                                            Margin="0,0,8,8"
+                                            Background="#99000000"
+                                            CornerRadius="4">
+                                            <TextBlock
+                                                x:Name="HeroBadgeText"
+                                                FontSize="9"
+                                                Foreground="#C3CAD4"
+                                                Text="等待连接" />
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <!-- 实时遥测 -->
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock
+                                    FontSize="16"
+                                    FontWeight="SemiBold"
+                                    Text="实时状态" />
+                                <Border
+                                    Padding="7,2"
+                                    VerticalAlignment="Center"
+                                    Background="#1A5CB85C"
+                                    CornerRadius="9">
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Ellipse
+                                            x:Name="TelemetryDot"
+                                            Width="6"
+                                            Height="6"
+                                            Fill="{StaticResource StatusOkBrush}"
+                                            Opacity="0.35" />
+                                        <TextBlock
+                                            FontSize="10"
+                                            FontWeight="SemiBold"
+                                            Foreground="{StaticResource StatusOkBrush}"
+                                            Text="LIVE" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                            <TextBlock
+                                x:Name="TelemetryHint"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                FontSize="11"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Text="未连接" />
+                        </Grid>
+
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Width="92" Height="92">
+                                        <Ellipse
+                                            Width="86"
+                                            Height="86"
+                                            Opacity="0.5"
+                                            Stroke="{ThemeResource ControlStrokeColorDefaultBrush}"
+                                            StrokeThickness="2" />
+                                        <ProgressRing
+                                            x:Name="RamRing"
+                                            Width="92"
+                                            Height="92"
+                                            Foreground="{StaticResource AccentSoftBrush}"
+                                            IsIndeterminate="False"
+                                            Maximum="100"
+                                            Value="0" />
+                                        <TextBlock
+                                            x:Name="RamPercent"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            FontSize="18"
+                                            FontWeight="SemiBold"
+                                            Text="—" />
+                                    </Grid>
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Spacing="2">
+                                        <TextBlock
+                                            FontSize="12"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="RAM" />
+                                        <TextBlock
+                                            x:Name="RamValue"
+                                            FontSize="22"
+                                            FontWeight="SemiBold"
+                                            Text="—" />
+                                        <TextBlock
+                                            x:Name="RamDetail"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="等待连接"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Width="92" Height="92">
+                                        <Ellipse
+                                            Width="86"
+                                            Height="86"
+                                            Opacity="0.5"
+                                            Stroke="{ThemeResource ControlStrokeColorDefaultBrush}"
+                                            StrokeThickness="2" />
+                                        <ProgressRing
+                                            x:Name="CpuRing"
+                                            Width="92"
+                                            Height="92"
+                                            Foreground="{StaticResource StatusOkBrush}"
+                                            IsIndeterminate="False"
+                                            Maximum="100"
+                                            Value="0" />
+                                        <TextBlock
+                                            x:Name="CpuPercent"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            FontSize="18"
+                                            FontWeight="SemiBold"
+                                            Text="—" />
+                                    </Grid>
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Spacing="2">
+                                        <TextBlock
+                                            FontSize="12"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="CPU" />
+                                        <TextBlock
+                                            x:Name="CpuValue"
+                                            FontSize="22"
+                                            FontWeight="SemiBold"
+                                            Text="—" />
+                                        <TextBlock
+                                            x:Name="CpuDetail"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="等待连接"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Width="92" Height="92">
+                                        <Ellipse
+                                            Width="86"
+                                            Height="86"
+                                            Opacity="0.5"
+                                            Stroke="{ThemeResource ControlStrokeColorDefaultBrush}"
+                                            StrokeThickness="2" />
+                                        <ProgressRing
+                                            x:Name="FpsRing"
+                                            Width="92"
+                                            Height="92"
+                                            Foreground="{StaticResource AccentSoftBrush}"
+                                            IsIndeterminate="False"
+                                            Maximum="100"
+                                            Value="0" />
+                                        <TextBlock
+                                            x:Name="FpsPercent"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            FontSize="18"
+                                            FontWeight="SemiBold"
+                                            Text="—" />
+                                    </Grid>
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Spacing="2">
+                                        <TextBlock
+                                            FontSize="12"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="FPS" />
+                                        <TextBlock
+                                            x:Name="FpsValue"
+                                            FontSize="22"
+                                            FontWeight="SemiBold"
+                                            Text="—" />
+                                        <TextBlock
+                                            x:Name="FpsDetail"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="等待连接"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- 快捷操作 -->
+                        <TextBlock
+                            Margin="2,4,0,0"
+                            FontSize="16"
+                            FontWeight="SemiBold"
+                            Text="快捷操作" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Button
+                                MinHeight="108"
+                                Padding="14"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Click="QuickSnap_Click">
+                                <StackPanel Spacing="4">
+                                    <SymbolIcon
+                                        HorizontalAlignment="Left"
+                                        Foreground="{StaticResource AccentSoftBrush}"
+                                        Symbol="Camera" />
+                                    <TextBlock FontWeight="SemiBold" Text="抓屏" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Text="读取当前画面" />
+                                </StackPanel>
+                            </Button>
+
+                            <Button
+                                Grid.Column="1"
+                                MinHeight="108"
+                                Padding="14"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Click="QuickTime_Click">
+                                <StackPanel Spacing="4">
+                                    <SymbolIcon
+                                        HorizontalAlignment="Left"
+                                        Foreground="{StaticResource AccentSoftBrush}"
+                                        Symbol="Clock" />
+                                    <TextBlock FontWeight="SemiBold" Text="校时" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Text="同步本机时间" />
+                                </StackPanel>
+                            </Button>
+
+                            <Button
+                                Grid.Column="2"
+                                MinHeight="108"
+                                Padding="14"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Click="QuickMessage_Click">
+                                <StackPanel Spacing="4">
+                                    <SymbolIcon
+                                        HorizontalAlignment="Left"
+                                        Foreground="{StaticResource AccentSoftBrush}"
+                                        Symbol="Message" />
+                                    <TextBlock FontWeight="SemiBold" Text="发消息" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Text="打开消息面板" />
+                                </StackPanel>
+                            </Button>
+
+                            <Button
+                                Grid.Column="3"
+                                MinHeight="108"
+                                Padding="14"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Click="QuickDebug_Click">
+                                <StackPanel Spacing="4">
+                                    <SymbolIcon
+                                        HorizontalAlignment="Left"
+                                        Foreground="{StaticResource AccentSoftBrush}"
+                                        Symbol="Repair" />
+                                    <TextBlock FontWeight="SemiBold" Text="调试模式" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Text="打开屏幕角标" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+
+                        <!-- 连接 + 最近活动 -->
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.15*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="设备连接" />
+                                    <Grid ColumnSpacing="10" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock
+                                            Style="{StaticResource FieldLabelStyle}"
+                                            Text="通道" />
+                                        <ComboBox
+                                            x:Name="ModeBox"
+                                            Grid.Column="1"
+                                            HorizontalAlignment="Stretch"
+                                            SelectionChanged="ModeBox_SelectionChanged">
+                                            <ComboBoxItem Content="蓝牙 BLE" Tag="ble" />
+                                            <ComboBoxItem Content="经典 SPP" Tag="spp" />
+                                            <ComboBoxItem Content="串口" Tag="serial" />
+                                            <ComboBoxItem Content="演示" Tag="demo" />
+                                        </ComboBox>
+
+                                        <TextBlock
+                                            x:Name="AddressLabel"
+                                            Grid.Row="1"
+                                            Style="{StaticResource FieldLabelStyle}"
+                                            Text="地址" />
+                                        <TextBox
+                                            x:Name="AddressBox"
+                                            Grid.Row="1"
+                                            Grid.Column="1"
+                                            Text="本地演示" />
+
+                                        <TextBlock
+                                            x:Name="BaudLabel"
+                                            Grid.Row="2"
+                                            Style="{StaticResource FieldLabelStyle}"
+                                            Text="波特率" />
+                                        <TextBox
+                                            x:Name="BaudBox"
+                                            Grid.Row="2"
+                                            Grid.Column="1"
+                                            Text="115200" />
+
+                                        <TextBlock
+                                            x:Name="ModeHint"
+                                            Grid.Row="3"
+                                            Grid.ColumnSpan="2"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="传输层待接入，当前使用演示通道"
+                                            TextWrapping="Wrap" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="最近活动" />
+                                    <ListView
+                                        x:Name="RecentList"
+                                        MaxHeight="170"
+                                        Padding="0"
+                                        Background="Transparent"
+                                        SelectionMode="None">
+                                        <ListView.ItemContainerStyle>
+                                            <Style TargetType="ListViewItem">
+                                                <Setter Property="MinHeight" Value="0" />
+                                                <Setter Property="Padding" Value="0,1" />
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            </Style>
+                                        </ListView.ItemContainerStyle>
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="svc:LogEntry">
+                                                <Grid ColumnSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="54" />
+                                                        <ColumnDefinition Width="40" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock
+                                                        FontFamily="Consolas"
+                                                        FontSize="11"
+                                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                        Text="{x:Bind Time}" />
+                                                    <TextBlock
+                                                        Grid.Column="1"
+                                                        FontFamily="Consolas"
+                                                        FontSize="11"
+                                                        FontWeight="SemiBold"
+                                                        Foreground="{x:Bind TagBrush}"
+                                                        Text="{x:Bind Tag}" />
+                                                    <TextBlock
+                                                        Grid.Column="2"
+                                                        FontFamily="Consolas"
+                                                        FontSize="11"
+                                                        Text="{x:Bind Message}"
+                                                        TextTrimming="CharacterEllipsis" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- 调试 -->
+                <Grid
+                    x:Name="DebugPanel"
+                    Padding="24,16,24,24"
+                    RowSpacing="14"
+                    Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <TextBlock FontSize="24" FontWeight="SemiBold" Text="调试" />
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="按键、亮度、消息与原始命令" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="1" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Spacing="12">
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="按键" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                Height="44"
+                                                HorizontalAlignment="Stretch"
+                                                Click="PrevKey_Click"
+                                                Content="上一项" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Height="44"
+                                                HorizontalAlignment="Stretch"
+                                                Click="ConfirmKey_Click"
+                                                Content="确定" />
+                                            <Button
+                                                Grid.Column="2"
+                                                Height="44"
+                                                HorizontalAlignment="Stretch"
+                                                Click="NextKey_Click"
+                                                Content="下一项" />
+                                        </Grid>
+                                        <Button
+                                            Height="38"
+                                            Margin="0,8,0,0"
+                                            HorizontalAlignment="Stretch"
+                                            Click="LongConfirmKey_Click"
+                                            Content="长按确定 · 退出菜单" />
+                                        <TextBlock
+                                            Margin="0,8,0,0"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="固件按键为边沿触发：工具自动按下 + 90 ms 松开"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="亮度 / 系统" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Brightness_Click"
+                                                Content="低"
+                                                Tag="0" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Brightness_Click"
+                                                Content="中"
+                                                Tag="1" />
+                                            <Button
+                                                Grid.Column="2"
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Brightness_Click"
+                                                Content="高"
+                                                Tag="2" />
+                                        </Grid>
+                                        <Grid Margin="0,8,0,0" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="SyncTime_Click"
+                                                Content="校时" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="DebugOn_Click"
+                                                Content="调试开" />
+                                            <Button
+                                                Grid.Column="2"
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="DebugOff_Click"
+                                                Content="调试关" />
+                                        </Grid>
+                                        <Grid Margin="0,8,0,0" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="PlayStateOn_Click"
+                                                Content="播放" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="PlayStateOff_Click"
+                                                Content="暂停" />
+                                            <Button
+                                                Grid.Column="2"
+                                                Height="36"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Perf_Click"
+                                                Content="性能" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="消息 / 歌词" />
+                                        <TextBox
+                                            x:Name="MessageBox"
+                                            PlaceholderText="UTF-8 文本"
+                                            Text="Hello" />
+                                        <Grid Margin="0,8,0,0" ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                Height="34"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Message_Click"
+                                                Content="消息1"
+                                                Tag="0" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Height="34"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Message_Click"
+                                                Content="消息2"
+                                                Tag="1" />
+                                            <Button
+                                                Grid.Column="2"
+                                                Height="34"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Message_Click"
+                                                Content="消息3"
+                                                Tag="2" />
+                                            <Button
+                                                Grid.Column="3"
+                                                Height="34"
+                                                HorizontalAlignment="Stretch"
+                                                Click="Lyric_Click"
+                                                Content="歌词" />
+                                        </Grid>
+                                        <TextBlock
+                                            Margin="0,8,0,0"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="消息写入槽 1-3，最长 23 字节；歌词最长 27 字节"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <ScrollViewer
+                            Grid.Column="1"
+                            HorizontalScrollBarVisibility="Disabled"
+                            VerticalScrollBarVisibility="Auto">
+                            <StackPanel Spacing="12">
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="原始命令" />
+                                        <TextBox
+                                            x:Name="RawCommandBox"
+                                            FontFamily="Consolas"
+                                            PlaceholderText="十六进制命令，如 06"
+                                            Text="06" />
+                                        <Button
+                                            Margin="0,8,0,0"
+                                            HorizontalAlignment="Stretch"
+                                            Click="RawCommand_Click"
+                                            Content="发送命令" />
+                                        <TextBlock
+                                            Margin="0,8,0,0"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="工具自动补 A5 / 长度 / 异或；06 = 抓屏"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="自定义发送" />
+                                        <TextBox
+                                            x:Name="CustomBox"
+                                            Height="88"
+                                            AcceptsReturn="True"
+                                            FontFamily="Consolas"
+                                            PlaceholderText="文本，或勾选 HEX 后输入 A5 7F 00 DA"
+                                            TextWrapping="Wrap" />
+                                        <StackPanel Margin="0,8,0,0" Orientation="Horizontal" Spacing="12">
+                                            <CheckBox
+                                                x:Name="HexCheck"
+                                                MinWidth="0"
+                                                Content="HEX" />
+                                            <CheckBox
+                                                x:Name="CrlfCheck"
+                                                MinWidth="0"
+                                                Content="追加 CRLF"
+                                                IsChecked="True" />
+                                        </StackPanel>
+                                        <Grid Margin="0,8,0,0" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Style="{StaticResource FieldLabelStyle}" Text="发送到" />
+                                            <ComboBox
+                                                x:Name="CustomTargetBox"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Stretch"
+                                                SelectedIndex="0">
+                                                <ComboBoxItem Content="主链路" />
+                                                <ComboBoxItem Content="监听口" />
+                                            </ComboBox>
+                                        </Grid>
+                                        <Grid Margin="0,6,0,0" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                HorizontalAlignment="Stretch"
+                                                Click="CustomSend_Click"
+                                                Content="发送" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Click="CustomClear_Click"
+                                                Content="清空" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="串口监听" />
+                                        <Grid ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="74" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox
+                                                x:Name="MonitorPortBox"
+                                                Text="COM7" />
+                                            <TextBox
+                                                x:Name="MonitorBaudBox"
+                                                Grid.Column="1"
+                                                Text="115200" />
+                                            <Button
+                                                x:Name="MonitorButton"
+                                                Grid.Column="2"
+                                                Click="Monitor_Click"
+                                                Content="开始监听" />
+                                        </Grid>
+                                        <TextBlock
+                                            Margin="0,8,0,0"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="与主链路独立；可在「自定义发送」里选择监听口"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel Spacing="7">
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="设备信息" />
+                                        <Grid ColumnSpacing="10" RowSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Style="{StaticResource FieldLabelStyle}" Text="通道" />
+                                            <TextBlock
+                                                x:Name="InfoChannel"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                FontFamily="Consolas"
+                                                FontSize="12"
+                                                Text="—" />
+                                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabelStyle}" Text="协议" />
+                                            <TextBlock
+                                                Grid.Row="1"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                FontFamily="Consolas"
+                                                FontSize="12"
+                                                Text="A5 cmd len data xor" />
+                                            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabelStyle}" Text="BLE 特征" />
+                                            <TextBlock
+                                                Grid.Row="2"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                FontFamily="Consolas"
+                                                FontSize="12"
+                                                Text="FFE1 / FFE0" />
+                                            <TextBlock Grid.Row="3" Style="{StaticResource FieldLabelStyle}" Text="固件" />
+                                            <TextBlock
+                                                Grid.Row="3"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                FontFamily="Consolas"
+                                                FontSize="12"
+                                                Text="60.7 / 64 KB" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="传感器 / 诊断" />
+                                        <Button
+                                            HorizontalAlignment="Stretch"
+                                            Click="Sensor_Click"
+                                            Content="读取传感器快照" />
+                                        <TextBlock
+                                            x:Name="SensorOutput"
+                                            FontFamily="Consolas"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="—"
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="MPU6050 / QMC5883P / 电池，手表回一行 DBG 文本"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+
+                <!-- 屏幕 -->
+                <Grid
+                    x:Name="ScreenPanel"
+                    Padding="24,16,24,24"
+                    RowSpacing="12"
+                    Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <TextBlock FontSize="24" FontWeight="SemiBold" Text="屏幕" />
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="读取手表当前画面，支持保存为 PNG" />
+                    </StackPanel>
+
+                    <StackPanel
+                        Grid.Row="1"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <Button
+                            x:Name="SnapButton"
+                            Click="Snap_Click"
+                            Content="抓屏"
+                            Style="{StaticResource AccentButtonStyle}"
+                            FontWeight="SemiBold"
+                            Foreground="#141414" />
+                        <Button
+                            x:Name="SaveButton"
+                            Click="SavePng_Click"
+                            Content="保存 PNG"
+                            IsEnabled="False" />
+                        <ProgressBar
+                            x:Name="SnapProgress"
+                            Width="180"
+                            VerticalAlignment="Center"
+                            Maximum="100"
+                            Minimum="0"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <Border
+                        Grid.Row="2"
+                        Padding="12"
+                        Background="#0B0C0E"
+                        BorderBrush="#2A2C30"
+                        BorderThickness="1"
+                        CornerRadius="12">
+                        <Grid>
+                            <TextBlock
+                                x:Name="ScreenPlaceholder"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                FontSize="13"
+                                Foreground="#6B7078"
+                                Text="尚无画面" />
+                            <Image
+                                x:Name="ScreenImage"
+                                MaxWidth="512"
+                                MaxHeight="640"
+                                Stretch="Uniform"
+                                Visibility="Collapsed" />
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="3">
+                        <TextBlock
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="ST7735S · 128 × 160 · RGB565" />
+                        <TextBlock
+                            x:Name="SnapInfo"
+                            HorizontalAlignment="Right"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </Grid>
+                </Grid>
+
+                <!-- 日志 -->
+                <Grid
+                    x:Name="LogPanel"
+                    Padding="24,16,24,24"
+                    RowSpacing="12"
+                    Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid>
+                        <StackPanel>
+                            <TextBlock FontSize="24" FontWeight="SemiBold" Text="日志" />
+                            <TextBlock
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Text="TX / RX / OK / WARN / ERR" />
+                        </StackPanel>
+                        <StackPanel
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="8">
+                            <CheckBox
+                                x:Name="AutoScrollCheck"
+                                MinWidth="0"
+                                Content="自动滚动"
+                                IsChecked="True" />
+                            <Button Click="ClearLog_Click" Content="清空" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Grid.Row="1" Padding="14,10" Style="{StaticResource CardBorderStyle}">
+                        <ListView
+                            x:Name="LogList"
+                            Padding="0,4,0,0"
+                            Background="Transparent"
+                            SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="MinHeight" Value="0" />
+                                    <Setter Property="Padding" Value="0,1" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="svc:LogEntry">
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="62" />
+                                            <ColumnDefinition Width="46" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock
+                                            FontFamily="Consolas"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="{x:Bind Time}" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            FontFamily="Consolas"
+                                            FontSize="12"
+                                            FontWeight="SemiBold"
+                                            Foreground="{x:Bind TagBrush}"
+                                            Text="{x:Bind Tag}" />
+                                        <TextBlock
+                                            Grid.Column="2"
+                                            FontFamily="Consolas"
+                                            FontSize="12"
+                                            IsTextSelectionEnabled="True"
+                                            Text="{x:Bind Message}"
+                                            TextWrapping="Wrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Border>
+                </Grid>
+
+                <!-- 设置 -->
+                <Grid
+                    x:Name="SettingsPanel"
+                    Padding="24,16,24,24"
+                    RowSpacing="12"
+                    Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <TextBlock FontSize="24" FontWeight="SemiBold" Text="设置" />
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="连接默认值与界面选项" />
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel MaxWidth="720" HorizontalAlignment="Left" Spacing="12">
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="连接默认值" />
+                                    <Grid ColumnSpacing="10" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Style="{StaticResource FieldLabelStyle}" Text="默认通道" />
+                                        <ComboBox
+                                            x:Name="SettingsModeBox"
+                                            Grid.Column="1"
+                                            HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="蓝牙 BLE" />
+                                            <ComboBoxItem Content="经典 SPP" />
+                                            <ComboBoxItem Content="串口" />
+                                            <ComboBoxItem Content="演示" />
+                                        </ComboBox>
+
+                                        <TextBlock
+                                            Grid.Row="1"
+                                            Style="{StaticResource FieldLabelStyle}"
+                                            Text="默认地址" />
+                                        <TextBox
+                                            x:Name="SettingsAddressBox"
+                                            Grid.Row="1"
+                                            Grid.Column="1"
+                                            Text="本地演示" />
+
+                                        <TextBlock
+                                            Grid.Row="2"
+                                            Style="{StaticResource FieldLabelStyle}"
+                                            Text="默认波特率" />
+                                        <TextBox
+                                            x:Name="SettingsBaudBox"
+                                            Grid.Row="2"
+                                            Grid.Column="1"
+                                            Text="115200" />
+                                    </Grid>
+
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <Button
+                                            Click="ApplySettings_Click"
+                                            Content="应用"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            FontWeight="SemiBold"
+                                            Foreground="#141414" />
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="应用到主页的连接参数，不会立即连接" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <Button Click="UnpairBle_Click" Content="解除 BLE 配对" />
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Text="修复通知失败 / 旧 GATT 句柄" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="界面" />
+                                    <Grid ColumnSpacing="10" RowSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Style="{StaticResource FieldLabelStyle}" Text="主题" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            FontSize="12"
+                                            Text="深色（与调试台一致）" />
+                                        <TextBlock
+                                            Grid.Row="1"
+                                            Style="{StaticResource FieldLabelStyle}"
+                                            Text="窗口" />
+                                        <TextBlock
+                                            Grid.Row="1"
+                                            Grid.Column="1"
+                                            FontSize="12"
+                                            Text="按 DPI 自适应，默认 1180 × 760" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="传输层" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="BLE 走 WinRT FFE1，经典蓝牙走裸 RFCOMM（通道 1），串口走 CH340 / USB-TTL。BLE 抓屏实测约 3.8 秒一帧。"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- 关于 -->
+                <Grid
+                    x:Name="AboutPanel"
+                    Padding="24,16,24,24"
+                    RowSpacing="12"
+                    Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <TextBlock FontSize="24" FontWeight="SemiBold" Text="关于" />
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="AT32 手表调试启动器" />
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel MaxWidth="760" HorizontalAlignment="Left" Spacing="12">
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="硬件" />
+                                    <Grid ColumnSpacing="12" RowSpacing="7">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="90" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Style="{StaticResource FieldLabelStyle}" Text="MCU" />
+                                        <TextBlock Grid.Column="1" FontSize="12" Text="AT32F421K8T7 · Cortex-M4 120 MHz · 64 KB Flash / 16 KB SRAM" />
+                                        <TextBlock Grid.Row="1" Style="{StaticResource FieldLabelStyle}" Text="屏幕" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" FontSize="12" Text="ST7735S 1.8 英寸 · 128 × 160 · RGB565" />
+                                        <TextBlock Grid.Row="2" Style="{StaticResource FieldLabelStyle}" Text="链路" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" FontSize="12" Text="USART2 115200 8N1 / HC-04 BLE 透传" />
+                                        <TextBlock Grid.Row="3" Style="{StaticResource FieldLabelStyle}" Text="按键" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" FontSize="12" Text="PA11 / PA12 / PA15 · 上拉输入，按下为低" />
+                                        <TextBlock Grid.Row="4" Style="{StaticResource FieldLabelStyle}" Text="传感器" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" FontSize="12" Text="MPU6050 · QMC5883P / QMC5883L · BMP580" />
+                                        <TextBlock Grid.Row="5" Style="{StaticResource FieldLabelStyle}" Text="电池" />
+                                        <TextBlock Grid.Row="5" Grid.Column="1" FontSize="12" Text="PA1 / ADC1_IN1 · 100k × 2 分压" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="协议" />
+                                    <TextBlock
+                                        FontFamily="Consolas"
+                                        FontSize="12"
+                                        Text="A5 命令 长度 数据... 异或" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="异或从 A5 算到数据末尾；合法帧回 ok，校验错回 bad。按键需要先按下再松开（边沿触发）。"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardBorderStyle}">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Style="{StaticResource CardTitleStyle}" Text="版本" />
+                                    <TextBlock FontSize="12" Text="v0.2 · 前端 + 传输层" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Text="WinUI 3 · .NET 8 · Windows App SDK 1.6 · BLE / SPP / 串口" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </NavigationView>
+    </Grid>
+</Window>

@@ -1,0 +1,58 @@
+﻿<Project>
+
+  <!--
+    本机只装了 VS BuildTools（没有 UWP/MSIX 打包组件），WindowsAppSDK 的
+    MrtCore.PriGen.targets 会调用 Microsoft.Build.AppxPackage 里的任务而失败。
+    这个应用没有 PRI 资源，这里把相关目标置空，让 unpackaged + self-contained
+    构建可以只靠 .NET SDK 完成。若以后需要多语言/资源，请安装 VS 的
+    “通用 Windows 平台生成工具” 后删掉本文件。
+  -->
+  <PropertyGroup>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <IncludeCopyLocalFilesOutputGroup>false</IncludeCopyLocalFilesOutputGroup>
+  </PropertyGroup>
+
+  <Target Name="GetMrtPackagingOutputs" />
+  <Target Name="_GetDefaultResourceLanguage" />
+  <Target Name="_GenerateProjectPriFile" />
+  <Target Name="AddPriPayloadFilesToCopyToOutputDirectoryItems" />
+
+  <!--
+    用 SDK BuildTools 自带的 makepri 生成 resources.pri：
+    把 App/MainWindow 的 .xbf 和 WindowsAppSDK 的框架 PRI 放进同一暂存目录，
+    makepri 会把框架 PRI 合并进来，WinUI 才能在 unpackaged 模式下找到
+    ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml。
+    PRI 只索引 XBF 文件名，内容变化不需要重建；新增 XAML 页面时删掉
+    bin 下的 resources.pri（或 dotnet clean）再构建即可。
+  -->
+  <Target
+    Name="GenerateUnpackagedResourcesPri"
+    AfterTargets="Build"
+    Condition="'$(WindowsPackageType)' == 'None' and !Exists('$(TargetDir)resources.pri')">
+    <ItemGroup Condition="'$(MakePriExeFullPath)' == ''">
+      <_MakePriTool Include="$(NuGetPackageRoot)microsoft.windows.sdk.buildtools\*\bin\*\x64\makepri.exe" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_MakePriExe Condition="'$(MakePriExeFullPath)' != ''">$(MakePriExeFullPath)</_MakePriExe>
+      <_MakePriExe Condition="'$(_MakePriExe)' == ''">@(_MakePriTool)</_MakePriExe>
+      <_PriStageDir>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)pri-stage'))</_PriStageDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_PriStageInput Include="$(TargetDir)*.xbf" />
+      <_PriStageInput Include="$(TargetDir)Microsoft.UI.Xaml.Controls.pri" Condition="Exists('$(TargetDir)Microsoft.UI.Xaml.Controls.pri')" />
+      <_PriStageInput Include="$(TargetDir)Microsoft.UI.pri" Condition="Exists('$(TargetDir)Microsoft.UI.pri')" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(_PriStageDir)" />
+    <Copy SourceFiles="@(_PriStageInput)" DestinationFolder="$(_PriStageDir)" SkipUnchangedFiles="true" />
+
+    <Exec
+      Condition="!Exists('$(_PriStageDir)\priconfig.xml')"
+      Command="&quot;$(_MakePriExe)&quot; createconfig /cf &quot;$(_PriStageDir)\priconfig.xml&quot; /dq en-US /o" />
+    <Exec Command="&quot;$(_MakePriExe)&quot; new /pr &quot;$(_PriStageDir)&quot; /cf &quot;$(_PriStageDir)\priconfig.xml&quot; /of &quot;$(_PriStageDir)\resources.pri&quot; /o" />
+    <Copy SourceFiles="$(_PriStageDir)\resources.pri" DestinationFolder="$(TargetDir)" />
+  </Target>
+
+</Project>
+

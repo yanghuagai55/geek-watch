@@ -10,6 +10,7 @@
      06 要画面  无数据。下一帧回一张图
      07 按键    1 字节，bit0 上一项 bit1 确定 bit2 下一项。仅调试模式生效
      08 调试    1 开 0 关
+     0A 回主页  无数据，关闭子页并回到表盘
      13 传感器  无数据，回一行 DBG ... 调试文本
    手表 -> 手机：
      10 控制    1 播放 2 暂停
@@ -26,6 +27,7 @@ enum {
     LINK_KEY = 0x07,
     LINK_DEBUG = 0x08,
     LINK_PERF = 0x09,
+    LINK_HOME = 0x0A,
     LINK_STATS = 0x12,
     LINK_SENSOR = 0x13,
     LINK_CTRL = 0x10,
@@ -174,6 +176,9 @@ static void apply_frame(void) {
     }
     if (cmd == LINK_DEBUG && len == 1) {
         ui_settings_set_debug(pay[0] ? 1 : 0);
+    }
+    if (cmd == LINK_HOME && len == 0) {
+        ui_app_go_home();
     }
 }
 
@@ -353,6 +358,10 @@ void link_key_edges(uint8_t *down, uint8_t *up) {
 static void send_perf(void) {
     ui_render_stats_t stats;
     uint32_t values[8];
+    uint32_t ram_used = 0;
+    uint32_t ram_total = 0;
+    uint16_t cpu;
+    uint8_t fps;
     uint8_t frame[36];
     uint8_t check;
     unsigned i, j;
@@ -363,7 +372,16 @@ static void send_perf(void) {
     values[3] = stats.frame_us;
     values[4] = stats.pixels;
     values[5] = stats.bands | ((uint32_t)stats.dropped << 16);
-    ui_mem_get(&values[6], &values[7]);
+
+    hal_ram_get(&ram_used, &ram_total);
+    cpu = hal_cpu_tenths();
+    if (cpu > 1000u) {
+        cpu = 1000u;
+    }
+    fps = ui_app_get_fps();
+    values[6] = (ram_used & 0xFFFFu) | ((uint32_t)cpu << 16);
+    values[7] = (ram_total & 0xFFFFu) | ((uint32_t)fps << 16);
+
     frame[0] = LINK_MARK;
     frame[1] = LINK_STATS;
     frame[2] = 32;

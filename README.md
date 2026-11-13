@@ -3,8 +3,9 @@
 纯 C99 的嵌入式 UI / 动画核心 + 一个 **AT32F421K8T7** 参考端口，驱动 1.8" ST7735S
 128×160 RGB565 彩屏。仿 Apple 手表风格：无界翻页、缩放进入、缓动动画、彩色矢量图标。
 核心与硬件完全解耦（`ui/` 只依赖 `ui/hal.h`），可整包移植到其它 MCU / 屏幕。
+PC 端提供 **WinUI 3 调试启动器**（`host/winui/`）和命令行 `host/ble_tool.py`。
 
-![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-10.0%2F16KB-green) ![flash](https://img.shields.io/badge/flash-60.7%2F64KB-orange) ![fps](https://img.shields.io/badge/128%C3%97160-61fps-brightgreen)
+![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-10.0%2F16KB-green) ![flash](https://img.shields.io/badge/flash-61.1%2F64KB-orange) ![fps](https://img.shields.io/badge/128%C3%97160-61fps-brightgreen)
 
 ## 特性
 
@@ -16,7 +17,8 @@
   跑步 / 圆角信封（开盖→信纸弹出落最顶层→倒放）/ 旋转齿轮。
 - **字体按需打包**：消息字模默认子集（`full` 全量）；华文琥珀标题/时钟字可选（`nosong` 回退小字模）。
 - **调试 overlay**：整片 SRAM / CPU / 帧数单行角标，覆盖式绘制，不推动任何页面布局。
-- **蓝牙调试协议**：`A5 命令 长度 数据 异或`，校时 / 消息 / 歌词 / 按键 / 亮度 / 截屏回传 / 传感器快照。
+- **蓝牙调试协议**：`A5 命令 长度 数据 异或`，校时 / 消息 / 歌词 / 按键 / 亮度 / 截屏回传 / 回主页 / 性能遥测 / 传感器快照。
+- **WinUI 3 调试台**：默认经典 SPP 自动连接，连接后自动校时、回表盘主页并抓屏；RAM / CPU / FPS 1 Hz 环形仪表；BLE / SPP / 串口 / 演示四通道；抓屏保存 PNG、传感器快照、日志与设置。
 - **运动与传感器**：计步、抬腕、运动柱状图；“传感器数值”页 10Hz 显示 MPU6050 加速度/陀螺/温度与 QMC5883L/P 三轴磁场，并每秒重扫 I2C。
 - **电源与状态**：PA1 电池检测 + 右上角常驻电量图标；状态灯常亮/闪烁/关闭；熄屏 30s/1m/2m/5m，按键或抬腕唤醒。
 
@@ -34,8 +36,8 @@
 | I2C 传感器 | PA9/PA10：MPU6050 `0x68`、QMC5883P `0x2C`（兼容 QMC5883L `0x0D`）、BMP580 `0x46` |
 | 状态灯 | PB3，高电平点亮；PB1 为 BLE 状态输入 |
 
-实测：**61 fps**（16ms 帧节拍封顶），Flash **60.7/64 KB**，静态 RAM **10.0/16 KB**
-（调试角标含当前栈，通常显示 `R11/16K`）。
+实测：**61 fps**（16ms 帧节拍封顶），Flash **61.1/64 KB**，静态 RAM **10.0/16 KB**
+（调试角标含当前栈，通常显示 `R9/16K`）。
 
 ## 目录
 
@@ -48,6 +50,7 @@ ui/            可移植核心（hal.h 为唯一硬件边界）
   src/         核心实现 + 字模表（font_data*.c / song_data*.c）
 at32/          AT32F421K8T7 参考端口（port.c / build.bat / 链接脚本 / 启动文件）
 host/          PC 模拟器 / 回归 / 预览 / 字模工具 / 蓝牙调试台
+  winui/       WinUI 3 调试启动器（默认 SPP、自动校时、实时遥测）
 docs/          开发日志 / 蓝牙调试记录
 tools/         OpenOCD 等（不入库）
 ```
@@ -57,7 +60,7 @@ tools/         OpenOCD 等（不入库）
 需要 `arm-none-eabi-gcc`（默认 `D:\dev\arm-none-eabi-gcc\bin`，可用 `ARM_GCC_BIN` 覆盖）。
 
 ```bat
-at32\build.bat                 :: 默认：子集字模 + 华文琥珀   (~60.7KB/64KB)
+at32\build.bat                 :: 默认：子集字模 + 华文琥珀   (~61.1KB/64KB)
 at32\build.bat nosong          :: 丢华文琥珀，回退小字模      (~45.5KB/64KB)
 ```
 
@@ -70,32 +73,66 @@ at32\build.bat nosong          :: 丢华文琥珀，回退小字模      (~45.5K
 用 pyOCD + CMSIS-DAP（PWLINK2 / DAPLink 均可）：
 
 ```bash
-pyocd flash --pack at32/packs/AT32F421_fixed.pack -t at32f421k8t7 \
-    -u <探针UID> at32/obj/watch.bin
+pyocd flash --pack at32/packs/ArteryTek.AT32F421_DFP.2.2.0.pack \
+    -t _at32f421k8t7 -u <探针UID> at32/obj/watch.bin
 ```
 
-> 官方的 `ArteryTek.AT32F421_DFP` 里 `Dname` 带前导 `-`，pyOCD 无法识别；
-> 需把该字段改掉后重新打包（仓库不存包，按需生成）。
+> 官方 DFP 里 `Dname` 带前导 `-`，pyOCD 会把目标名解析成 `_at32f421k8t7`；
+> 用这个带下划线的名字即可直接烧录，不需要重新打包。
 
 SWD 只接 PA13(SWDIO) / PA14(SWCLK) / GND / 3V3，探针同时给板子供电。
 
-## 调试台（PC 端）
+## 调试工具（PC 端）
 
-`host/dist/AT32Debugger.exe`（PyInstaller 单文件，双击即用）或直接跑 `python host/ble_gui.py`。
+### WinUI 3 调试启动器（推荐）
 
-- **双通道**：先蓝牙扫描直连（HC-04 这类会广播的），扫不到再走 Windows WinRT 按地址直连
-  （HC-08 被系统占用后不广播，只能这么连）。
-- 功能：按键（点一下 = 按下 + 90ms 松开）、亮度、校时、调试开关、消息/歌词、原始命令、抓屏、保存 PNG。
-- 抓屏实测：**HC-04 BLE 3.7 秒/帧**（≈11KB/s）；HC-08 只有 151B/s，不建议。
+`host/winui/At32Debugger.csproj`，需要 .NET 8 SDK 与 Windows App SDK。
 
-命令行版 `host/ble_tool.py` 适合脚本化：
+```bat
+cd host\winui
+dotnet build At32Debugger.csproj -c Debug -p:Platform=x64
+bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\At32Debugger.exe
+```
+
+- 启动默认经典 SPP 自动连接；连接后自动校时（`01`）、回表盘主页（`0A`）并抓屏显示在主页右侧。
+- 主页实时遥测：RAM / CPU / FPS 环形仪表，1 Hz 从 `12` 性能帧读取；断开自动清空。
+- 页面：主页 / 调试 / 屏幕 / 日志 / 设置 / 关于；支持 BLE、经典 SPP、串口和演示四种链路。
+- 支持抓屏保存 PNG、传感器快照、消息 / 歌词、按键、亮度、原始命令、监听口、解除 BLE 配对。
+- 无系统标题栏（Win11 圆角），标题栏与应用图标使用 `Assets/app.ico` / `app.png`。
+
+### 命令行 ble_tool.py
+
+`host/ble_tool.py`（三种链路 + 旁路 COM 监听）。
+
+- **主链路**：默认经典 SPP（`04:26:01:08:02:0C` 通道 1）；`--ble` 走 BLE；`--port COM7` 走串口。
+- **旁路监听口**：`--mon-port COM7` 额外打开一个 COM 口，用来观察模块 UART 或从 UART 发数据，和主链路互不影响。
+- **日志**：`mon` 输出 `[SPP 收] 41 54 0D 0A  |AT..|` 这种 hex + ASCII 双格式，前缀标明通道和方向。
+- 抓屏实测：**HC-04 BLE 3.7 秒/帧**（≈11KB/s），经典 SPP 约 **4 秒/帧**；HC-08 只有 151B/s，不建议。
 
 ```bash
-python host/ble_tool.py --addr C4:26:01:08:02:0C ping
-python host/ble_tool.py --addr C4:26:01:08:02:0C key 4
-python host/ble_tool.py --addr C4:26:01:08:02:0C snap out.png
-python host/ble_tool.py --addr C4:26:01:08:02:0C sensor
+# 经典 SPP（默认链路，实测最稳）
+python host/ble_tool.py ping
+python host/ble_tool.py time
+python host/ble_tool.py msg 0 "HELLO WATCH"
+python host/ble_tool.py music "DEMO LYRIC" 1
+python host/ble_tool.py snap host/obj/shot.bmp
+python host/ble_tool.py demo
+
+# 串口：CH340 直连手表 PA2/PA3，或模块测试架
+python host/ble_tool.py --port COM7 ping
+
+# BLE
+python host/ble_tool.py --ble ping
+
+# 测试架：PC 走经典连模块，同时监听/发送模块 UART（COM7）
+python host/ble_tool.py --mon-port COM7 mon
+python host/ble_tool.py --crlf --mon-port COM7 comsend "456"
 ```
+
+- 抓屏：128×160 RGB565，40,964 字节，经典 SPP 约 **3.8~4.5 秒/帧**。
+- 消息：UTF-8 按字符截断到 23 字节，自动避免半个汉字。
+- 音乐：`lyric` 歌词、`state 0|1` 播放态；手表按键会反向发 `0x10` 播放/暂停/上一首/下一首。
+- 蓝牙按键注入只在调试模式生效，`key` / `longkey` 会自动先发 `debug 1`；`longkey 2` 用于从子页返回。
 
 ### 协议
 
@@ -110,7 +147,10 @@ python host/ble_tool.py --addr C4:26:01:08:02:0C sensor
 06 要画面 无数据，下一帧回一张 128×160 RGB565
 07 按键   位掩码 1=上一项 2=确定 4=下一项（需边沿：按下后必须发 0 松开）
 08 调试   1 开 0 关
+0A 回主页 无数据，关闭子页/菜单并回到表盘
+10 控制   手表→PC：1 播放/暂停 2 上一首 3 下一首
 11 画面   A5 11 FF 长度3 宽2 高2 像素... 异或
+12 性能   手表→PC：8×u32；[6] 低16=整片 SRAM 已用、高16=CPU×10，[7] 低16=SRAM 总量、高16=实测 FPS
 13 传感器 无数据，回一行 DBG ...（I2C 扫描 / QMC 寄存器 / 电池），不回 ok
 ```
 
@@ -145,7 +185,7 @@ host\watch_ui.exe --snapshot out.bmp r   :: 无头截屏（r=右翻一页）
 
 ## 图标 / 动画协作流程
 
-1. 用 [`ui/ICON_SVG_PROMPT.md`](ui/ICON_SVG_PROMPT.md) 的规格喂给任意强 AI 产出 C 数据。
+1. 用 `ui/ICON_SVG_PROMPT.md` 的规格喂给任意强 AI 产出 C 数据。
 2. 放进 `host/gemini_icons.h`，跑 `host/icon_preview.c` 用**真实渲染器**出预览图验收。
 3. 只集成被认可的部分到 `ui/src/ui_app.c` / `ui_icons.c`，跑回归后烧录肉眼确认。
 
@@ -179,9 +219,9 @@ cd host && python benchmark_device.py --port COM5          :: 实机性能/截�
 
 **绕开办法（按推荐顺序）**
 
-1. **走 BLE（默认）**：`host/AT32Debugger.exe` 用 WinRT 直连，抓屏 3.7 秒/帧。
-2. **走 CH340 有线**：`CH340 TX→PA3`、`CH340 RX→PA2`、`GND`，工具里选「串口」，
-   填对应 `COMx`、115200，抓屏 1~2 秒/帧，不受蓝牙任何问题影响。
+1. **走 BLE**：`python host/ble_tool.py --ble ping`，WinRT 直连，抓屏 3.7 秒/帧。
+2. **走 CH340 有线**：`CH340 TX→PA3`、`CH340 RX→PA2`、`GND`，
+   `python host/ble_tool.py --port COMx ping`（115200），抓屏 1~2 秒/帧，不受蓝牙任何问题影响。
 3. 不要试图在「设置」里反复配对 —— 配对记录已经是最新的，问题不在这。
 
 ### 2. BLE 能连上但收不到数据（`start notify ... Unreachable`）
@@ -203,8 +243,7 @@ python host/ble_tool.py --addr C4:26:01:08:02:0C unpair
 | **`unpair_async()` 解除 BLE 配对** | ✅ **立刻恢复，ping 108 ms** |
 | 管理员删注册表 bond | ✅ 有效，但需要提权，现在没必要 |
 
-`AT32Debugger.exe` 已内置自愈：连续 3 次连不上会自动解绑一次再重连；
-启动时 0.6 秒自动连接，失败每 5 秒重试，最多 15 次。
+旧 GUI 已移除；WinUI 启动器启动时会自动连接一次，遇到 `Unreachable` 仍先执行上面的 `unpair`。
 
 仍然不行再按顺序兜底：断电重启 → 关开蓝牙 → 管理员删 bond：
 
@@ -223,7 +262,7 @@ A5 07 01 04 a7     ← 按下“下一项”
 A5 07 01 00 a3     ← 90ms 后松开
 ```
 
-`AT32Debugger.exe` 的按键按钮已经按这个实现（按下 + 90ms 松开）；
+`host/ble_tool.py key 4`（或 `longkey 2`）已经按这个实现（按下 + 90ms 松开）；
 自己写脚本时别只发按下那一帧。
 
 ### 4. 调试角标会遮住页面点
@@ -232,7 +271,7 @@ A5 07 01 00 a3     ← 90ms 后松开
 所以 0 级界面不会因为开调试而整体上移；代价是调试模式下面点数被它挡住。
 `R` 是整片 SRAM 已用/总量（含当前栈），不再是 UI 内存池的 6.6KB。
 
-### 5. HC-04BLE 能连上但收不到任何 UART 数据
+### 5. BLE 能连上但收不到 UART 数据（经典 SPP 已通）
 
 现象：`ble_tool.py ping` 能连上 HC-04BLE，`start_notify` 成功，但收不到 `ok`；
 `mon` 监听时复位手表也收不到 `boot`。
@@ -246,10 +285,11 @@ A5 07 01 00 a3     ← 90ms 后松开
 | `unpair` 后重连 | 无数据 |
 | 复位时 `mon` | 无数据 |
 | SWD 读 `g_sensor_ok` / `g_i2c_found` | 正常，手表在跑 |
+| **经典 SPP（`--spp`）** | **ping / 校时 / 消息 / 音乐 / 抓屏 / 传感器全部通过** |
 
-结论：BLE 链路本身通，问题在模块 UART 侧（TX/RX 方向、接触、模块串口配置），
-或模块没有把 UART 数据转到 FFE1。优先检查 PA2→模块 RXD、PA3→模块 TXD，
-再用 CH340 有线验证 UART 是否正常。
+结论：**经典 SPP 链路已经可用**，优先用 `--spp 04:26:01:08:02:0C`；
+BLE 侧仍然收不到 UART 数据，问题在模块 UART→FFE1 的转发/接线，后续再查。
+SPP 抓屏 40,964 字节约 4 秒，消息页、音乐页均已用实机截图确认。
 
 ## 存储扩展（待接）
 
@@ -273,5 +313,5 @@ A5 07 01 00 a3     ← 90ms 后松开
 
 ## 相关文档
 
-- [开发日志 2026-11-13](docs/开发日志-2026-11-13.md)
-- [ui/ICON_SVG_PROMPT.md](ui/ICON_SVG_PROMPT.md)
+- 开发日志：`docs/开发日志-2026-11-13.md`
+- 图标格式：`ui/ICON_SVG_PROMPT.md`

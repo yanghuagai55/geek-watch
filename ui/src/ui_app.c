@@ -1413,3 +1413,37 @@ void ui_frame(void) {
     hal_meter_end();
     hal_frame_pace();
 }
+
+uint8_t ui_app_get_fps(void) {
+    return st ? st->fps : 0;
+}
+
+static void reset_menu_home(ui_menu_t *menu, int count) {
+    if (!menu) {
+        return;
+    }
+    ui_anim_stop(&menu->scroll, 0);
+    ui_anim_stop(&menu->child_scroll, 0);
+    ui_anim_stop(&menu->zoom, 0);
+    ui_anim_stop(&menu->push, 0);
+    ui_menu_init(menu, count);
+    menu->scroll.x = 0;
+    menu->child_scroll.x = 0;
+    menu->zoom.scale = 0;
+    menu->zoom.opacity = 0;
+    menu->push.x = 0;
+    menu->push.scale = 0;
+}
+
+void ui_app_go_home(void) {
+    if (!st) {
+        return;
+    }
+    reset_menu_home(&st->settings, SET_N);
+    reset_menu_home(&st->messages, MSG_N);
+    reset_menu_home(&st->sport, 1);
+    reset_menu_home(&st->music, 1);
+    st->sensor_open = 0;
+    ui_nav_goto(UI_PAGE_FACE);
+    ui_draw_invalidate();
+}

@@ -22,6 +22,8 @@ ui/src/font_data_full.c
 ui/src/song_data.c
 host/build/
 host/dist/
+host/winui/bin/
+!host/winui/Assets/app.png
 .workbuddy/
 
 # 本地内部文档，不入库
