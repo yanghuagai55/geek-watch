@@ -21,13 +21,19 @@
 #define LCD_BLK_PORT    GPIOB
 #define LCD_BLK_PIN     GPIO_PINS_0
 
-/* ---- 蓝牙透传 USART2（已在 port.c 实现）TX PA2 / RX PA3 ---- */
+/* ---- 蓝牙透传 USART2（已在 port.c 实现）TX PA2 / RX PA3 ----
+   实测这块 HC-04BLE 在 9600 下也不回包；工程按原 115200 走，
+   蓝牙问题见 README「已知问题」：先 unpair，或改用 CH340 有线。 */
+#ifndef BLE_UART_BAUD
+#define BLE_UART_BAUD   115200
+#endif
 #define BLE_STATE_PORT  GPIOB
 #define BLE_STATE_PIN   GPIO_PINS_1   /* HC-08 连接状态输入 */
 
-/* ---- 传感器中断/就绪 ---- */
-#define MPU_INT_PORT    GPIOA
-#define MPU_INT_PIN     GPIO_PINS_1   /* MPU6050 INT */
+/* ---- 传感器中断/就绪 ----
+   2026-11-12 原理图：MPU_INT 从 PA1 移到 PB6，PA1 让给电池检测。 */
+#define MPU_INT_PORT    GPIOB
+#define MPU_INT_PIN     GPIO_PINS_6   /* MPU6050 INT */
 #define MAG_DRDY_PORT   GPIOB
 #define MAG_DRDY_PIN    GPIO_PINS_5   /* QMC5883L DRDY */
 #define BMP_INT_PORT    GPIOB
@@ -37,13 +43,14 @@
 #define MIC_ADC_PORT    GPIOA
 #define MIC_ADC_PIN     GPIO_PINS_0   /* MAX9814 输出，ADC1 通道 0 */
 #define MIC_ADC_CHANNEL ADC_CHANNEL_0
-/* 电池分压 BAT_ADC：网表未占独立 MCU 脚，做成可配置。
-   默认关闭（WATCH_BAT_ADC_ENABLE 0）；硬件确认后改通道并置 1。
-   分压比 R1=R2=100k -> 实际电压 = 测得 * 2。 */
+/* 电池分压 BAT_ADC：PA1 = ADC1_IN1（11-12 原理图 P14 电池检测页）。
+   分压比 R1=R2=100k -> 实际电压 = 测得 * 2，C4 100nF 滤波。 */
 #ifndef WATCH_BAT_ADC_ENABLE
-#define WATCH_BAT_ADC_ENABLE 0
+#define WATCH_BAT_ADC_ENABLE 1
 #endif
-#define BAT_ADC_CHANNEL ADC_CHANNEL_0
+#define BAT_ADC_PORT    GPIOA
+#define BAT_ADC_PIN     GPIO_PINS_1
+#define BAT_ADC_CHANNEL ADC_CHANNEL_1
 #define BAT_DIV_NUM     2
 #define BAT_DIV_DEN     1
 

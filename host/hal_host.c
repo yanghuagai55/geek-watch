@@ -737,6 +737,33 @@ uint8_t hal_battery_pct(void) {
     return 80;
 }
 
+int hal_i2c_scan(uint8_t *out, int max) {
+    static const uint8_t ids[] = {0x68, 0x0D, 0x46};
+    int n = 0;
+
+    if (!out || max <= 0) {
+        return 0;
+    }
+    while (n < max && n < (int)sizeof ids) {
+        out[n] = ids[n];
+        n++;
+    }
+    return n;
+}
+
+const char *hal_mag_name(void) {
+    return "QMC5883P";
+}
+
+int hal_debug_snapshot(char *out, int cap) {
+    if (!out || cap <= 0) {
+        return 0;
+    }
+    return snprintf(out, (size_t)cap,
+                    "I2C=2C,68;MPU=1;QMC5883P@2C;ID=80;ST=01;C1=55;C2=08;"
+                    "M=20,-15,40;BAT=4020");
+}
+
 int hal_ble_connected(void) {
     return 1;
 }
@@ -748,6 +775,10 @@ void hal_beep(uint16_t freq_hz, uint16_t ms) {
 
 void hal_led_set(int on) {
     sim_led = on ? 1 : 0;
+}
+
+void hal_led_mode(int mode) {
+    sim_led = mode ? 1 : 0;
 }
 
 void hal_backlight_set(uint8_t level) {

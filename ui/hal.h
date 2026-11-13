@@ -84,6 +84,16 @@ int hal_baro_read(hal_baro_t *out);
 uint16_t hal_battery_mv(void);
 uint8_t hal_battery_pct(void);
 
+/* 调试快照：一行 ASCII，含 I2C 扫描、MPU/QMC 状态、QMC 寄存器和电池 mV。
+   蓝牙 0x13 命令使用；返回写入长度。 */
+int hal_debug_snapshot(char *out, int cap);
+
+/* 扫 I2C 总线，把找到的 7 位地址写入 out，返回个数（最多 max 个）。 */
+int hal_i2c_scan(uint8_t *out, int max);
+
+/* 磁力计型号名：QMC5883L / QMC5883P / --。 */
+const char *hal_mag_name(void);
+
 /* 蓝牙连接状态：1 已连，0 未连，-1 未知。 */
 int hal_ble_connected(void);
 
@@ -91,6 +101,8 @@ int hal_ble_connected(void);
 void hal_beep(uint16_t freq_hz, uint16_t ms);
 /* 状态灯。 */
 void hal_led_set(int on);
+/* 状态灯模式：0 关，1 常亮，2 闪烁（约 1Hz）。 */
+void hal_led_mode(int mode);
 /* 背光 0..255。 */
 void hal_backlight_set(uint8_t level);
 

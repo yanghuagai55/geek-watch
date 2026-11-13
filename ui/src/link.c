@@ -10,6 +10,7 @@
      06 要画面  无数据。下一帧回一张图
      07 按键    1 字节，bit0 上一项 bit1 确定 bit2 下一项。仅调试模式生效
      08 调试    1 开 0 关
+     13 传感器  无数据，回一行 DBG ... 调试文本
    手表 -> 手机：
      10 控制    1 播放 2 暂停
    帧：A5 命令 长度 数据 异或。异或从帧头算到数据末尾。 */
@@ -26,6 +27,7 @@ enum {
     LINK_DEBUG = 0x08,
     LINK_PERF = 0x09,
     LINK_STATS = 0x12,
+    LINK_SENSOR = 0x13,
     LINK_CTRL = 0x10,
     LINK_IMG = 0x11,
     LINK_PAY = 28,
@@ -55,6 +57,7 @@ static uint8_t link_down;
 static uint8_t link_up;
 static int ack_ok;
 static int ack_bad;
+static int no_ack;
 static uint8_t snap_xor;
 static uint32_t snap_left;
 static int st;
@@ -156,6 +159,17 @@ static void apply_frame(void) {
     }
     if (cmd == LINK_PERF && len == 0) {
         perf_requested = 1;
+        return;
+    }
+    if (cmd == LINK_SENSOR && len == 0) {
+        char buf[128];
+        int n = hal_debug_snapshot(buf, (int)sizeof buf);
+        if (n > 0) {
+            hal_link_write((const uint8_t *)"DBG ", 4);
+            hal_link_write((const uint8_t *)buf, n);
+            hal_link_write((const uint8_t *)"\r\n", 2);
+            no_ack = 1;
+        }
         return;
     }
     if (cmd == LINK_DEBUG && len == 1) {
@@ -266,8 +280,11 @@ static void feed(uint8_t b) {
         return;
     }
     if (b == sum) {
+        no_ack = 0;
         apply_frame();
-        ack_ok++;
+        if (!no_ack) {
+            ack_ok++;
+        }
     } else {
         ack_bad++;
     }
@@ -285,6 +302,7 @@ void link_init(void) {
     snap_left = 0;
     link_keys = link_down = link_up = 0;
     ack_ok = ack_bad = 0;
+    no_ack = 0;
     st = ST_MARK;
 }
 

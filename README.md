@@ -4,7 +4,7 @@
 128×160 RGB565 彩屏。仿 Apple 手表风格：无界翻页、缩放进入、缓动动画、彩色矢量图标。
 核心与硬件完全解耦（`ui/` 只依赖 `ui/hal.h`），可整包移植到其它 MCU / 屏幕。
 
-![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-9.4%2F16KB-green) ![flash](https://img.shields.io/badge/flash-42.6%2F64KB-orange) ![fps](https://img.shields.io/badge/128%C3%97160-61fps-brightgreen)
+![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-9.9%2F16KB-green) ![flash](https://img.shields.io/badge/flash-59.6%2F64KB-orange) ![fps](https://img.shields.io/badge/128%C3%97160-61fps-brightgreen)
 
 ## 特性
 
@@ -28,8 +28,9 @@
 | 接线 | SCK PA5 / MOSI PA7 / RES PA4 / DC PA6 / 背光 PB0 |
 | 串口 | USART2，TX PA2 / RX PA3，115200 8N1（接 HC-04 / HC-08 透传） |
 | 按键 | PA11 / PA12 / PA15，上拉输入，按下为低 |
+| 电池检测 | PA1 / ADC1_IN1，R1=R2=100k 分压（×2），100nF 滤波 |
 
-实测：**61 fps**（16ms 帧节拍封顶），Flash **42.6/64 KB**，RAM **9.4/16 KB**。
+实测：**61 fps**（16ms 帧节拍封顶），Flash **59.6/64 KB**，RAM **9.9/16 KB**。
 
 ## 目录
 
@@ -102,6 +103,7 @@ python host/ble_tool.py --addr C4:26:01:08:02:0C snap out.png
 07 按键   位掩码 1=上一项 2=确定 4=下一项（需边沿：按下后必须发 0 松开）
 08 调试   1 开 0 关
 11 画面   A5 11 FF 长度3 宽2 高2 像素... 异或
+13 传感器 无数据，回一行 DBG ...（I2C 扫描 / QMC 寄存器 / 电池），不回 ok
 ```
 
 ## 快速开始（PC 模拟，无需硬件）

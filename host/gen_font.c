@@ -9,10 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* 64KB Flash。每个 16×16 汉字大约 44 字节，连 ASCII 一起收到 520 个汉字为止。
+/* 64KB Flash。每个 16×16 汉字大约 44 字节，连 ASCII 一起收到 530 个汉字为止。
    不在表里的码位，手表画 8×16 空心方框。串口一条消息正文最多 23 字节 UTF-8。
    这不是 GB2312 全集。工具默认发「你好」，这两个字排在补充表最前。 */
-enum { CELL = 16, MAX_GLYPH = 640, CJK_MAX = 520, MAX_BYTES = 64 };
+enum { CELL = 16, MAX_GLYPH = 650, CJK_MAX = 535, MAX_BYTES = 64 };
 
 typedef struct grec {
     uint32_t cp;
@@ -417,7 +417,12 @@ int main(int argc, char **argv) {
         0x952E, /* 键 */
         0x84DD, /* 蓝 */
         0x7259, /* 牙 */
-        0x4F9B  /* 供 */
+        0x4F9B, /* 供 */
+        0x72B6, /* 状 */
+        0x6001, /* 态 */
+        0x95EA, /* 闪 */
+        0x70C1, /* 烁 */
+        0x7184  /* 熄 */
     };
     HDC screen;
     HDC mem;

@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <stdio.h>
+
 #include "at32f421.h"
 #include "at32f421_crm.h"
 #include "at32f421_gpio.h"
@@ -65,6 +67,19 @@ static volatile unsigned char rx_r;
 static volatile unsigned char rx_n;
 static unsigned char clock_src;
 volatile uint32_t hal_frame_count;
+
+/* 上电自检结果与最近一次采样，供 SWD 直接读 RAM 验证（不依赖蓝牙）。
+   bit0 MPU6050 / bit1 QMC5883L / bit2 BMP580。 */
+volatile uint8_t g_sensor_ok;
+volatile int16_t g_imu_ax, g_imu_ay, g_imu_az;
+volatile int16_t g_imu_gx, g_imu_gy, g_imu_gz;
+volatile int16_t g_mag_x, g_mag_y, g_mag_z;
+volatile uint16_t g_battery_mv;
+volatile uint8_t g_i2c_found[8];
+volatile uint8_t g_imu_read_ok;
+volatile uint8_t g_mag_read_ok;
+/* 最近一次调试快照，SWD 直接按字符串读，不依赖蓝牙。 */
+char g_debug_line[128];
 
 static uint32_t irq_save(void) {
     uint32_t mask;
@@ -228,7 +243,7 @@ static void spi_setup(void) {
 
 static void usart_setup(void) {
     crm_periph_clock_enable(CRM_USART2_PERIPH_CLOCK, TRUE);
-    usart_init(USART2, 115200, USART_DATA_8BITS, USART_STOP_1_BIT);
+    usart_init(USART2, BLE_UART_BAUD, USART_DATA_8BITS, USART_STOP_1_BIT);
     usart_transmitter_enable(USART2, TRUE);
     usart_receiver_enable(USART2, TRUE);
     usart_interrupt_enable(USART2, USART_RDBF_INT, TRUE);
@@ -259,6 +274,36 @@ static void uart_puts(const char *s) {
     while(*s) {
         uart_putc((unsigned char)*s++);
     }
+}
+
+static void uart_hex8(unsigned char v) {
+    static const char hex[] = "0123456789ABCDEF";
+    uart_putc((unsigned char)hex[v >> 4]);
+    uart_putc((unsigned char)hex[v & 15u]);
+}
+
+/* 上电扫一遍 I2C：预期 0D(QMC5883L) / 46(BMP580) / 68(MPU6050)。
+   蓝牙串口直接看这一行，最省事。 */
+static void i2c_log_scan(void) {
+    int addr;
+    int found = 0;
+    int slot = 0;
+
+    uart_puts("i2c:");
+    for(addr = 0x08; addr < 0x78; addr++) {
+        if(i2c_probe((uint8_t)addr)) {
+            uart_putc(' ');
+            uart_hex8((unsigned char)addr);
+            if(slot < (int)sizeof g_i2c_found) {
+                g_i2c_found[slot++] = (uint8_t)addr;
+            }
+            found = 1;
+        }
+    }
+    if(!found) {
+        uart_puts(" none");
+    }
+    uart_puts("\r\n");
 }
 
 static void delay_ms(unsigned int ms) {
@@ -634,14 +679,28 @@ void board_init(void) {
     uart_puts("lcd\r\n");
 
     i2c_bus_init();
-    mpu6050_init();
-    qmc5883l_init();
-    bmp580_init();
+    i2c_log_scan();
+    {
+        int mpu_ok = mpu6050_init();
+        int mag_ok = qmc5883l_init();
+        int baro_ok = bmp580_init();
+        g_sensor_ok = (uint8_t)((mpu_ok ? 1u : 0u) |
+                                (mag_ok ? 2u : 0u) |
+                                (baro_ok ? 4u : 0u));
+        uart_puts(mpu_ok ? "mpu OK\r\n" : "mpu FAIL\r\n");
+        uart_puts(mag_ok ? "qmc OK\r\n" : "qmc FAIL\r\n");
+        uart_puts(baro_ok ? "bmp OK\r\n" : "bmp FAIL\r\n");
+    }
     adc_init();
     beep_init();
     led_init();
     backlight_init();
     backlight_set(255);
+    /* 上电把 I2C 扫描 + QMC 寄存器存一份到 RAM，SWD 可读。 */
+    g_battery_mv = battery_mv();
+    (void)hal_debug_snapshot(g_debug_line, (int)sizeof g_debug_line);
+    uart_puts(g_debug_line);
+    uart_puts("\r\n");
     uart_puts("sens\r\n");
 }
 
@@ -666,6 +725,68 @@ uint8_t hal_battery_pct(void) {
     return battery_pct();
 }
 
+int hal_i2c_scan(uint8_t *out, int max) {
+    int addr;
+    int n = 0;
+
+    if(!out || max <= 0) {
+        return 0;
+    }
+    for(addr = 0x08; addr < 0x78 && n < max; addr++) {
+        if(i2c_probe((uint8_t)addr)) {
+            out[n++] = (uint8_t)addr;
+        }
+    }
+    return n;
+}
+
+/* 蓝牙 0x13 调试快照。重新扫一遍总线，插拔模块后重发就能看到变化。 */
+int hal_debug_snapshot(char *out, int cap) {
+    int n = 0;
+    int addr;
+    int first = 1;
+    char qbuf[64];
+
+    if(!out || cap < 32) {
+        return 0;
+    }
+#define DBG_ADD(...) do {                                              \
+        int w = snprintf(out + n, (size_t)(cap - n), __VA_ARGS__);      \
+        if(w > 0) {                                                    \
+            n += w;                                                    \
+            if(n > cap - 1) n = cap - 1;                               \
+        }                                                              \
+    } while(0)
+
+    DBG_ADD("I2C=");
+    for(addr = 0x08; addr < 0x78 && n < cap - 8; addr++) {
+        if(i2c_probe((uint8_t)addr)) {
+            DBG_ADD("%s%02X", first ? "" : ",", addr);
+            first = 0;
+        }
+    }
+    if(first) {
+        DBG_ADD("NONE");
+    }
+    qmc5883l_debug(qbuf, (int)sizeof qbuf);
+    DBG_ADD(";MPU=%d;%s;M=%d,%d,%d;BAT=%u",
+            mpu6050_present(), qbuf,
+            g_mag_x, g_mag_y, g_mag_z, (unsigned)g_battery_mv);
+#undef DBG_ADD
+    for(addr = 0; addr < n && addr < (int)sizeof g_debug_line - 1; addr++) {
+        g_debug_line[addr] = out[addr];
+    }
+    g_debug_line[addr < (int)sizeof g_debug_line ? addr : (int)sizeof g_debug_line - 1] = 0;
+    return n;
+}
+
+const char *hal_mag_name(void) {
+    int c = qmc5883l_chip();
+    if(c == 1) return "QMC5883L";
+    if(c == 2) return "QMC5883P";
+    return "--";
+}
+
 int hal_ble_connected(void) {
     return ble_state_read();
 }
@@ -676,6 +797,10 @@ void hal_beep(uint16_t freq_hz, uint16_t ms) {
 
 void hal_led_set(int on) {
     led_set(on);
+}
+
+void hal_led_mode(int mode) {
+    led_mode_set(mode);
 }
 
 void hal_backlight_set(uint8_t level) {
@@ -723,13 +848,29 @@ void port_service(void) {
     static uint32_t sensor_ms;
     uint32_t now = tick_ms;
     hal_imu_t imu;
+    hal_mag_t mag;
 
     link_poll();
     if((now - sensor_ms) >= 20u) {
         sensor_ms = now;
         if(mpu6050_read(&imu)) {
             sport_feed(&imu, now);
+            g_imu_read_ok = 1;
+            g_imu_ax = imu.ax;
+            g_imu_ay = imu.ay;
+            g_imu_az = imu.az;
+            g_imu_gx = imu.gx;
+            g_imu_gy = imu.gy;
+            g_imu_gz = imu.gz;
         }
+        if(qmc5883l_read(&mag)) {
+            g_mag_read_ok = 1;
+            g_mag_x = mag.x;
+            g_mag_y = mag.y;
+            g_mag_z = mag.z;
+        }
+        g_battery_mv = battery_mv();
     }
     beep_tick(now);
+    led_tick(now);
 }

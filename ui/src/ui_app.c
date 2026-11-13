@@ -14,7 +14,7 @@
 
 enum {
     HOME_N = 5,
-    SET_N = 6,
+    SET_N = 8,
     DETAIL_N = 3,
     ABOUT_N = 6,
     MSG_N = 3,
@@ -38,6 +38,9 @@ typedef struct app {
     ui_menu_t sport;
     ui_menu_t music;
     ui_obj_t overlay;
+    int sensor_open;
+    int screen_asleep;
+    uint32_t active_ms;
     int debug;
     uint8_t prev_keys;
     uint32_t key2_down;
@@ -62,8 +65,11 @@ static uint16_t col_dot;
 static uint16_t col_accent;
 static uint16_t col_line;
 
-static const char *const set_name[SET_N] = {"调试模式", "抬腕亮屏", "按键音", "亮度", "蓝牙", "关于"};
+static const char *const set_name[SET_N] = {"调试模式", "抬腕亮屏", "按键音", "亮度",
+                                            "蓝牙", "状态灯", "熄屏", "关于"};
 static const char *const bright_name[DETAIL_N] = {"低", "中", "高"};
+static const char *const screen_off_name[5] = {"关", "30秒", "1分钟", "2分钟", "5分钟"};
+static const uint16_t screen_off_sec[5] = {0, 30, 60, 120, 300};
 
 static int badge_h(void) {
     return 18;   /* 单行，只压页面点，不顶内容 */
@@ -200,6 +206,8 @@ static int run_frame(void);
 static void draw_face_app(uint8_t a);
 static void draw_sport_app(uint8_t a);
 static void draw_sport_child(uint8_t a);
+static void draw_sensor_page(uint8_t a);
+static void draw_battery_badge(void);
 static void draw_msg_app(uint8_t a);
 static void draw_settings_app(uint8_t a);
 static void draw_detail(uint8_t a);
@@ -260,6 +268,71 @@ static void draw_dots(uint8_t alpha) {
         }
         ui_draw_round((int16_t)x, (int16_t)dots_y(), (int16_t)w, (int16_t)h,
                       (int16_t)(h / 2), hot ? col_ring : col_dot, alpha);
+    }
+}
+
+/* 右上角常驻电量：电池图标。图标左边界也用于表盘日期居中让位。 */
+static int battery_icon_x(void) {
+    int icon_w = UI_MX(110);
+    int tip_w = UI_MX(16);
+    int right = UI_W - UI_MX(30);
+
+    if (icon_w < 12) {
+        icon_w = 12;
+    }
+    if (tip_w < 2) {
+        tip_w = 2;
+    }
+    return right - icon_w - tip_w;
+}
+
+/* 设置里的亮度 0/1/2 -> PWM。熄屏后唤醒也用它恢复。 */
+static uint8_t backlight_level(void) {
+    uint8_t b = settings_get()->brightness;
+    return (uint8_t)(b == 0 ? 80 : (b == 1 ? 160 : 255));
+}
+
+static void draw_battery_badge(void) {
+    uint8_t pct = hal_battery_pct();
+    int icon_w = UI_MX(110);
+    int icon_h = UI_MY(55);
+    int tip_w = UI_MX(16);
+    int tip_h;
+    int x = battery_icon_x();
+    int y = UI_MY(18);
+    int fill;
+    uint16_t color = col_ring;
+
+    if (icon_w < 12) icon_w = 12;
+    if (icon_h < 7) icon_h = 7;
+    if (tip_w < 2) tip_w = 2;
+    if (y < 1) y = 1;
+    tip_h = icon_h / 2;
+    if (tip_h < 3) tip_h = 3;
+
+    if (pct == 0xFF) {
+        color = col_dim;
+    } else {
+        if (pct > 100) {
+            pct = 100;
+        }
+        if (pct <= 20) {
+            color = col_accent;
+        }
+    }
+    ui_draw_round((int16_t)x, (int16_t)y, (int16_t)icon_w, (int16_t)icon_h,
+                  2, col_dim, 255);
+    ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
+                  (int16_t)(icon_w - 2), (int16_t)(icon_h - 2), 1, col_bg, 255);
+    ui_draw_round((int16_t)(x + icon_w), (int16_t)(y + (icon_h - tip_h) / 2),
+                  (int16_t)tip_w, (int16_t)tip_h, 1, col_dim, 255);
+    if (pct != 0xFF && pct > 0) {
+        fill = (icon_w - 4) * (int)pct / 100;
+        if (fill < 2) {
+            fill = 2;
+        }
+        ui_draw_round((int16_t)(x + 2), (int16_t)(y + 2),
+                      (int16_t)fill, (int16_t)(icon_h - 4), 1, color, 255);
     }
 }
 
@@ -390,8 +463,9 @@ static void draw_face_app(uint8_t a) {
                  wd[face_weekday(clock.year, clock.month, clock.day)],
                  clock.month, clock.day);
     }
-    ui_text_fit(fitted, sizeof fitted, line, (int16_t)(UI_W - bar_x * 2), 1);
-    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(70), fitted, col_dim, a, 1);
+    ui_text_fit(fitted, sizeof fitted, line,
+                (int16_t)((battery_icon_x() - UI_W / 2) * 2 - UI_MX(16)), 1);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(60), fitted, col_dim, a, 1);
 
     draw_face_pair(x0, y0, clock.hour, col_text, a);
     draw_face_pair(x0, y0 + row_h + gap_y, clock.minute, col_ring, a);
@@ -590,7 +664,7 @@ static void draw_music_icon(void) {
 static void draw_sport_child(uint8_t a) {
     sport_stats_t ss;
     char l0[24];
-    const char *names[2];
+    const char *names[3];
     int n = st->sport.child_count;
     int scroll = st->sport.child_scroll.x;
     int vis = vis_index(scroll, n);
@@ -598,8 +672,9 @@ static void draw_sport_child(uint8_t a) {
 
     sport_get(&ss);
     snprintf(l0, sizeof l0, "%lu步", (unsigned long)ss.steps);
-    names[0] = "重置";
-    names[1] = "加1000步";
+    names[0] = "重置步数";
+    names[1] = "传感器数值";
+    names[2] = "加1000步";
     list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     for (i = 0; i < n; i++) {
@@ -612,6 +687,100 @@ static void draw_sport_child(uint8_t a) {
     stack_box(scroll, vis, y0, pitch, &x, &y, &w, &h);
     draw_labeled_card(x, y, w, h, 1, names[vis], vis == 0 ? l0 : 0, a);
     draw_header("运动", a, 0);
+}
+
+/* 运动 -> 传感器数值。MPU 加速度/陀螺/温度 + QMC 三轴磁场，10Hz 刷新。
+   显示单位：A=0.1g，G=10dps，M=10mG（屏幕只有 128 宽，压缩后一行放得下）。 */
+static void draw_sensor_page(uint8_t a) {
+    static hal_imu_t imu;
+    static hal_mag_t mag;
+    static uint32_t poll_ms, imu_ok_ms, mag_ok_ms, scan_ms;
+    static int imu_seen, mag_seen;
+    static char scan[20] = "I2C --";
+    uint32_t now = hal_tick_ms();
+    int imu_ok, mag_ok;
+    char line[20];
+    int x = UI_MX(45);
+    int y = UI_MY(220);
+    int step = ui_text_height("A", 1) + UI_MY(12);
+    int t;
+
+    if ((now - poll_ms) >= 100u) {
+        poll_ms = now;
+        if (hal_imu_read(&imu)) {
+            imu_seen = 1;
+            imu_ok_ms = now;
+        }
+        if (hal_mag_read(&mag)) {
+            mag_seen = 1;
+            mag_ok_ms = now;
+        }
+    }
+    /* 1 秒没读到就显示 --，避免器件掉线后还挂着旧数据装正常。 */
+    imu_ok = imu_seen && (now - imu_ok_ms) < 1000u;
+    mag_ok = mag_seen && (now - mag_ok_ms) < 1000u;
+    /* 插拔模块后不用重启，1 秒重扫一次总线。 */
+    if ((now - scan_ms) >= 1000u) {
+        uint8_t addrs[4];
+        int na, i, p;
+
+        scan_ms = now;
+        na = hal_i2c_scan(addrs, 4);
+        p = snprintf(scan, sizeof scan, "I2C");
+        if (na == 0) {
+            snprintf(scan + p, sizeof scan - (size_t)p, " --");
+        } else {
+            for (i = 0; i < na && p < (int)sizeof scan - 4; i++) {
+                p += snprintf(scan + p, sizeof scan - (size_t)p, " %02X", addrs[i]);
+            }
+        }
+    }
+
+    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    ui_draw_round((int16_t)x, (int16_t)UI_MY(40), (int16_t)UI_MX(20),
+                  (int16_t)UI_MY(100), 1, col_accent, a);
+    ui_draw_text((int16_t)(x + UI_MX(50)), (int16_t)UI_MY(30),
+                 "传感器", col_text, a, 1);
+    ui_draw_line((int16_t)x, (int16_t)UI_MY(170),
+                 (int16_t)(UI_W - x), (int16_t)UI_MY(170), col_line, a);
+
+    snprintf(line, sizeof line, "MPU6050 %s", imu_ok ? "OK" : "--");
+    ui_draw_text((int16_t)x, (int16_t)y, line,
+                 imu_ok ? col_ring : col_dim, a, 1);
+    if (imu_ok) {
+        snprintf(line, sizeof line, "A%4d%4d%4d",
+                 imu.ax / 100, imu.ay / 100, imu.az / 100);
+    } else {
+        snprintf(line, sizeof line, "A   --  --  --");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step), line, col_text, a, 1);
+    if (imu_ok) {
+        snprintf(line, sizeof line, "G%4d%4d%4d",
+                 imu.gx / 100, imu.gy / 100, imu.gz / 100);
+    } else {
+        snprintf(line, sizeof line, "G   --  --  --");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 2), line, col_text, a, 1);
+    if (imu_ok) {
+        t = imu.temp;
+        snprintf(line, sizeof line, "T%d.%dC", t / 10,
+                 (t % 10 < 0) ? -(t % 10) : (t % 10));
+    } else {
+        snprintf(line, sizeof line, "T --.-C");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 3), line, col_dim, a, 1);
+
+    snprintf(line, sizeof line, "%s %s", hal_mag_name(), mag_ok ? "OK" : "--");
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 4), line,
+                 mag_ok ? col_ring : col_dim, a, 1);
+    if (mag_ok) {
+        snprintf(line, sizeof line, "M%4d%4d%4d",
+                 mag.x / 10, mag.y / 10, mag.z / 10);
+    } else {
+        snprintf(line, sizeof line, "M   --  --  --");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 5), line, col_text, a, 1);
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 6), scan, col_dim, a, 1);
 }
 
 static void draw_msg_app(uint8_t a) {
@@ -641,6 +810,8 @@ static void settings_side(int idx, char *buf, int cap) {
     case 2: v = s->key_beep ? "开" : "关"; break;
     case 3: v = bright_name[s->brightness <= 2 ? s->brightness : 1]; break;
     case 4: v = s->bluetooth ? "开" : "关"; break;
+    case 5: v = s->led_mode == 0 ? "关闭" : (s->led_mode == 2 ? "闪烁" : "常亮"); break;
+    case 6: v = screen_off_name[s->screen_off <= 4 ? s->screen_off : 0]; break;
     default: break;
     }
     if (v) {
@@ -724,8 +895,10 @@ static void draw_about_page(uint8_t a) {
     if (info.battery_pct == 0xFF) {
         snprintf(lines[3], sizeof lines[3], "USB 供电");
     } else {
-        snprintf(lines[3], sizeof lines[3], "%umV %u%%",
-                 (unsigned)info.battery_mv, (unsigned)info.battery_pct);
+        /* 只显示到 10mV，末位 mV 抖动不展示。 */
+        snprintf(lines[3], sizeof lines[3], "%u.%02uV",
+                 (unsigned)(info.battery_mv / 1000u),
+                 (unsigned)((info.battery_mv % 1000u) / 10u));
     }
     snprintf(lines[4], sizeof lines[4], "%.11s", info.build);
     snprintf(lines[5], sizeof lines[5], "MPU6050 %s", hal_imu_read(&imu) ? "OK" : "--");
@@ -760,7 +933,7 @@ static void draw_detail(uint8_t a) {
         draw_message_page(a);
         return;
     }
-    if (kind == 5) {
+    if (kind == 7) {
         draw_about_page(a);
         return;
     }
@@ -837,7 +1010,9 @@ static void on_confirm(ui_menu_t *menu) {
 
     if (is_settings && menu->level == UI_MENU_CHILD && menu->child == 3) {
         s->brightness = (uint8_t)menu->child_focus;
-        hal_backlight_set(s->brightness == 0 ? 80 : (s->brightness == 1 ? 160 : 255));
+        if (!st->screen_asleep) {
+            hal_backlight_set(backlight_level());
+        }
         ui_menu_back(menu);
         return;
     }
@@ -846,6 +1021,8 @@ static void on_confirm(ui_menu_t *menu) {
             sport_reset_today();
             ui_menu_back(menu);
         } else if (menu->child_focus == 1) {
+            st->sensor_open = 1;
+        } else if (menu->child_focus == 2) {
             sport_debug_add_steps(1000);
         }
         return;
@@ -875,6 +1052,16 @@ static void on_confirm(ui_menu_t *menu) {
             s->bluetooth = (uint8_t)!s->bluetooth;
             break;
         case 5:
+            /* 常亮 -> 闪烁 -> 关闭 -> 常亮，正好对应 HAL 的 1/2/0。 */
+            s->led_mode = (uint8_t)((s->led_mode + 1u) % 3u);
+            hal_led_mode(s->led_mode);
+            break;
+        case 6:
+            /* 关 -> 30秒 -> 1分钟 -> 2分钟 -> 5分钟。 */
+            s->screen_off = (uint8_t)((s->screen_off + 1u) % 5u);
+            st->active_ms = hal_tick_ms();
+            break;
+        case 7:
             ui_menu_enter_child(menu, ABOUT_N);
             break;
         default:
@@ -883,7 +1070,8 @@ static void on_confirm(ui_menu_t *menu) {
         return;
     }
     if (menu == &st->sport) {
-        ui_menu_enter_child(menu, ui_settings_get_debug() ? 2 : 1);
+        st->sensor_open = 0;
+        ui_menu_enter_child(menu, ui_settings_get_debug() ? 3 : 2);
         return;
     }
     if (menu == &st->music) {
@@ -900,7 +1088,19 @@ static void on_key(uint8_t pressed, int long_enter) {
     if (!st) {
         return;
     }
+    if (pressed || long_enter) {
+        st->active_ms = hal_tick_ms();
+    }
     menu = live_menu();
+    if (st->sensor_open && menu == &st->sport) {
+        if (long_enter || (pressed & HAL_KEY1)) {
+            st->sensor_open = 0;
+            return;
+        }
+        if (pressed) {
+            return;
+        }
+    }
     if (long_enter) {
         if (menu && ui_menu_level(menu) > UI_MENU_ICON) {
             ui_menu_back(menu);
@@ -965,13 +1165,14 @@ void ui_init(void) {
     ui_menu_init(&st->messages, MSG_N);
     ui_menu_init(&st->sport, 1);
     ui_menu_init(&st->music, 1);
+    st->sensor_open = 0;
     link_init();
     sport_init();
     settings_init();
-    {
-        uint8_t b = settings_get()->brightness;
-        hal_backlight_set(b == 0 ? 80 : (b == 1 ? 160 : 255));
-    }
+    st->screen_asleep = 0;
+    st->active_ms = hal_tick_ms();
+    hal_backlight_set(backlight_level());
+    hal_led_mode(settings_get()->led_mode);
     st->fps_window = hal_tick_ms();
     ui_trace_emit("ui_init");
 }
@@ -1068,7 +1269,11 @@ static void draw_pushed(ui_menu_t *menu) {
     ui_draw_fill(0, 0, UI_W, UI_H, 0, (uint8_t)(t * 100 / 256));
     ui_draw_xform(256, UI_W - t * UI_W / 256, 0);
     if (menu == &st->sport) {
-        draw_sport_child(255);
+        if (st->sensor_open) {
+            draw_sensor_page(255);
+        } else {
+            draw_sport_child(255);
+        }
     } else {
         draw_detail(255);
     }
@@ -1124,6 +1329,16 @@ void ui_frame(void) {
         level = (uint8_t)(level | link_key_level());
         link_key_edges(&extra_down, &extra_up);
     }
+    /* 熄屏时任意键只负责唤醒：这一帧不执行按键动作，松开也不触发确定。 */
+    if (st->screen_asleep && level != 0) {
+        st->screen_asleep = 0;
+        st->active_ms = now;
+        st->prev_keys = level;
+        st->key2_down = now;
+        st->key2_long = 1;
+        extra_down = extra_up = 0;   /* 蓝牙按键也不在唤醒帧触发动作 */
+        hal_backlight_set(backlight_level());
+    }
     pressed = (uint8_t)((level & (uint8_t)~st->prev_keys) | extra_down);
     released = (uint8_t)((st->prev_keys & (uint8_t)~level) | extra_up);
     st->prev_keys = level;
@@ -1145,9 +1360,20 @@ void ui_frame(void) {
         static int raise_prev;
         int rw = sport_raise_wrist();
         if (settings_get()->raise_wrist && rw && !raise_prev) {
+            st->screen_asleep = 0;
+            st->active_ms = now;
             hal_backlight_set(255);
         }
         raise_prev = rw;
+    }
+    {
+        uint8_t sel = settings_get()->screen_off;
+        uint16_t sec = screen_off_sec[sel <= 4 ? sel : 0];
+        if (!st->screen_asleep && sec > 0 &&
+            (now - st->active_ms) >= (uint32_t)sec * 1000u) {
+            st->screen_asleep = 1;
+            hal_backlight_set(0);
+        }
     }
     ui_anim_tick(now);
     if (!ui_anim_busy(&st->scroll)) {
@@ -1178,6 +1404,7 @@ void ui_frame(void) {
         draw_dots((uint8_t)dot_alpha(now));
     }
     ui_draw_xform(256, 0, 0);
+    draw_battery_badge();
     draw_badge();
     ui_draw_flush();
     link_ack_flush();

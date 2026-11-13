@@ -26,7 +26,41 @@ void led_init(void) {
     gpio_init(BLE_STATE_PORT, &g);
 }
 
+static int led_mode;
+static uint32_t led_t0;
+static int led_phase;
+
 void led_set(int on) {
+    led_mode = LED_MODE_OFF;
+    led_phase = on ? 1 : 0;
+    if (on) gpio_bits_set(LED_PORT, LED_PIN);
+    else gpio_bits_reset(LED_PORT, LED_PIN);
+}
+
+void led_mode_set(int mode) {
+    led_mode = mode;
+    led_t0 = hal_tick_ms();
+    if (mode == LED_MODE_BLINK) {
+        led_phase = 1;
+        gpio_bits_set(LED_PORT, LED_PIN);
+    } else {
+        led_phase = mode == LED_MODE_ON ? 1 : 0;
+        if (led_phase) gpio_bits_set(LED_PORT, LED_PIN);
+        else gpio_bits_reset(LED_PORT, LED_PIN);
+    }
+}
+
+void led_tick(uint32_t now_ms) {
+    int on;
+
+    if (led_mode != LED_MODE_BLINK) {
+        return;
+    }
+    on = (((now_ms - led_t0) / 500u) & 1u) ? 0 : 1;
+    if (on == led_phase) {
+        return;
+    }
+    led_phase = on;
     if (on) gpio_bits_set(LED_PORT, LED_PIN);
     else gpio_bits_reset(LED_PORT, LED_PIN);
 }

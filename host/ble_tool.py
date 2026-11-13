@@ -16,6 +16,7 @@
     snap [文件.bmp]     抓一帧屏幕，默认 host/obj/shot_ble.bmp
     msg 0|1|2 "文本"     写入第几个消息槽
     lyric "文本"        歌词
+    sensor              读传感器调试快照（I2C 扫描 / QMC 寄存器 / 电池）
     raw "AT"            原样发字符串（调 HC-08 的 AT 指令用）
     send 06             只发命令字节，数据为空
 
@@ -47,6 +48,7 @@ CMD_SNAP = 0x06
 CMD_KEY = 0x07
 CMD_DEBUG = 0x08
 CMD_IMG = 0x11
+CMD_SENSOR = 0x13
 CMD_NOP = 0x7F          # 固件不认识的命令：只回 ok，不改状态，拿来当 ping
 
 
@@ -183,6 +185,24 @@ async def main() -> int:
             dt = (time.time() - t0) * 1000
             print("ok  %.0f ms" % dt if ok else "超时：没收到 ok（检查波特率是否 9600）")
             return 0 if ok else 3
+
+        if cmd == "sensor":
+            await link.send(frame(CMD_SENSOR))
+            end = time.time() + 3.0
+            text = ""
+            while time.time() < end:
+                data = link.take()
+                if data:
+                    text += data.decode("utf-8", "replace")
+                    if "\n" in text:
+                        break
+                await asyncio.sleep(0.03)
+            for line in text.splitlines():
+                if line.startswith("DBG"):
+                    print(line)
+                    return 0
+            print(text.strip() or "无回应")
+            return 0 if text.strip() else 3
 
         if cmd == "snap":
             out = rest[0] if rest else "host/obj/shot_ble.bmp"

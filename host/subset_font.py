@@ -40,7 +40,7 @@ FULL_PATH = os.path.join(UI_SRC, "font_data_full.c")
 SUBSET_PATH = os.path.join(UI_SRC, "font_data.c")
 
 # Static-UI CJK that must survive subsetting (sanity check only).
-REQUIRED_CJK = "运动消息设置调试模式亮度关于版本表盘低中高开关"
+REQUIRED_CJK = "运动消息设置调试模式亮度关于版本表盘低中高开关状态灯闪烁传感器数值"
 
 HEX = "0123456789abcdefABCDEF"
 GLYPH_STRUCT_SIZE = 12  # uint32 + 3*uint8 + pad + uint16, aligned to 4

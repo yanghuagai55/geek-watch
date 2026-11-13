@@ -1,6 +1,8 @@
 #include "adc_bat.h"
 #include "board_config.h"
+#include "hal.h"
 #include "at32f421_adc.h"
+#include "at32f421_crm.h"
 #include "at32f421_gpio.h"
 
 void adc_init(void) {
@@ -10,11 +12,17 @@ void adc_init(void) {
 
     crm_periph_clock_enable(CRM_ADC1_PERIPH_CLOCK, TRUE);
     crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
+    /* 120MHz PCLK2 默认 /2 会把 ADC 超到 60MHz；按厂商例程降到 20MHz。 */
+    crm_adc_clock_div_set(CRM_ADC_DIV_6);
 
     gpio_default_para_init(&g);
     g.gpio_pins = MIC_ADC_PIN;
     g.gpio_mode = GPIO_MODE_ANALOG;
     gpio_init(MIC_ADC_PORT, &g);
+#if WATCH_BAT_ADC_ENABLE
+    g.gpio_pins = BAT_ADC_PIN;
+    gpio_init(BAT_ADC_PORT, &g);
+#endif
 
     adc_base_default_para_init(&base);
     base.sequence_mode = FALSE;
@@ -46,7 +54,24 @@ uint16_t adc_read_mv(uint8_t channel) {
 
 uint16_t battery_mv(void) {
 #if WATCH_BAT_ADC_ENABLE
-    return (uint16_t)((uint32_t)adc_read_mv(BAT_ADC_CHANNEL) * BAT_DIV_NUM / BAT_DIV_DEN);
+    /* 分压器源阻抗 50k，单次采样有噪声；4 次平均 + 500ms 缓存，
+       既让角标稳定，也避免每帧都占用 ADC。 */
+    static uint16_t cached;
+    static uint32_t updated_ms;
+    static int valid;
+    uint32_t now = hal_tick_ms();
+
+    if(!valid || (now - updated_ms) >= 500u) {
+        uint32_t sum = 0;
+        int i;
+        for(i = 0; i < 4; i++) {
+            sum += adc_read_mv(BAT_ADC_CHANNEL);
+        }
+        cached = (uint16_t)(sum / 4u * BAT_DIV_NUM / BAT_DIV_DEN);
+        updated_ms = now;
+        valid = 1;
+    }
+    return cached;
 #else
     return 0;
 #endif
@@ -55,6 +80,9 @@ uint16_t battery_mv(void) {
 uint8_t battery_pct(void) {
 #if WATCH_BAT_ADC_ENABLE
     uint32_t mv = battery_mv();
+    /* 没接电池时 BAT 悬空，分压点只有几十~几百 mV；当作“未知”，
+       角标显示 --，关于页显示 USB 供电，避免误报 0%。 */
+    if (mv < 2000u) return 0xFF;
     if (mv <= 3300u) return 0;
     if (mv >= 4200u) return 100;
     return (uint8_t)((mv - 3300u) * 100u / 900u);

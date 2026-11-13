@@ -9,9 +9,11 @@
 #define SDA_L()  gpio_bits_reset(I2C_PORT, I2C_SDA_PIN)
 #define SDA_RD() ((I2C_PORT->idt & I2C_SDA_PIN) != 0)
 
+/* 120MHz 下 20 次空循环约 600kHz，超过 MPU6050/QMC5883L 的 400kHz 上限，
+   多字节突发读会偶发失败。放慢到约 200kHz，给传感器留足时序余量。 */
 static void dly(void) {
     volatile int i;
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < 60; i++) {
     }
 }
 
