@@ -147,6 +147,65 @@ host\build.bat --odd & host\obj\watch_ui_odd.exe --check   :: 128x163 奇数高
 cd host && python benchmark_device.py --port COM5          :: 实机性能/截屏
 ```
 
+## 已知问题与绕开办法
+
+### 1. HC-04 的经典蓝牙 SPP 串口打不开（COM 端口 5 秒超时）
+
+现象：`COM8` 打开 5.2 秒后报「信号灯超时时间已到」，`COM9` 直接卡死不返回。
+
+实测排查（2026-11-13，Intel 无线网卡 + Win11 + HC-04D）：
+
+| 检查项 | 结果 |
+| --- | --- |
+| 设备管理器 `Bluetooth Device (RFCOMM Protocol TDI)` | Status=OK，ProblemCode=0（驱动正常） |
+| 配对记录 | 经典（`04260108020c`）与 BLE（`c4260108020c`）各一条，均在 |
+| WinRT 强制 RFCOMM 连接 | `connection_status` 从 0 变 1，链路能建立 |
+| 重启蓝牙无线电（`Radio.set_state_async`） | 无效 |
+| 打开 SPP COM 口 | 仍然 5.2s 超时 / 卡死 |
+
+结论：**这不是驱动坏了，是 SPP 通道本身不通**。HC-04 是双模模块，实测 BLE 与 SPP
+不能同时稳定工作；而 HC-PC 直接建 socket 会抛 `SocketException 0x80004005
+提供了一个无效的参数`（InTheHand 绕过系统配对），所以也别用它当桥。
+
+**绕开办法（按推荐顺序）**
+
+1. **走 BLE（默认）**：`host/AT32Debugger.exe` 用 WinRT 直连，抓屏 3.7 秒/帧。
+2. **走 CH340 有线**：`CH340 TX→PA3`、`CH340 RX→PA2`、`GND`，工具里选「串口」，
+   填对应 `COMx`、115200，抓屏 1~2 秒/帧，不受蓝牙任何问题影响。
+3. 不要试图在「设置」里反复配对 —— 配对记录已经是最新的，问题不在这。
+
+### 2. BLE 能连上但收不到数据（`start notify ... Unreachable`）
+
+Windows 缓存了旧的 GATT 句柄（句柄号常见为 `0035`）。按顺序恢复：
+
+1. **板子断电 3 秒再上电**（让模块彻底重启）
+2. 关掉再打开电脑蓝牙（或跑 `Radio.set_state_async(OFF/ON)`）
+3. 删掉 BLE 配对记录（**管理员** PowerShell）：
+   ```powershell
+   reg delete "HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\c4260108020c" /f
+   ```
+4. 仍然不行就换 CH340 有线
+
+工具本身已做容错：启动后 0.6 秒自动连接，失败则每 5 秒重试一次、最多 15 次
+（开机时蓝牙服务通常要几秒才就绪）。
+
+### 3. 按键点一下没反应
+
+协议里的按键是**边沿触发**：只发「按下」不生效第二次，必须先按下再松开。
+
+```
+A5 07 01 04 a7     ← 按下“下一项”
+A5 07 01 00 a3     ← 90ms 后松开
+```
+
+`AT32Debugger.exe` 的按键按钮已经按这个实现（按下 + 90ms 松开）；
+自己写脚本时别只发按下那一帧。
+
+### 4. 调试角标会遮住页面点
+
+角标是**覆盖式**单行条（`R6524 C12.5% 60`），压在屏幕最底部，不参与布局计算，
+所以 0 级界面不会因为开调试而整体上移；代价是调试模式下面点数被它挡住。
+
 ## 许可与字体
 
 - **代码：MIT**，见 [LICENSE](LICENSE)。`ui_ease_in_out` 为 LVGL（MIT）缓动的整数移植，已注明出处。
