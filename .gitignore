@@ -31,8 +31,7 @@ host/winui/bin/
 手表UI界面制作请求书.md
 动画交接.md
 at32/PROJECT_HANDOVER.md
-docs/蓝牙调试记录.md
-docs/蓝牙与单片机联调测试报告.md
+docs/
 
 # EIDE / 厂商包与模板，本地保留但不入库
 at32/.cmsis/
