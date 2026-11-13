@@ -23,3 +23,7 @@ ui/src/song_data.c
 host/build/
 host/dist/
 .workbuddy/
+
+# 本地内部文档，不入库
+本轮动画优化测试报告-*.md
+手表UI界面制作请求书.md
