@@ -199,7 +199,7 @@ cd host && python benchmark_device.py --port COM5          :: 实机性能/截�
 
 ## 已知问题与绕开办法
 
-### 1. HC-04 的经典蓝牙 SPP 串口打不开（COM 端口 5 秒超时）
+### 1. 经典 SPP：系统分配的 COM 口打不开（改用 RFCOMM socket，已跑通）
 
 现象：`COM8` 打开 5.2 秒后报「信号灯超时时间已到」，`COM9` 直接卡死不返回。
 
@@ -211,18 +211,26 @@ cd host && python benchmark_device.py --port COM5          :: 实机性能/截�
 | 配对记录 | 经典（`04260108020c`）与 BLE（`c4260108020c`）各一条，均在 |
 | WinRT 强制 RFCOMM 连接 | `connection_status` 从 0 变 1，链路能建立 |
 | 重启蓝牙无线电（`Radio.set_state_async`） | 无效 |
-| 打开 SPP COM 口 | 仍然 5.2s 超时 / 卡死 |
+| 打开系统 SPP COM 口 | 仍然 5.2s 超时 / 卡死 |
+| **裸 RFCOMM socket（`AF_BTH` + `BTPROTO_RFCOMM`，通道 1）** | ✅ **连上并稳定收发，ping 81 ms** |
 
-结论：**这不是驱动坏了，是 SPP 通道本身不通**。HC-04 是双模模块，实测 BLE 与 SPP
-不能同时稳定工作；而 HC-PC 直接建 socket 会抛 `SocketException 0x80004005
-提供了一个无效的参数`（InTheHand 绕过系统配对），所以也别用它当桥。
+结论：**驱动和模块都没问题，坏的是 Windows 给 SPP 分配的虚拟 COM 口。**
+不要走 COM 口，直接用 RFCOMM socket 连模块的通道 1 —— 命令行和 WinUI 调试器都是这么实现的。
 
-**绕开办法（按推荐顺序）**
+```bash
+python host/ble_tool.py ping        # 默认经典 SPP（RFCOMM 通道 1）
+```
 
-1. **走 BLE**：`python host/ble_tool.py --ble ping`，WinRT 直连，抓屏 3.7 秒/帧。
-2. **走 CH340 有线**：`CH340 TX→PA3`、`CH340 RX→PA2`、`GND`，
+注意：HC-04 是双模模块，同一时刻只服务一个无线对端 —— 手机连着时 PC 连不上，
+模块也会停止广播。先彻底断开手机（系统蓝牙里断开/忽略）再连。
+
+**三条链路（按推荐顺序）**
+
+1. **经典 SPP socket**：默认，`python host/ble_tool.py ping`；抓屏约 4 秒/帧。
+2. **BLE**：`python host/ble_tool.py --ble ping`，WinRT 直连，抓屏 3.7 秒/帧。
+3. **CH340 有线**：`CH340 TX→PA3`、`CH340 RX→PA2`、`GND`，
    `python host/ble_tool.py --port COMx ping`（115200），抓屏 1~2 秒/帧，不受蓝牙任何问题影响。
-3. 不要试图在「设置」里反复配对 —— 配对记录已经是最新的，问题不在这。
+4. 不要试图在「设置」里反复配对 —— 配对记录没问题，问题在 COM 口这一层。
 
 ### 2. BLE 能连上但收不到数据（`start notify ... Unreachable`）
 
