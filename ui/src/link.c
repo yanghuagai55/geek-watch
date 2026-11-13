@@ -38,7 +38,9 @@ enum {
     ST_PAY = 3,
     ST_XOR = 4,
     ACT_PLAY = 1,
-    ACT_PAUSE = 2
+    ACT_PAUSE = 2,
+    ACT_NEXT = 3,
+    ACT_PREV = 4
 };
 
 static char msgs[LINK_MSG_N][LINK_MSG_LEN];
@@ -390,4 +392,12 @@ void link_media_toggle(void) {
     } else {
         link_media_play();
     }
+}
+
+void link_media_next(void) {
+    send_ctrl(ACT_NEXT);
+}
+
+void link_media_prev(void) {
+    send_ctrl(ACT_PREV);
 }

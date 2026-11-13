@@ -657,3 +657,119 @@ void hal_frame_pace(void) {
     }
     frame_start = GetTickCount();
 }
+
+/* ---- 传感器/执行器仿真 ----
+   给可移植 UI 核心提供假数据，让计步/音乐/设置/关于能在电脑上整机验证。 */
+static int sim_walking = 1;
+static uint32_t sim_raise_ms;
+static uint16_t sim_beep_freq;
+static uint16_t sim_beep_ms;
+static int sim_led;
+static uint8_t sim_backlight = 200;
+
+void hal_host_set_walking(int on) {
+    sim_walking = on ? 1 : 0;
+}
+
+void hal_host_raise_wrist(void) {
+    sim_raise_ms = hal_tick_ms();
+    if (sim_raise_ms == 0) {
+        sim_raise_ms = 1;
+    }
+}
+
+int hal_imu_read(hal_imu_t *out) {
+    uint32_t t = hal_tick_ms();
+    uint32_t phase;
+    int swing;
+
+    if (!out) {
+        return 0;
+    }
+    if (sim_walking) {
+        /* 2Hz 步伐：竖直轴 900..1300mg 三角冲击，峰在每 500ms 中点。 */
+        phase = t % 500u;
+        swing = (int)((phase < 250u ? phase : 500u - phase) * 400u / 250u);
+        out->az = (int16_t)(900 + swing);
+        out->ax = (int16_t)((int)(t % 7u) * 4 - 12);
+        out->ay = (int16_t)((int)(t % 5u) * 3 - 6);
+        out->gx = 0;
+        out->gy = 0;
+        out->gz = (int16_t)(swing - 200);
+    } else {
+        out->ax = 0;
+        out->ay = 0;
+        out->az = 1000;
+        out->gx = out->gy = out->gz = 0;
+    }
+    if (sim_raise_ms && (t - sim_raise_ms) < 400u) {
+        out->gy = 1500;   /* 抬腕：俯仰角速度突发 */
+        out->az = 1300;
+    }
+    out->temp = 280;
+    return 1;
+}
+
+int hal_mag_read(hal_mag_t *out) {
+    if (!out) {
+        return 0;
+    }
+    out->x = 200;
+    out->y = -150;
+    out->z = 400;
+    return 1;
+}
+
+int hal_baro_read(hal_baro_t *out) {
+    if (!out) {
+        return 0;
+    }
+    out->pressure = 101325;
+    out->temp = 250;
+    return 1;
+}
+
+uint16_t hal_battery_mv(void) {
+    return 4020;
+}
+
+uint8_t hal_battery_pct(void) {
+    return 80;
+}
+
+int hal_ble_connected(void) {
+    return 1;
+}
+
+void hal_beep(uint16_t freq_hz, uint16_t ms) {
+    sim_beep_freq = freq_hz;
+    sim_beep_ms = ms;
+}
+
+void hal_led_set(int on) {
+    sim_led = on ? 1 : 0;
+}
+
+void hal_backlight_set(uint8_t level) {
+    sim_backlight = level;
+}
+
+const char *hal_fw_version(void) {
+    return "1.0.0";
+}
+
+const char *hal_fw_build(void) {
+    return __DATE__ " " __TIME__;
+}
+
+const char *hal_mcu_name(void) {
+    return "AT32F421K8T7";
+}
+
+uint32_t hal_sysclk_mhz(void) {
+    return 120;
+}
+
+const char *hal_clock_src(void) {
+    return "120MHz HEXT";
+}

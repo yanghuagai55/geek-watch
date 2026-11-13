@@ -54,4 +54,52 @@ uint16_t hal_cpu_tenths(void);
 
 void hal_frame_pace(void);
 
+/* ---- sensors & actuators ----
+   板级端口实现这些函数；电脑仿真在 host/hal_host.c 里给假数据。
+   ui 核心只通过这些接口拿传感器、控蜂鸣器/灯/背光，不碰芯片寄存器。
+   读函数返回 1 表示有有效数据，0 表示该器件不在或没读到。 */
+
+/* 加速度 mg（1g=1000，±16g），陀螺 0.1dps，温度 0.1℃。 */
+typedef struct hal_imu {
+    int16_t ax, ay, az;
+    int16_t gx, gy, gz;
+    int16_t temp;
+} hal_imu_t;
+int hal_imu_read(hal_imu_t *out);
+
+/* 磁力计 milligauss（±8G）。 */
+typedef struct hal_mag {
+    int16_t x, y, z;
+} hal_mag_t;
+int hal_mag_read(hal_mag_t *out);
+
+/* 气压 Pa，温度 0.1℃。 */
+typedef struct hal_baro {
+    int32_t pressure;
+    int16_t temp;
+} hal_baro_t;
+int hal_baro_read(hal_baro_t *out);
+
+/* 电池电压 mV；0 表示未知。百分比 0..100，0xFF 表示未知。 */
+uint16_t hal_battery_mv(void);
+uint8_t hal_battery_pct(void);
+
+/* 蓝牙连接状态：1 已连，0 未连，-1 未知。 */
+int hal_ble_connected(void);
+
+/* 蜂鸣器。freq_hz=0 立即停；有源蜂鸣器忽略频率只开关。ms 为持续时间。 */
+void hal_beep(uint16_t freq_hz, uint16_t ms);
+/* 状态灯。 */
+void hal_led_set(int on);
+/* 背光 0..255。 */
+void hal_backlight_set(uint8_t level);
+
+/* 固件标识，关于本机用。返回静态字符串。 */
+const char *hal_fw_version(void);
+const char *hal_fw_build(void);
+const char *hal_mcu_name(void);
+/* 主频 MHz，时钟来源描述（如 "120MHz HEXT"）。 */
+uint32_t hal_sysclk_mhz(void);
+const char *hal_clock_src(void);
+
 #endif

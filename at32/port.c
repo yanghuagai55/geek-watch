@@ -8,6 +8,16 @@
 #include "at32f421_usart.h"
 #include "at32f421_misc.h"
 
+#include "board_config.h"
+#include "i2c_bus.h"
+#include "mpu6050.h"
+#include "qmc5883l.h"
+#include "bmp580.h"
+#include "adc_bat.h"
+#include "beep.h"
+#include "led_bl.h"
+#include "sport.h"
+
 /* AT32F421K8T7（LQFP-32，64KB Flash / 16KB SRAM，无 FPU）。
    时钟：HICK 48MHz / 2 = 24MHz 进 PLL，×5 = 120MHz。
    屏幕（1.8 寸 ST7735S，128×160，模块内部 CS 接地，没有 CS 脚）：
@@ -622,4 +632,104 @@ void board_init(void) {
     uart_puts("hw\r\n");
     lcd_init();
     uart_puts("lcd\r\n");
+
+    i2c_bus_init();
+    mpu6050_init();
+    qmc5883l_init();
+    bmp580_init();
+    adc_init();
+    beep_init();
+    led_init();
+    backlight_init();
+    backlight_set(255);
+    uart_puts("sens\r\n");
+}
+
+/* ---- 传感器/执行器 HAL 包装 ---- */
+int hal_imu_read(hal_imu_t *out) {
+    return mpu6050_read(out);
+}
+
+int hal_mag_read(hal_mag_t *out) {
+    return qmc5883l_read(out);
+}
+
+int hal_baro_read(hal_baro_t *out) {
+    return bmp580_read(out);
+}
+
+uint16_t hal_battery_mv(void) {
+    return battery_mv();
+}
+
+uint8_t hal_battery_pct(void) {
+    return battery_pct();
+}
+
+int hal_ble_connected(void) {
+    return ble_state_read();
+}
+
+void hal_beep(uint16_t freq_hz, uint16_t ms) {
+    beep_set(freq_hz, ms);
+}
+
+void hal_led_set(int on) {
+    led_set(on);
+}
+
+void hal_backlight_set(uint8_t level) {
+    backlight_set(level);
+}
+
+const char *hal_fw_version(void) {
+    return "1.0.0";
+}
+
+const char *hal_fw_build(void) {
+    return __DATE__ " " __TIME__;
+}
+
+const char *hal_mcu_name(void) {
+    return "AT32F421K8T7";
+}
+
+uint32_t hal_sysclk_mhz(void) {
+    if(clock_src == 1 || clock_src == 2) {
+        return 120;
+    }
+    if(clock_src == 4) {
+        return 48;
+    }
+    return 8;
+}
+
+const char *hal_clock_src(void) {
+    if(clock_src == 2) {
+        return "120MHz HEXT";
+    }
+    if(clock_src == 1) {
+        return "120MHz HICK";
+    }
+    if(clock_src == 4) {
+        return "48MHz HICK";
+    }
+    return "8MHz HICK";
+}
+
+/* 帧空隙里的协作服务：串口解析 + 周期采样计步 + 蜂鸣器自动关。
+   由 main.c 通过 ui_set_service 挂上。采样节流到 ~50Hz。 */
+void port_service(void) {
+    static uint32_t sensor_ms;
+    uint32_t now = tick_ms;
+    hal_imu_t imu;
+
+    link_poll();
+    if((now - sensor_ms) >= 20u) {
+        sensor_ms = now;
+        if(mpu6050_read(&imu)) {
+            sport_feed(&imu, now);
+        }
+    }
+    beep_tick(now);
 }

@@ -23,7 +23,7 @@ for %%S in (system_at32f421) do (
     "%GCC%" %CFLAGS% %INC% -c "%CMSIS%\device_support\%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
 )
-for %%S in (crm gpio spi dma usart misc flash) do (
+for %%S in (crm gpio spi dma usart misc flash adc tmr) do (
     "%GCC%" %CFLAGS% %INC% -c "%LIB%\drivers\src\at32f421_%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
 )
@@ -31,18 +31,22 @@ for %%S in (port) do (
     "%GCC%" %CFLAGS% %INC% -c "%BATDIR%%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
 )
+for %%S in (i2c_bus mpu6050 qmc5883l bmp580 adc_bat beep led_bl) do (
+    "%GCC%" %CFLAGS% %INC% -c "%BATDIR%bsp\%%S.c" -o "%OUT%\%%S.o"
+    if errorlevel 1 exit /b 1
+)
 "%GCC%" %CFLAGS% %INC% -c "%BATDIR%src\main.c" -o "%OUT%\main.o"
 if errorlevel 1 exit /b 1
 
 if exist "%OUT%\libui.a" del "%OUT%\libui.a"
-for %%S in (ui_mem ui_anim ui_draw ui_menu ui_trace ui_app ui_icons song_draw song_data font_data link) do (
+for %%S in (ui_mem ui_anim ui_draw ui_menu ui_trace ui_app ui_icons song_draw song_data font_data link sport music settings) do (
     "%GCC%" %CFLAGS% -I "%ROOT%\ui" -c "%ROOT%\ui\src\%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
     "%AR%" rcs "%OUT%\libui.a" "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
 )
 
-"%GCC%" %ARCH% -Os -Wl,--gc-sections -Wl,-Map="%OUT%\watch.map" -T "%BATDIR%AT32F421x8_FLASH.ld" -specs=nano.specs -specs=nosys.specs -o "%OUT%\watch.elf" "%OUT%\startup.o" "%OUT%\system_at32f421.o" "%OUT%\crm.o" "%OUT%\gpio.o" "%OUT%\spi.o" "%OUT%\dma.o" "%OUT%\usart.o" "%OUT%\misc.o" "%OUT%\flash.o" "%OUT%\port.o" "%OUT%\main.o" "%OUT%\libui.a" -lc -lm -lgcc
+"%GCC%" %ARCH% -Os -Wl,--gc-sections -Wl,-Map="%OUT%\watch.map" -T "%BATDIR%AT32F421x8_FLASH.ld" -specs=nano.specs -specs=nosys.specs -o "%OUT%\watch.elf" "%OUT%\startup.o" "%OUT%\system_at32f421.o" "%OUT%\crm.o" "%OUT%\gpio.o" "%OUT%\spi.o" "%OUT%\dma.o" "%OUT%\usart.o" "%OUT%\misc.o" "%OUT%\flash.o" "%OUT%\adc.o" "%OUT%\tmr.o" "%OUT%\i2c_bus.o" "%OUT%\mpu6050.o" "%OUT%\qmc5883l.o" "%OUT%\bmp580.o" "%OUT%\adc_bat.o" "%OUT%\beep.o" "%OUT%\led_bl.o" "%OUT%\port.o" "%OUT%\main.o" "%OUT%\libui.a" -lc -lm -lgcc
 if errorlevel 1 exit /b 1
 "%OBJCOPY%" -O binary "%OUT%\watch.elf" "%OUT%\watch.bin"
 if errorlevel 1 exit /b 1

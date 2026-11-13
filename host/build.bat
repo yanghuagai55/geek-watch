@@ -40,7 +40,7 @@ exit /b 0
 
 :build
 if not exist host\obj\%3 mkdir host\obj\%3
-cl /nologo /W4 /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DHAL_LCD_W=%1 /DHAL_LCD_H=%2 /I ui /I host host\main.c host\hal_host.c host\panel.c host\self_test.c host\render_test.c ui\src\ui_mem.c ui\src\ui_anim.c ui\src\ui_draw.c ui\src\ui_menu.c ui\src\ui_app.c ui\src\ui_trace.c ui\src\ui_icons.c %FONT_SRC% %SONG_SRC% ui\src\song_draw.c ui\src\link.c /Fe:%4 /Fo:host\obj\%3\ /Fd:host\obj\%3\compiler.pdb /link user32.lib gdi32.lib winmm.lib
+cl /nologo /W4 /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DHAL_LCD_W=%1 /DHAL_LCD_H=%2 /I ui /I host host\main.c host\hal_host.c host\panel.c host\self_test.c host\render_test.c ui\src\ui_mem.c ui\src\ui_anim.c ui\src\ui_draw.c ui\src\ui_menu.c ui\src\ui_app.c ui\src\ui_trace.c ui\src\ui_icons.c %FONT_SRC% %SONG_SRC% ui\src\song_draw.c ui\src\link.c ui\src\sport.c ui\src\music.c ui\src\settings.c /Fe:%4 /Fo:host\obj\%3\ /Fd:host\obj\%3\compiler.pdb /link user32.lib gdi32.lib winmm.lib
 exit /b %errorlevel%
 
 :fonts

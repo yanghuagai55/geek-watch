@@ -36,4 +36,8 @@ void hal_host_pump(void);
 /* hdc 是 Windows 的 HDC，用 void* 是为了不让这个头文件依赖 windows.h。 */
 void hal_host_set_painter(void (*fn)(void *hdc, int x, int panel_w, int height));
 
+/* 传感器/执行器仿真控制（仅电脑端）。 */
+void hal_host_set_walking(int on);   /* 1=模拟走路加速度，0=静止 */
+void hal_host_raise_wrist(void);     /* 触发一次抬腕手势 */
+
 #endif

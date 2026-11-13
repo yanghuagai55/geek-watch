@@ -61,10 +61,8 @@ static void dot_at(int page, int *x, int *y) {
     int gap = UI_MX(110);
     int h = UI_MY(40);
     int lift = UI_MY(40);
-    int bh = UI_MY(220);
     int w = UI_MX(62);
     int x0;
-    int left;
 
     if (gap < 8) {
         gap = 8;
@@ -75,16 +73,13 @@ static void dot_at(int page, int *x, int *y) {
     if (lift < 6) {
         lift = 6;
     }
-    if (bh < 28) {
-        bh = 28;
-    }
     if (w < 3) {
         w = 3;
     }
-    x0 = (UI_W - 3 * gap) / 2;
-    left = x0 + page * gap - UI_MX(16);
-    *x = left + w / 2;
-    *y = UI_H - bh - UI_MY(16) - lift - h + h / 2;
+    /* 与 ui_app.c draw_dots 一致：HOME_N=5，dots_y=UI_H-4-lift-h。 */
+    x0 = (UI_W - 4 * gap) / 2;
+    *x = x0 + page * gap - UI_MX(16) + w / 2;
+    *y = UI_H - 4 - lift - h + h / 2;
 }
 
 static void card_at(int *x, int *y) {
@@ -227,6 +222,9 @@ int host_self_test(const char *output_dir) {
     tap(HAL_KEY3);
     frames(24);
     save_shot("shot_focus.bmp");
+    /* 调试角标是底部覆盖层，会盖住导航点；查点前先关掉。 */
+    ui_settings_set_debug(0);
+    frames(24);
     {
         int dx, dy;
         dot_at(2, &dx, &dy);
@@ -240,8 +238,13 @@ int host_self_test(const char *output_dir) {
     frames(20);
     tap(HAL_KEY2);
     frames(24);
+    /* 设置扩为6项，亮度在索引3：移三格再进入子页 */
     tap(HAL_KEY3);
-    frames(16);
+    frames(12);
+    tap(HAL_KEY3);
+    frames(12);
+    tap(HAL_KEY3);
+    frames(12);
     tap(HAL_KEY2);
     frames(8);
     save_shot("shot_push.bmp");
@@ -294,8 +297,6 @@ int host_self_test(const char *output_dir) {
 
     tap(HAL_KEY3);
     frames(20);
-    tap(HAL_KEY2);
-    frames(24);
     {
         int seen[8] = {0, 0, 0, 0, 0, 0, 0, 0};
         int got = 0;
@@ -317,6 +318,8 @@ int host_self_test(const char *output_dir) {
             return fail("run frames");
         }
     }
+    tap(HAL_KEY2);   /* 零级动画采集完，进入一级柱状图 */
+    frames(24);
 
     {
         static const uint16_t gif_px[4] = {0xF800, 0xF800, 0xF800, 0xF800};
@@ -328,13 +331,18 @@ int host_self_test(const char *output_dir) {
         }
     }
 
-    tap(HAL_KEY3);
-    frames(20);
+    tap(HAL_KEY1);   /* 退出运动菜单 */
+    frames(24);
+    tap(HAL_KEY1);   /* 确保回到首页 */
+    frames(24);
+    ui_nav_goto(UI_PAGE_MSG);
+    frames(2);
     {
-        uint32_t icon = region_sig(16, 44, 48, 16);
+        int ix = UI_MX(125), iy = UI_MY(275), iw = UI_MX(375), ih = UI_MY(100);
+        uint32_t icon = region_sig(ix, iy, iw, ih);
         tap(HAL_KEY2);
         frames(24);
-        if (region_sig(16, 44, 48, 16) == icon) {
+        if (region_sig(ix, iy, iw, ih) == icon) {
             return fail("msg list did not open");
         }
         {
@@ -365,13 +373,23 @@ int host_self_test(const char *output_dir) {
         hal_host_set_keys(HAL_KEY2);
         frames(32);
         hal_host_set_keys(0);
-        frames(24);
+        frames(40);
         hal_host_set_keys(HAL_KEY2);
         frames(32);
         hal_host_set_keys(0);
-        frames(24);
-        if (region_sig(16, 44, 48, 16) != icon) {
-            return fail("long enter did not close msg");
+        frames(40);
+        /* 消息图标是动画，区域签名随时间变；改用“列表蓝卡消失”判断已关闭。 */
+        {
+            int header = ui_song_height(UI_SONG_TITLE) + UI_MY(20);
+            int y0, fill_x;
+            if (header < UI_MY(150)) {
+                header = UI_MY(150);
+            }
+            y0 = header + (UI_H - header) / 2;
+            fill_x = (UI_W - UI_MX(840)) / 2 + UI_MX(60);
+            if (hal_host_pixel(fill_x, y0) == rgb565(0, 114, 230)) {
+                return fail("long enter did not close msg");
+            }
         }
         {
             int px = (UI_W - 16 * 4) / 2 + 11 * 4;

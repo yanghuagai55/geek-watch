@@ -65,7 +65,8 @@ typedef enum {
     UI_PAGE_FACE = 0,
     UI_PAGE_SPORT = 1,
     UI_PAGE_MSG = 2,
-    UI_PAGE_SETTINGS = 3
+    UI_PAGE_SETTINGS = 3,
+    UI_PAGE_MUSIC = 4
 } ui_page_id_t;
 
 void ui_nav_goto(ui_page_id_t page);
@@ -176,6 +177,8 @@ void link_ack_flush(void);
 void link_media_play(void);
 void link_media_pause(void);
 void link_media_toggle(void);
+void link_media_next(void);
+void link_media_prev(void);
 /* 手机发 06 后，下一帧把画面按 RGB565 从串口送回。 */
 void link_snap_request(void);
 void link_snap_begin(int w, int h);
