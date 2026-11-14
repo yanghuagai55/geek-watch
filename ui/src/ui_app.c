@@ -1325,6 +1325,7 @@ void ui_frame(void) {
     uint32_t now;
     int long_enter = 0;
     ui_menu_t *menu;
+    ui_render_stats_t render;
 
     if (!st) {
         return;
@@ -1332,13 +1333,6 @@ void ui_frame(void) {
     hal_meter_begin();
     link_poll();
     now = hal_tick_ms();
-    st->fps_frames++;
-    if (now - st->fps_window >= 1000u) {
-        uint32_t rate = (uint32_t)st->fps_frames * 1000u / (now - st->fps_window);
-        st->fps = (uint8_t)(rate > 99u ? 99u : rate);
-        st->fps_frames = 0;
-        st->fps_window = now;
-    }
     level = hal_key_level();
     if (st->debug) {
         level = (uint8_t)(level | link_key_level());
@@ -1422,6 +1416,19 @@ void ui_frame(void) {
     draw_battery_badge();
     draw_badge();
     ui_draw_flush();
+    /* FPS 只计完整画面：所有行都发完且最后一条 DMA 已完成。
+       ui_draw_flush 内部的 wait_display 已经保证传输结束。 */
+    ui_render_get_stats(&render);
+    if (render.pixels == (uint32_t)UI_W * UI_H) {
+        st->fps_frames++;
+    }
+    now = hal_tick_ms();
+    if (now - st->fps_window >= 1000u) {
+        uint32_t rate = (uint32_t)st->fps_frames * 1000u / (now - st->fps_window);
+        st->fps = (uint8_t)(rate > 99u ? 99u : rate);
+        st->fps_frames = 0;
+        st->fps_window = now;
+    }
     link_ack_flush();
     hal_meter_end();
     hal_frame_pace();

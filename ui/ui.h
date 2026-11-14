@@ -55,7 +55,7 @@ typedef struct ui_render_stats {
 void ui_render_get_stats(ui_render_stats_t *out);
 void ui_draw_invalidate(void);
 
-/* 供调试链路读取的实时帧率（每秒刷新一次） */
+/* 每秒从屏幕顶部到底部完整传输完成的画面数（每秒刷新一次）。 */
 uint8_t ui_app_get_fps(void);
 /* 强制回到表盘主页（关闭子页/菜单） */
 void ui_app_go_home(void);

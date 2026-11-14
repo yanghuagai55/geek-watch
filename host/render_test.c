@@ -206,6 +206,9 @@ static uint32_t read_le32(const uint8_t *p) {
 static int check_perf_reply(void) {
     ui_render_stats_t stats;
     uint32_t values[8];
+    uint32_t ram_used = 0;
+    uint32_t ram_total = 0;
+    uint16_t cpu;
     uint8_t checksum = 0;
     int n, i;
     ui_render_get_stats(&stats);
@@ -215,7 +218,10 @@ static int check_perf_reply(void) {
     values[3] = stats.frame_us;
     values[4] = stats.pixels;
     values[5] = (uint32_t)stats.bands | ((uint32_t)stats.dropped << 16);
-    ui_mem_get(&values[6], &values[7]);
+    hal_ram_get(&ram_used, &ram_total);
+    cpu = hal_cpu_tenths();
+    values[6] = (ram_used & 0xFFFFu) | ((uint32_t)cpu << 16);
+    values[7] = (ram_total & 0xFFFFu) | ((uint32_t)ui_app_get_fps() << 16);
     hal_host_link_tx_take(wire, sizeof wire, &n);
     /* The binary reply is exactly 36 bytes; the existing text ACK follows it. */
     REQUIRE(n == 36 + 4, "performance reply size plus legacy ACK");
@@ -587,6 +593,27 @@ static int test_dirty(void) {
     return 0;
 }
 
+/* FPS 现在只计从上到下完成的一整幅画面，局部刷新和静止主循环不计。 */
+static int test_full_frame_fps(void) {
+    int i;
+    hal_host_set_async_delay_us(0);
+    hal_host_set_frame_step_us(16000);
+    ui_init();
+    for (i = 0; i < 70; i++) {
+        ui_draw_invalidate();
+        ui_frame();
+    }
+    REQUIRE(ui_app_get_fps() >= 58 && ui_app_get_fps() <= 64,
+            "complete top-to-bottom frames were not counted as FPS");
+    for (i = 0; i < 70; i++) {
+        ui_frame();
+    }
+    REQUIRE(ui_app_get_fps() < 30,
+            "idle UI loops or partial dirty bands were counted as full frames");
+    printf("Full-frame FPS PASS\n");
+    return 0;
+}
+
 static void count_service(void) {
     service_calls++;
 }
@@ -741,6 +768,7 @@ int host_render_test(const char *shots) {
     if (!result) result = test_arena();
     if (!result) result = test_perf_request();
     if (!result) result = test_dirty();
+    if (!result) result = test_full_frame_fps();
     if (!result) result = test_async_and_preempt();
     if (!result) result = test_face_snapshot_and_keys();
     ui_set_service(NULL);

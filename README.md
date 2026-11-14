@@ -5,7 +5,7 @@
 核心与硬件完全解耦（`ui/` 只依赖 `ui/hal.h`），可整包移植到其它 MCU / 屏幕。
 PC 端提供 **WinUI 3 调试启动器**（`host/winui/`）和命令行 `host/ble_tool.py`。
 
-![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-10.0%2F16KB-green) ![flash](https://img.shields.io/badge/flash-61.1%2F64KB-orange) ![fps](https://img.shields.io/badge/128%C3%97160-61fps-brightgreen)
+![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-10.0%2F16KB-green) ![flash](https://img.shields.io/badge/flash-61.1%2F64KB-orange) ![fps](https://img.shields.io/badge/FPS-full--frame--count-brightgreen)
 
 ## 特性
 
@@ -16,7 +16,7 @@ PC 端提供 **WinUI 3 调试启动器**（`host/winui/`）和命令行 `host/bl
 - **彩色矢量图标**：`ui_svg_cmd_t`（线段+圆盘）+ 每命令调色板索引 `ci` + 粗线圆帽；
   跑步 / 圆角信封（开盖→信纸弹出落最顶层→倒放）/ 旋转齿轮。
 - **字体按需打包**：消息字模默认子集（`full` 全量）；华文琥珀标题/时钟字可选（`nosong` 回退小字模）。
-- **调试 overlay**：整片 SRAM / CPU / 帧数单行角标，覆盖式绘制，不推动任何页面布局。
+- **调试 overlay**：整片 SRAM / CPU / 完整帧 FPS 单行角标，覆盖式绘制，不推动任何页面布局。
 - **蓝牙调试协议**：`A5 命令 长度 数据 异或`，校时 / 消息 / 歌词 / 按键 / 亮度 / 截屏回传 / 回主页 / 性能遥测 / 传感器快照。
 - **WinUI 3 调试台**：默认经典 SPP 自动连接，连接后自动校时、回表盘主页并抓屏；RAM / CPU / FPS 1 Hz 环形仪表；BLE / SPP / 串口 / 演示四通道；抓屏保存 PNG、传感器快照、日志与设置。
 - **运动与传感器**：计步、抬腕、运动柱状图；“传感器数值”页 10Hz 显示 MPU6050 加速度/陀螺/温度与 QMC5883L/P 三轴磁场，并每秒重扫 I2C。
@@ -36,8 +36,9 @@ PC 端提供 **WinUI 3 调试启动器**（`host/winui/`）和命令行 `host/bl
 | I2C 传感器 | PA9/PA10：MPU6050 `0x68`、QMC5883P `0x2C`（兼容 QMC5883L `0x0D`）、BMP580 `0x46` |
 | 状态灯 | PB3，高电平点亮；PB1 为 BLE 状态输入 |
 
-实测：**61 fps**（16ms 帧节拍封顶），Flash **61.1/64 KB**，静态 RAM **10.0/16 KB**
-（调试角标含当前栈，通常显示 `R9/16K`）。
+当前构建：Flash **61,500 B / 65,536 B**（剩余 **4,036 B**），静态 RAM **12,232 B / 16 KB**
+（调试角标含当前栈，通常显示 `R11/16K`）。FPS 是每秒「从顶部到底部完整传输完成」的画面数；
+静止、局部刷新和只跑 UI 主循环不再计入，完整自愈/截屏重绘会计入。
 
 ## 目录
 
@@ -152,7 +153,7 @@ python host/ble_tool.py --crlf --mon-port COM7 comsend "456"
 0B 点阵   块号 0..3 + 128 字节 1bpp（128×32，共 512 字节，自动打开音乐页）
 10 控制   手表→PC：1 播放 2 暂停 3 下一首 4 上一首
 11 画面   A5 11 FF 长度3 宽2 高2 像素... 异或
-12 性能   手表→PC：8×u32；[6] 低16=整片 SRAM 已用、高16=CPU×10，[7] 低16=SRAM 总量、高16=实测 FPS
+12 性能   手表→PC：8×u32；[6] 低16=整片 SRAM 已用、高16=CPU×10，[7] 低16=SRAM 总量、高16=完整帧 FPS
 13 传感器 无数据，回一行 DBG ...（I2C 扫描 / QMC 寄存器 / 电池），不回 ok
 ```
 

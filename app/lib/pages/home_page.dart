@@ -43,7 +43,7 @@ class HomePage extends StatelessWidget {
             const SizedBox(height: 26),
             SectionHeader(
               title: '实时性能',
-              subtitle: 'RAM、主循环负载与屏幕帧率',
+              subtitle: 'RAM、主循环负载与完整帧传输率',
               trailing: Wrap(
                 crossAxisAlignment: WrapCrossAlignment.center,
                 spacing: 8,
@@ -467,7 +467,7 @@ class _PortraitMetrics extends StatelessWidget {
         history: controller.cpuHistory,
       ),
       MiniMetricCard(
-        label: 'FPS',
+        label: '完整帧 FPS',
         value: '${controller.fps}',
         unit: '帧/秒',
         color: scheme.secondary,
@@ -551,11 +551,13 @@ class _Metrics extends StatelessWidget {
         history: controller.cpuHistory,
       ),
       MetricCard(
-        label: 'FPS',
+        label: '完整帧 FPS',
         value: '${controller.fps}',
         unit: 'fps',
-        detail: '${(1000 / controller.fps).toStringAsFixed(1)} ms 帧周期',
-        progress: controller.fps / 61,
+        detail: controller.fps > 0
+            ? '${(1000 / controller.fps).toStringAsFixed(1)} ms / 完整帧'
+            : '静止或仅有局部刷新',
+        progress: controller.fps / 60,
         centerText: 'LIVE',
         color: scheme.secondary,
         icon: Icons.monitor_heart_outlined,

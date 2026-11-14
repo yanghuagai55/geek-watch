@@ -66,7 +66,6 @@ static unsigned char rx_q[128];
 static volatile unsigned char rx_r;
 static volatile unsigned char rx_n;
 static unsigned char clock_src;
-volatile uint32_t hal_frame_count;
 
 /* 上电自检结果与最近一次采样，供 SWD 直接读 RAM 验证（不依赖蓝牙）。
    bit0 MPU6050 / bit1 QMC5883L / bit2 BMP580。 */
@@ -624,7 +623,6 @@ void hal_frame_pace(void) {
     for(;;) {
         ui_service();
         if((tick_ms - pace_ms) >= 16u) {
-            hal_frame_count++;
             break;
         }
         hal_idle();

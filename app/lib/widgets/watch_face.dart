@@ -159,7 +159,7 @@ class _WatchFacePainter extends CustomPainter {
     );
     _text(
       canvas,
-      '${now.month}月${now.day}日  ·  60 FPS',
+      '${now.month}月${now.day}日  ·  界面预览',
       Offset(w * 0.5, h * 0.842),
       w * 0.047,
       const Color(0xFF9AA29A),
