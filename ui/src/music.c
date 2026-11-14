@@ -48,7 +48,9 @@ void music_page_draw(uint8_t a) {
     int mask_ready = link_media_mask_ready();
 
     if (r < 12) r = 12;
-    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, a);
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, a);
+    }
 
     /* 没有 PC/手机在线时只显示未连接，画面/歌词由对端下发。 */
     if (!link_connected()) {

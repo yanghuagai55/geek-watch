@@ -136,12 +136,15 @@ static void home_tile(uint8_t a) {
                   (int16_t)(h / 4 - 1), col_blue_dim, a);
 }
 
-static void home_caption(const char *name, uint8_t a) {
-    int x, y, w, h;
-    int cy;
+static const char *const page_names[HOME_N] = {
+    "", "运动", "消息", "设置", "音乐"
+};
+
+static void home_caption_y(const char *name, int cy, uint8_t a) {
     int16_t tw;
-    home_icon_rect(&x, &y, &w, &h);
-    cy = y + h + UI_MY(60);
+    if (a == 0 || cy >= UI_H) {
+        return;
+    }
     tw = ui_song_width(UI_SONG_TITLE, name);
     ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2), (int16_t)cy,
                  name, col_text, a);
@@ -149,6 +152,12 @@ static void home_caption(const char *name, uint8_t a) {
                   (int16_t)(cy + ui_song_height(UI_SONG_TITLE) + UI_MY(25)),
                   (int16_t)UI_MX(120), (int16_t)UI_MY(16),
                   1, col_accent, a);
+}
+
+static void home_caption(const char *name, uint8_t a) {
+    int x, y, w, h;
+    home_icon_rect(&x, &y, &w, &h);
+    home_caption_y(name, y + h + UI_MY(60), a);
 }
 
 static int wrap_mod(int v, int m) {
@@ -211,10 +220,7 @@ static void draw_battery_badge(void);
 static void draw_msg_app(uint8_t a);
 static void draw_settings_app(uint8_t a);
 static void draw_detail(uint8_t a);
-static void draw_mail_icon(void);
-static void draw_gear_icon(void);
-static void draw_sport_icon(void);
-static void draw_music_icon(void);
+static void draw_home_art(int page, uint8_t a);
 
 static void draw_outer_pages(int scale, int extra_dx) {
     int i;
@@ -231,18 +237,16 @@ static void draw_outer_pages(int scale, int extra_dx) {
             continue;
         }
         ui_draw_xform(scale, extra_dx + margin_x + page_ox * scale / 256, margin_y);
-        if (i == UI_PAGE_SPORT) {
-            draw_sport_icon();
-        } else if (i == UI_PAGE_MSG) {
-            draw_mail_icon();
-        } else if (i == UI_PAGE_SETTINGS) {
-            draw_gear_icon();
-        } else if (i == UI_PAGE_MUSIC) {
-            draw_music_icon();
-        } else {
+        if (i == UI_PAGE_FACE) {
             draw_face_app(255);
+        } else {
+            ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
+            home_tile(255);
+            draw_home_art(i, 255);
+            home_caption(page_names[i], 255);
         }
     }
+    ui_draw_xform(256, 0, 0);
 }
 
 static void draw_dots(uint8_t alpha) {
@@ -260,9 +264,21 @@ static void draw_dots(uint8_t alpha) {
     }
     x0 = (UI_W - (HOME_N - 1) * gap) / 2;
     for (i = 0; i < HOME_N; i++) {
+        int delta = i * 256 - st->scroll.x;
         int hot = i == selected;
-        int w = hot ? UI_MX(62) : UI_MX(32);
-        int x = x0 + i * gap - (hot ? UI_MX(16) : 0);
+        int w, x;
+        delta = wrap_mod(delta + HOME_N * 128, HOME_N * 256) - HOME_N * 128;
+        if (delta < 0) {
+            delta = -delta;
+        }
+        if (delta >= 256) {
+            w = UI_MX(32);
+            x = x0 + i * gap;
+        } else {
+            int f = 256 - delta;
+            w = UI_MX(32) + (UI_MX(62) - UI_MX(32)) * f / 256;
+            x = x0 + i * gap - UI_MX(16) * f / 256;
+        }
         if (w < 3) {
             w = 3;
         }
@@ -379,6 +395,7 @@ static void draw_labeled_card(int x, int y, int w, int h, int hot,
 
 static void draw_stack(int scroll, int n, int focus_vis, int y0, int pitch,
                        const char *const *names, const char *side0, uint8_t a) {
+    int top = title_header_h();
     int i;
     int x, y, w, h;
 
@@ -387,6 +404,9 @@ static void draw_stack(int scroll, int n, int focus_vis, int y0, int pitch,
             continue;
         }
         stack_box(scroll, i, y0, pitch, &x, &y, &w, &h);
+        if (y + h <= top || y >= UI_H) {
+            continue;
+        }
         draw_labeled_card(x, y, w, h, 0, names[i], i == 0 ? side0 : 0, a);
     }
     stack_box(scroll, focus_vis, y0, pitch, &x, &y, &w, &h);
@@ -401,7 +421,9 @@ static void draw_header(const char *title, uint8_t a, int song) {
     int title_h = ui_song_height(UI_SONG_TITLE);
     (void)song;
 
-    ui_draw_fill(0, 0, UI_W, (int16_t)band, col_bg, a);
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, (int16_t)band, col_bg, a);
+    }
     ui_draw_round((int16_t)x, (int16_t)(y + UI_MY(10)),
                   (int16_t)UI_MX(24), (int16_t)(title_h - UI_MY(60)),
                   1, col_accent, a);
@@ -546,7 +568,9 @@ static void draw_sport_app(uint8_t a) {
     percent = ss.goal ? (int)(ss.steps * 100u / ss.goal) : 0;
     if (percent > 100) percent = 100;
 
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
     draw_header("运动", a, 0);
     snprintf(line, sizeof line, "%lu", (unsigned long)ss.steps);
     if (ss.steps < 1000u) {
@@ -592,73 +616,29 @@ static void draw_sport_app(uint8_t a) {
     ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)footer_y, goal, col_dim, a, 1);
 }
 
-static void draw_mail_icon(void) {
+static void draw_home_art(int page, uint8_t a) {
     int x, y, w, h;
-
     home_art_rect(&x, &y, &w, &h);
-    y += h / 6;
-    h = h * 2 / 3;
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    home_tile(255);
-    ui_icon_mail((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
-                 hal_tick_ms(), col_ring, col_text, col_blue_dim, 255);
-    home_caption("消息", 255);
-}
-
-static void draw_gear_icon(void) {
-    int x, y, w, h;
-    int cx, cy, rad;
-
-    home_art_rect(&x, &y, &w, &h);
-    cx = x + w / 2;
-    cy = y + h / 2;
-    rad = (w < h ? w : h) / 2;
-    if (rad < 8) rad = 8;
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    home_tile(255);
-    ui_icon_gear((int16_t)cx, (int16_t)cy, (int16_t)rad,
-                 hal_tick_ms(), col_ring, col_blue_dim, 255);
-    home_caption("设置", 255);
-}
-
-static void draw_sport_icon(void) {
-    int x, y, w, h;
-    int scale;
-
-    home_art_rect(&x, &y, &w, &h);
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    home_tile(255);
-    scale = w / 32;
-    if (h / 42 < scale) scale = h / 42;
-    if (scale < 1) scale = 1;
-    ui_svg_draw_p((int16_t)(x + (w - 32 * scale) / 2),
-                  (int16_t)(y + (h - 42 * scale) / 2),
-                  (uint8_t)scale, run_svg[run_frame()], 10, icon_pal, 5, col_accent, 255,
-                  (uint8_t)(scale + 3 > 8 ? 8 : scale + 3));
-    home_caption("运动", 255);
-}
-
-static void draw_music_icon(void) {
-    int x, y, w, h;
-    int cx, cy, r;
-    int pulse;
-
-    home_art_rect(&x, &y, &w, &h);
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
-    home_tile(255);
-    cx = x + w / 2;
-    cy = y + h / 2;
-    pulse = ui_anim_pulse(hal_tick_ms(), 1600u);
-    cy += (pulse - 128) * UI_MY(18) / 128;
-    r = (w < h ? w : h) / 5;
-    if (r < 4) r = 4;
-    ui_draw_round((int16_t)(cx - r), (int16_t)cy,
-                  (int16_t)(r * 2), (int16_t)(r * 2), (int16_t)r, col_accent, 255);
-    ui_draw_line((int16_t)(cx + r), (int16_t)(cy + r),
-                 (int16_t)(cx + r), (int16_t)(cy - r * 2), col_ring, 255);
-    ui_draw_line((int16_t)(cx + r), (int16_t)(cy - r * 2),
-                 (int16_t)(cx + r * 2), (int16_t)(cy - r), col_ring, 255);
-    home_caption("音乐", 255);
+    if (page == UI_PAGE_MSG) {
+        ui_icon_mail((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
+                     hal_tick_ms(), col_ring, col_text, col_blue_dim, a);
+    } else if (page == UI_PAGE_SETTINGS) {
+        int rad = (w < h ? w : h) / 2;
+        if (rad < 8) rad = 8;
+        ui_icon_gear((int16_t)(x + w / 2), (int16_t)(y + h / 2), (int16_t)rad,
+                     hal_tick_ms(), col_ring, col_blue_dim, a);
+    } else if (page == UI_PAGE_SPORT) {
+        int scale = w / 32;
+        if (h / 42 < scale) scale = h / 42;
+        if (scale < 1) scale = 1;
+        ui_svg_draw_p((int16_t)(x + (w - 32 * scale) / 2),
+                      (int16_t)(y + (h - 42 * scale) / 2),
+                      (uint8_t)scale, run_svg[run_frame()], 10, icon_pal, 5, col_accent, a,
+                      (uint8_t)(scale + 3 > 8 ? 8 : scale + 3));
+    } else if (page == UI_PAGE_MUSIC) {
+        ui_icon_music((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
+                      hal_tick_ms(), col_ring, col_accent, col_text, a);
+    }
 }
 
 static void draw_sport_child(uint8_t a) {
@@ -783,7 +763,9 @@ static void draw_msg_app(uint8_t a) {
     if (row_h < 20) {
         row_h = 20;
     }
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
     if (link_msg_list_ready()) {
         /* 高亮先画，点阵只画文字像素，背景保持透明。 */
         ui_draw_round(2, (int16_t)(top + vis * row_h + 1),
@@ -823,6 +805,7 @@ static void settings_side(int idx, char *buf, int cap) {
 }
 
 static void draw_settings_app(uint8_t a) {
+    int top = title_header_h();
     int y0;
     int pitch;
     int vis = vis_index(st->settings.scroll.x, SET_N);
@@ -830,13 +813,18 @@ static void draw_settings_app(uint8_t a) {
     int x, y, w, h;
     char side[8];
 
-    list_place(title_header_h(), &y0, &pitch);
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    list_place(top, &y0, &pitch);
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
     for (i = 0; i < SET_N; i++) {
         if (i == vis) {
             continue;
         }
         stack_box(st->settings.scroll.x, i, y0, pitch, &x, &y, &w, &h);
+        if (y + h <= top || y >= UI_H) {
+            continue;
+        }
         settings_side(i, side, sizeof side);
         draw_labeled_card(x, y, w, h, 0, set_name[i], side[0] ? side : 0, a);
     }
@@ -1215,29 +1203,60 @@ static void draw_app_content(ui_menu_t *menu, uint8_t a) {
 
 static void draw_open_window(ui_menu_t *menu) {
     int z = menu->zoom.scale;
+    int ez, page;
     int ix, iy, iw, ih;
-    int x, y, w, h;
-    home_icon_rect(&ix, &iy, &iw, &ih);
-    x = ix + (0 - ix) * z / 255;
-    y = iy + (0 - iy) * z / 255;
-    w = iw + (UI_W - iw) * z / 255;
-    h = ih + (UI_H - ih) * z / 255;
-    int sc = w * 256 / UI_W;
+    int x, y, w, h, rad, sc;
 
     if (z <= 0) {
         return;
     }
-    if (sc < 1) {
-        sc = 1;
+    if (z >= 255) {
+        ui_draw_xform(256, 0, 0);
+        draw_app_content(menu, 255);
+        return;
     }
-    if (z < 255) {
-        draw_outer_pages(256, 0);
-    }
+    page = menu == &st->sport ? UI_PAGE_SPORT :
+           (menu == &st->messages ? UI_PAGE_MSG :
+           (menu == &st->settings ? UI_PAGE_SETTINGS : UI_PAGE_MUSIC));
+    ez = (z * (z + 255)) / 510;
+    home_icon_rect(&ix, &iy, &iw, &ih);
+    x = ix - ix * ez / 255;
+    y = iy - iy * z / 255;
+    w = iw + (UI_W - iw) * ez / 255;
+    h = ih + (UI_H - ih) * z / 255;
+    rad = (ih / 4) * (255 - z) / 255;
+
     ui_draw_xform(256, 0, 0);
-    ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
-                  (int16_t)(16 * (255 - z) / 255), col_bg, 255);
-    ui_draw_xform(sc, x, y);
-    draw_app_content(menu, 255);
+    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, 255);
+    if (z < 180) {
+        home_caption_y(page_names[page], y + h + UI_MY(60),
+                       (uint8_t)((180 - z) * 255 / 180));
+    }
+    if (rad >= 2) {
+        ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
+                      (int16_t)rad, col_line, (uint8_t)(255 - z));
+        ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
+                      (int16_t)(w - 2), (int16_t)(h - 2),
+                      (int16_t)(rad - 1), z < 70 ? col_blue_dim : col_bg, 255);
+    }
+    if (z < 70) {
+        int art_sc = w * 256 / iw;
+        ui_draw_xform(art_sc,
+                      x + w / 2 - (ix + iw / 2) * art_sc / 256,
+                      y + h / 2 - (iy + ih / 2) * art_sc / 256);
+        draw_home_art(page, 255);
+        ui_draw_xform(256, 0, 0);
+        ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
+                      (int16_t)(w - 2), (int16_t)(h - 2),
+                      (int16_t)(rad > 1 ? rad - 1 : 0), col_bg,
+                      (uint8_t)(z * 255 / 70));
+    } else {
+        uint8_t content_a = (uint8_t)((z - 70) * 255 / 185);
+        sc = w * 256 / UI_W;
+        if (sc < 1) sc = 1;
+        ui_draw_xform(sc, x, y);
+        draw_app_content(menu, content_a);
+    }
 }
 
 static void draw_pushed(ui_menu_t *menu) {
