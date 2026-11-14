@@ -2,6 +2,10 @@
 
 Flutter 手表配套界面，支持 Windows 与 Android。当前阶段仅 UI 预览，设备传输、消息发送、歌词同步和反向播放控制尚未接入。
 
+> 要把界面接上真机（HTTP/蓝牙/串口/协议帧），先看
+> [BACKEND_HANDOFF.md](BACKEND_HANDOFF.md)：包含待接入清单、建议的 service 分层、
+> 协议速查表和已踩过的坑。
+
 ## Run
 
 ```bat
