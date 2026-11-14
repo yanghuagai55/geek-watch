@@ -37,4 +37,8 @@ abstract interface class WatchTransport {
   Future<void> send(Uint8List bytes);
 
   Future<void> close();
+
+  /// 仅释放本端监听，保留硬件链路（Android 前台服务）。
+  /// 应用退出/页面销毁走这里，用户主动“断开设备”才走 [close]。
+  Future<void> release() => close();
 }

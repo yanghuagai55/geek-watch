@@ -20,7 +20,15 @@ abstract final class AppFonts {
   static const han = 'AT32 Serif SC';
 
   /// 正文回退：思源宋体缺字时交给系统字体，避免出现豆腐块。
-  static const systemFallback = ['Microsoft YaHei UI', 'PingFang SC', 'Roboto'];
+  /// Windows 用微软雅黑，Android 用 Noto/Sans 系列（系统会再回退到中文）。
+  static const systemFallback = [
+    'Microsoft YaHei UI',
+    'PingFang SC',
+    'Noto Sans SC',
+    'Noto Sans CJK SC',
+    'Roboto',
+    'sans-serif',
+  ];
 
   /// 标题回退：Playfair 没有汉字，中文标题落回思源宋体。
   static const headingFallback = [han, ...systemFallback];

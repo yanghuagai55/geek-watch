@@ -5,7 +5,7 @@ import '../state/watch_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
 import '../widgets/metric_card.dart';
-import '../widgets/watch_face.dart';
+import '../widgets/watch_preview.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({
@@ -212,12 +212,9 @@ class _HeroCard extends StatelessWidget {
               ],
             ),
           );
-          final watch = SizedBox(
+          final watch = WatchPreview(
+            controller: controller,
             width: stacked ? 148 : 174,
-            child: WatchFace(
-              now: controller.now,
-              use24Hour: controller.use24Hour,
-            ),
           );
           if (stacked) {
             return Column(
@@ -428,10 +425,7 @@ class _PortraitWatchCard extends StatelessWidget {
               const SizedBox(width: 12),
               SizedBox(
                 width: watchWidth,
-                child: WatchFace(
-                  now: controller.now,
-                  use24Hour: controller.use24Hour,
-                ),
+                child: WatchPreview(controller: controller, width: watchWidth),
               ),
             ],
           ),

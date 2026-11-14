@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'android_spp.dart';
 import 'watch_protocol.dart';
 import 'watch_transport.dart';
 import 'windows_rfcomm.dart';
@@ -57,6 +58,9 @@ class WatchSession {
   LinkState get state => _state;
 
   bool get isConnected => _transport?.isConnected == true;
+
+  /// 抓屏期间会暂停遥测；媒体跟随等逻辑可用它避让。
+  bool get isCapturing => _snapshotBusy;
 
   /// 状态流：连接中 / 已连接 / 失败 / 空闲。
   Stream<LinkState> get states => _states.stream;
@@ -111,6 +115,10 @@ class WatchSession {
   }
 
   Future<void> disconnect() async {
+    await _teardown(releaseOnly: false);
+  }
+
+  Future<void> _teardown({required bool releaseOnly}) async {
     _telemetry?.cancel();
     _telemetry = null;
 
@@ -125,7 +133,11 @@ class WatchSession {
 
     if (transport != null) {
       try {
-        await transport.close();
+        if (releaseOnly) {
+          await transport.release();
+        } else {
+          await transport.close();
+        }
       } catch (error) {
         _log('断开出错：$error');
       }
@@ -239,7 +251,7 @@ class WatchSession {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    await disconnect();
+    await _teardown(releaseOnly: true);
     await _states.close();
     await _stats.close();
     await _controls.close();
@@ -377,10 +389,9 @@ class WatchSession {
   ) {
     switch (type) {
       case TransportType.spp:
-        if (!Platform.isWindows) {
-          throw const TransportException('经典 SPP 目前仅支持 Windows 桌面端');
-        }
-        return WindowsRfcommTransport(address);
+        if (Platform.isWindows) return WindowsRfcommTransport(address);
+        if (Platform.isAndroid) return AndroidSppTransport(address);
+        throw const TransportException('经典 SPP 目前支持 Windows / Android');
       case TransportType.ble:
         throw const TransportException('BLE 链路尚未接入 Flutter 端，请先使用经典 SPP');
       case TransportType.serial:

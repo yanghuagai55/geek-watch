@@ -31,22 +31,24 @@ class SettingsPage extends StatelessWidget {
           subtitle: '沿用现有 WinUI 调试台的默认参数',
           children: [
             SegmentedButton<TransportType>(
-              segments: const [
-                ButtonSegment(
+              segments: [
+                const ButtonSegment(
                   value: TransportType.spp,
                   icon: Icon(Icons.bluetooth_rounded),
                   label: Text('SPP'),
                 ),
-                ButtonSegment(
-                  value: TransportType.ble,
-                  icon: Icon(Icons.bluetooth_searching_rounded),
-                  label: Text('BLE'),
-                ),
-                ButtonSegment(
-                  value: TransportType.serial,
-                  icon: Icon(Icons.cable_rounded),
-                  label: Text('串口'),
-                ),
+                if (Platform.isWindows)
+                  const ButtonSegment(
+                    value: TransportType.ble,
+                    icon: Icon(Icons.bluetooth_searching_rounded),
+                    label: Text('BLE'),
+                  ),
+                if (Platform.isWindows)
+                  const ButtonSegment(
+                    value: TransportType.serial,
+                    icon: Icon(Icons.cable_rounded),
+                    label: Text('串口'),
+                  ),
               ],
               selected: {controller.transport},
               showSelectedIcon: false,
@@ -115,71 +117,131 @@ class SettingsPage extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        _Section(
-          icon: Icons.queue_music_rounded,
-          title: '系统媒体与后台',
-          subtitle: '读取 Windows 媒体会话；关闭窗口后可驻留托盘',
-          children: [
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('跟随系统媒体'),
-              subtitle: const Text('标题过长会分页轮播；有同名 .lrc 时按时间轴推送歌词'),
-              value: controller.mediaFollow,
-              onChanged: controller.setMediaFollow,
-            ),
-            if (controller.mediaTitle.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4, bottom: 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.play_circle_outline_rounded,
-                      size: 16,
-                      color: scheme.primary,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        controller.mediaArtist.isEmpty
-                            ? controller.mediaTitle
-                            : '${controller.mediaTitle} · ${controller.mediaArtist}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: scheme.onSurfaceVariant,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                    ),
-                  ],
+        if (Platform.isAndroid) ...[
+          const SizedBox(height: 16),
+          _Section(
+            icon: Icons.developer_mode_rounded,
+            title: '安卓后台与系统集成',
+            subtitle: '前台服务保持连接；App 退出后仍会同步媒体与控制播放',
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('跟随系统媒体'),
+                subtitle: const Text('读取汽水音乐等应用的会话，标题按两行一页轮播'),
+                value: controller.mediaFollow,
+                onChanged: controller.setMediaFollow,
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('转发系统通知'),
+                subtitle: const Text('把通知标题与内容写入手表消息槽（长文会截断）'),
+                value: controller.notificationForward,
+                onChanged: controller.setNotificationForward,
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('通知读取权限'),
+                subtitle: Text(
+                  controller.notificationAccess
+                      ? '已授权：可读取媒体会话与通知'
+                      : '未授权：媒体标题与通知都读不到',
+                ),
+                trailing: OutlinedButton(
+                  onPressed: () async {
+                    await controller.openNotificationAccess();
+                    await Future<void>.delayed(const Duration(seconds: 2));
+                    await controller.refreshAndroidStatus();
+                  },
+                  child: Text(controller.notificationAccess ? '重新授权' : '去授权'),
                 ),
               ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('关闭窗口后驻留托盘'),
-              subtitle: const Text('继续在右下角托盘运行，双击图标恢复窗口'),
-              value: controller.backgroundEnabled,
-              onChanged: controller.setBackgroundEnabled,
-            ),
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  if (!Platform.isWindows) return;
-                  final folder = Directory(LrcLibrary.defaultDirectory);
-                  if (!await folder.exists()) {
-                    await folder.create(recursive: true);
-                  }
-                  await Process.run('explorer', <String>[folder.path]);
-                },
-                icon: const Icon(Icons.folder_open_rounded, size: 17),
-                label: const Text('打开歌词目录'),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('电池优化白名单'),
+                subtitle: Text(
+                  controller.batteryExempt
+                      ? '已加入：后台链路更稳定'
+                      : '未加入：MIUI / HyperOS 可能清理后台',
+                ),
+                trailing: OutlinedButton(
+                  onPressed: () async {
+                    await controller.openBatterySettings();
+                    await Future<void>.delayed(const Duration(seconds: 2));
+                    await controller.refreshAndroidStatus();
+                  },
+                  child: const Text('去设置'),
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
+        ],
+        if (Platform.isWindows) ...[
+          const SizedBox(height: 16),
+          _Section(
+            icon: Icons.queue_music_rounded,
+            title: '系统媒体与后台',
+            subtitle: '读取 Windows 媒体会话；关闭窗口后可驻留托盘',
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('跟随系统媒体'),
+                subtitle: const Text('标题过长会分页轮播；有同名 .lrc 时按时间轴推送歌词'),
+                value: controller.mediaFollow,
+                onChanged: controller.setMediaFollow,
+              ),
+              if (controller.mediaTitle.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 8),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.play_circle_outline_rounded,
+                        size: 16,
+                        color: scheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          controller.mediaArtist.isEmpty
+                              ? controller.mediaTitle
+                              : '${controller.mediaTitle} · ${controller.mediaArtist}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('关闭窗口后驻留托盘'),
+                subtitle: const Text('继续在右下角托盘运行，双击图标恢复窗口'),
+                value: controller.backgroundEnabled,
+                onChanged: controller.setBackgroundEnabled,
+              ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    if (!Platform.isWindows) return;
+                    final folder = Directory(LrcLibrary.defaultDirectory);
+                    if (!await folder.exists()) {
+                      await folder.create(recursive: true);
+                    }
+                    await Process.run('explorer', <String>[folder.path]);
+                  },
+                  icon: const Icon(Icons.folder_open_rounded, size: 17),
+                  label: const Text('打开歌词目录'),
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 16),
         _Section(
           icon: Icons.palette_outlined,

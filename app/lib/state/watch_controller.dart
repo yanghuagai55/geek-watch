@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 
+import '../services/android_spp.dart';
 import '../services/lrc_library.dart';
 import '../services/media_monitor.dart';
+import '../services/snapshot_image.dart';
 import '../services/system_tray.dart';
 import '../services/text_bitmap.dart';
 import '../services/text_paginator.dart';
@@ -62,6 +65,15 @@ class WatchController extends ChangeNotifier {
   bool backgroundEnabled = false;
   String mediaTitle = '';
   String mediaArtist = '';
+
+  /// Android 系统集成：通知转发、通知读取权限、电池优化白名单。
+  bool notificationForward = true;
+  bool notificationAccess = false;
+  bool batteryExempt = false;
+
+  /// 主页预览用的真机画面（连接后自动抓一帧，点击可刷新）。
+  ui.Image? deviceScreen;
+  bool capturingPreview = false;
 
   /// 设置变更回调（main 里做防抖落盘）。
   VoidCallback? onSettingsChanged;
@@ -154,6 +166,7 @@ class WatchController extends ChangeNotifier {
           active.syncTime(DateTime.now()).catchError((Object _) => false),
         );
       }
+      unawaited(capturePreview());
       return null;
     } catch (error) {
       lastError = error is TransportException ? error.message : '$error';
@@ -242,6 +255,28 @@ class WatchController extends ChangeNotifier {
     return active.requestSnapshot();
   }
 
+  /// 抓一帧真机画面给主页预览用；失败时保留旧画面。
+  Future<void> capturePreview() async {
+    final active = session;
+    if (active == null || !connected || capturingPreview) return;
+    capturingPreview = true;
+    notifyListeners();
+    try {
+      final snapshot = await active.requestSnapshot();
+      if (snapshot == null) return;
+      final image = await decodeWatchSnapshot(snapshot);
+      if (!connected) {
+        image.dispose();
+        return;
+      }
+      deviceScreen?.dispose();
+      deviceScreen = image;
+    } finally {
+      capturingPreview = false;
+      notifyListeners();
+    }
+  }
+
   void setMessageSlot(int index, String text) {
     if (index < 0 || index >= messageSlots.length) return;
     messageSlots[index] = text;
@@ -253,9 +288,41 @@ class WatchController extends ChangeNotifier {
     if (state != LinkState.connected) {
       _liveTelemetry = false;
       _stopMediaPager();
+      deviceScreen?.dispose();
+      deviceScreen = null;
+    } else {
+      unawaited(_syncAndroidIntegration());
     }
     _syncMediaPolling();
     notifyListeners();
+  }
+
+  /// 把设置同步给 Android 前台服务，并刷新系统权限状态。
+  Future<void> _syncAndroidIntegration() async {
+    if (!Platform.isAndroid) return;
+    await AndroidWatchBridge.setMediaFollow(mediaFollow);
+    await AndroidWatchBridge.setNotificationForward(notificationForward);
+    await refreshAndroidStatus();
+  }
+
+  Future<void> refreshAndroidStatus() async {
+    if (!Platform.isAndroid) return;
+    final access = await AndroidWatchBridge.hasNotificationAccess();
+    final exempt = await AndroidWatchBridge.isBatteryExempt();
+    if (access == notificationAccess && exempt == batteryExempt) return;
+    notificationAccess = access;
+    batteryExempt = exempt;
+    notifyListeners();
+  }
+
+  Future<void> openNotificationAccess() async {
+    if (!Platform.isAndroid) return;
+    await AndroidWatchBridge.openNotificationAccess();
+  }
+
+  Future<void> openBatterySettings() async {
+    if (!Platform.isAndroid) return;
+    await AndroidWatchBridge.openBatterySettings();
   }
 
   void _applyStats(WatchStats stats) {
@@ -310,7 +377,12 @@ class WatchController extends ChangeNotifier {
   }
 
   Future<void> _pollMedia() async {
-    if (_pollingMedia || !connected || !mediaFollow) return;
+    if (_pollingMedia ||
+        !connected ||
+        !mediaFollow ||
+        session?.isCapturing == true) {
+      return;
+    }
     _pollingMedia = true;
     try {
       final media = await _mediaMonitor.nowPlaying();
@@ -450,6 +522,18 @@ class WatchController extends ChangeNotifier {
     mediaFollow = value;
     _stopMediaPager();
     _syncMediaPolling();
+    if (Platform.isAndroid) {
+      unawaited(AndroidWatchBridge.setMediaFollow(value));
+    }
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void setNotificationForward(bool value) {
+    notificationForward = value;
+    if (Platform.isAndroid) {
+      unawaited(AndroidWatchBridge.setNotificationForward(value));
+    }
     notifyListeners();
     onSettingsChanged?.call();
   }
@@ -520,6 +604,7 @@ class WatchController extends ChangeNotifier {
     screenTimeout = '30 秒';
     previewConnected = false;
     mediaFollow = true;
+    notificationForward = true;
     backgroundEnabled = false;
     _stopMediaPager();
     _syncMediaPolling();
@@ -536,6 +621,7 @@ class WatchController extends ChangeNotifier {
         values[key] is String ? values[key] as String : fallback;
 
     mediaFollow = readBool('mediaFollow', mediaFollow);
+    notificationForward = readBool('notificationForward', notificationForward);
     backgroundEnabled = readBool('backgroundEnabled', backgroundEnabled);
     autoConnect = readBool('autoConnect', autoConnect);
     autoSyncTime = readBool('autoSyncTime', autoSyncTime);
@@ -549,15 +635,20 @@ class WatchController extends ChangeNotifier {
       (item) => item.name == transportName,
       orElse: () => TransportType.spp,
     );
+    if (Platform.isAndroid && transport != TransportType.spp) {
+      transport = TransportType.spp;
+    }
     deviceAddress = readString('deviceAddress', deviceAddress);
     serialPort = readString('serialPort', serialPort);
     baudRate = readString('baudRate', baudRate);
     final level = values['brightness'];
     if (level is num) brightness = level.toDouble().clamp(0.0, 1.0);
+    if (Platform.isAndroid) unawaited(refreshAndroidStatus());
   }
 
   Map<String, Object?> get persistedSettings => <String, Object?>{
     'mediaFollow': mediaFollow,
+    'notificationForward': notificationForward,
     'backgroundEnabled': backgroundEnabled,
     'autoConnect': autoConnect,
     'autoSyncTime': autoSyncTime,
@@ -582,6 +673,7 @@ class WatchController extends ChangeNotifier {
     _stateSub?.cancel();
     _statsSub?.cancel();
     _controlsSub?.cancel();
+    deviceScreen?.dispose();
     unawaited(session?.dispose());
     super.dispose();
   }

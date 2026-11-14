@@ -17,7 +17,7 @@ enum {
     SET_N = 8,
     DETAIL_N = 3,
     ABOUT_N = 6,
-    MSG_N = 3,
+    MSG_N = 5,
     M_BADGE_W = 680,
     M_BADGE_H = 220,
     M_BADGE_GAP = 16,
@@ -784,19 +784,28 @@ static void draw_sensor_page(uint8_t a) {
 }
 
 static void draw_msg_app(uint8_t a) {
-    int y0;
-    int pitch;
-    int vis = vis_index(st->messages.scroll.x, MSG_N);
+    int top = title_header_h();
+    int row_h = (UI_H - top) / MSG_N;
+    int vis = st->messages.focus;
 
-    const char *names[MSG_N];
-    int i;
-
-    list_place(title_header_h(), &y0, &pitch);
-    for (i = 0; i < MSG_N; i++) {
-        names[i] = link_message(i);
+    if (row_h < 20) {
+        row_h = 20;
     }
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    draw_stack(st->messages.scroll.x, MSG_N, vis, y0, pitch, names, 0, a);
+    if (link_msg_list_ready()) {
+        /* 高亮先画，点阵只画文字像素，背景保持透明。 */
+        ui_draw_round(2, (int16_t)(top + vis * row_h + 1),
+                      (int16_t)(UI_W - 4), (int16_t)(row_h - 2),
+                      5, col_blue_dim, a);
+        ui_draw_round(2, (int16_t)(top + vis * row_h + 1),
+                      3, (int16_t)(row_h - 2), 1, col_ring, a);
+        ui_mask1_draw(0, (int16_t)top, UI_W, 112,
+                      link_msg_list_mask(), col_text, a);
+    } else {
+        ui_text_draw_center((int16_t)(UI_W / 2),
+                            (int16_t)(top + (UI_H - top) / 2 - 8),
+                            "无消息", col_dim, a, 2);
+    }
     draw_header("消息", a, 1);
 }
 
@@ -846,34 +855,14 @@ static void draw_settings_app(uint8_t a) {
 }
 
 static void draw_message_page(uint8_t a) {
-    const char *caption = link_message(st->messages.child);
-    char body[40];
-    char meta[24];
-    int margin = UI_MX(M_MARGIN);
-    int x = margin;
-    int y = title_header_h() + UI_MY(25);
-    int w = UI_W - margin * 2;
-    int h = UI_MY(470);
-    int pad = UI_MX(90);
-
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
-                  (int16_t)(h / 6), col_line, a);
-    ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
-                  (int16_t)(w - 2), (int16_t)(h - 2),
-                  (int16_t)(h / 6 - 1), col_blue_dim, a);
-    snprintf(meta, sizeof meta, "MESSAGE %02d", st->messages.child + 1);
-    ui_draw_text((int16_t)(x + pad), (int16_t)(y + UI_MY(55)), meta, col_accent, a, 1);
-    ui_text_fit(body, sizeof body, caption, (int16_t)(w - pad * 2), 1);
-    ui_text_draw_center((int16_t)(UI_W / 2),
-                        (int16_t)(y + h / 2 + UI_MY(25)),
-                        body, col_text, a, 1);
-    ui_draw_line((int16_t)(x + pad), (int16_t)(y + h / 2 - UI_MY(20)),
-                 (int16_t)(x + w - pad), (int16_t)(y + h / 2 - UI_MY(20)),
-                 col_line, a);
-    ui_draw_round((int16_t)(x + pad), (int16_t)(y + h - UI_MY(75)),
-                  (int16_t)UI_MX(140), (int16_t)UI_MY(14), 1, col_ring, a);
-    draw_header("消息", a, 0);
+    if (link_msg_detail_ready()) {
+        /* 详情页不要标题，整屏都是手机渲染好的正文。 */
+        ui_mask1_draw(0, 0, UI_W, UI_H, link_msg_detail_mask(), col_text, a);
+    } else {
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2 - 8),
+                            "无消息", col_dim, a, 2);
+    }
 }
 
 static void draw_about_page(uint8_t a) {
@@ -1032,6 +1021,10 @@ static void on_confirm(ui_menu_t *menu) {
     result = ui_menu_confirm(menu);
     if (result == UI_MENU_OPENED) {
         st->reveal_ms = hal_tick_ms();
+        if (menu == &st->messages) {
+            /* 打开一级消息页才向手机要列表，节省手表 RAM。 */
+            link_request_messages();
+        }
     }
     if (result != UI_MENU_ROW) {
         return;
@@ -1079,6 +1072,9 @@ static void on_confirm(ui_menu_t *menu) {
     if (menu == &st->music) {
         music_page_key(HAL_KEY2);
         return;
+    }
+    if (menu == &st->messages) {
+        link_request_message_detail(menu->focus);
     }
     ui_menu_enter_child(menu, 1);
     ui_trace_emit("ui_nav_goto(message)");
@@ -1294,6 +1290,24 @@ static void draw_pushed(ui_menu_t *menu) {
     }
 }
 
+static void msg_link_sync(void) {
+    static int was_open;
+    static int prev_level = UI_MENU_ICON;
+    int level = st->messages.level;
+    int open = level != UI_MENU_ICON;
+
+    /* 从详情返回列表时详情图已覆盖缓冲，重新要一份列表。 */
+    if (prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
+        link_request_messages();
+    }
+    if (was_open && !open) {
+        /* 离开消息应用：让手机恢复媒体推送。 */
+        link_leave_messages();
+    }
+    was_open = open;
+    prev_level = level;
+}
+
 static int dot_alpha(uint32_t now) {
     int page = vis_index(st->scroll.x, HOME_N);
     int moving = ui_anim_busy(&st->scroll);
@@ -1390,6 +1404,7 @@ void ui_frame(void) {
     }
     ui_menu_tick(&st->settings);
     ui_menu_tick(&st->messages);
+    msg_link_sync();
     ui_menu_tick(&st->sport);
     ui_menu_tick(&st->music);
 

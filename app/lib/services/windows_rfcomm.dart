@@ -243,6 +243,9 @@ class WindowsRfcommTransport implements WatchTransport {
     _receivePort = null;
     port?.close();
   }
+
+  @override
+  Future<void> release() => close();
 }
 
 // ---- isolate 入口 ---------------------------------------------------------

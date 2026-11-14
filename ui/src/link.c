@@ -14,6 +14,12 @@
      08 调试    1 开 0 关
      0A 回主页  无数据，关闭子页并回到表盘
      0B 点阵    块号 0..3 + 128 字节 1bpp（128x32，共 512 字节）
+     14 要消息  无数据，请求最近 5 条消息列表（手机回 22）
+     15 要详情  1 字节序号 0..4（手机回 23）
+     16 离开消息 无数据，恢复媒体推送
+     22 列表点阵 块号 0..13 + 128 字节 1bpp（128x112）
+     23 详情点阵 块号 0..19 + 128 字节 1bpp（128x160）
+     24 清空消息 无数据，列表/详情都回到“无消息”
      13 传感器  无数据，回一行 DBG ... 调试文本
    手表 -> 手机：
      10 控制    1 播放 2 暂停
@@ -32,6 +38,12 @@ enum {
     LINK_PERF = 0x09,
     LINK_HOME = 0x0A,
     LINK_BMP = 0x0B,
+    LINK_MSG_LIST_REQ = 0x14,
+    LINK_MSG_DETAIL_REQ = 0x15,
+    LINK_MSG_LEAVE = 0x16,
+    LINK_MSG_LIST_BMP = 0x22,
+    LINK_MSG_DETAIL_BMP = 0x23,
+    LINK_MSG_CLEAR = 0x24,
     LINK_STATS = 0x12,
     LINK_SENSOR = 0x13,
     LINK_CTRL = 0x10,
@@ -44,6 +56,11 @@ enum {
     LINK_BMP_H = 32,
     LINK_BMP_CHUNK = 128,
     LINK_BMP_CHUNKS = 4,
+    LINK_MSG_LIST_H = 112,
+    LINK_MSG_DETAIL_H = 160,
+    LINK_MSG_LIST_CHUNKS = 14,
+    LINK_MSG_DETAIL_CHUNKS = 20,
+    LINK_MASK_BYTES = LINK_BMP_W * LINK_MSG_DETAIL_H / 8,
     ST_MARK = 0,
     ST_CMD = 1,
     ST_LEN = 2,
@@ -57,9 +74,14 @@ enum {
 
 static char msgs[LINK_MSG_N][LINK_MSG_LEN];
 static char lyric[LINK_LYRIC_LEN];
-/* 128x32 的 4bpp 覆盖位图，由 0x0B 分 4 块接收；0 表示保留给文字歌词。 */
-static uint8_t media_mask[LINK_BMP_W * LINK_BMP_H / 2];
+/* 媒体标题、消息列表、消息详情共用同一块位图缓冲：
+   4bpp 128x32=2048B，1bpp 128x112=1792B，1bpp 128x160=2560B。
+   同一时刻只会显示其中一种，手机在消息页期间会暂停媒体推送。 */
+static uint8_t mask_buf[LINK_MASK_BYTES];
+#define media_mask mask_buf
 static int media_mask_ready;
+static int msg_list_ready;
+static int msg_detail_ready;
 static uint32_t last_rx_ms;
 static int playing;
 static int bright;
@@ -122,6 +144,36 @@ static void send_ctrl(uint8_t action) {
     hal_link_write(frame, 5);
 }
 
+static void send_empty(uint8_t cmd) {
+    uint8_t frame[4];
+    frame[0] = LINK_MARK;
+    frame[1] = cmd;
+    frame[2] = 0;
+    frame[3] = (uint8_t)(frame[0] ^ frame[1] ^ frame[2]);
+    hal_link_write(frame, 4);
+}
+
+void link_request_messages(void) {
+    send_empty(LINK_MSG_LIST_REQ);
+}
+
+void link_request_message_detail(int index) {
+    uint8_t frame[5];
+    if (index < 0) {
+        index = 0;
+    }
+    frame[0] = LINK_MARK;
+    frame[1] = LINK_MSG_DETAIL_REQ;
+    frame[2] = 1;
+    frame[3] = (uint8_t)index;
+    frame[4] = (uint8_t)(frame[0] ^ frame[1] ^ frame[2] ^ frame[3]);
+    hal_link_write(frame, 5);
+}
+
+void link_leave_messages(void) {
+    send_empty(LINK_MSG_LEAVE);
+}
+
 /* 块号 0..3，每块 128 字节 = 8 行 1bpp；展开成 4bpp 覆盖位图。 */
 static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
     const int rows = LINK_BMP_H / LINK_BMP_CHUNKS;
@@ -132,6 +184,9 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
     }
     if (chunk == 0) {
         media_mask_ready = 0;
+        /* 同一块缓冲被媒体占用，消息页回退到“无消息”。 */
+        msg_list_ready = 0;
+        msg_detail_ready = 0;
         memset(media_mask, 0, sizeof media_mask);
         /* 新的媒体行到达时自动切到音乐页，让标题/歌词常驻可见。 */
         ui_app_open_music();
@@ -150,6 +205,40 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
     }
     if (chunk == LINK_BMP_CHUNKS - 1) {
         media_mask_ready = 1;
+    }
+}
+
+/* 128x112 列表图，1bpp，14 块；块 0 清空并让页面先显示“无消息”。 */
+static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
+    if (chunk >= LINK_MSG_LIST_CHUNKS || n < LINK_BMP_CHUNK) {
+        return;
+    }
+    if (chunk == 0) {
+        msg_list_ready = 0;
+        msg_detail_ready = 0;
+        media_mask_ready = 0;
+        memset(mask_buf, 0, LINK_BMP_W * LINK_MSG_LIST_H / 8);
+    }
+    memcpy(mask_buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
+    if (chunk == LINK_MSG_LIST_CHUNKS - 1) {
+        msg_list_ready = 1;
+    }
+}
+
+/* 128x160 详情图，1bpp，20 块；会覆盖列表缓冲。 */
+static void msg_detail_chunk(uint8_t chunk, const uint8_t *src, int n) {
+    if (chunk >= LINK_MSG_DETAIL_CHUNKS || n < LINK_BMP_CHUNK) {
+        return;
+    }
+    if (chunk == 0) {
+        msg_detail_ready = 0;
+        msg_list_ready = 0;
+        media_mask_ready = 0;
+        memset(mask_buf, 0, sizeof mask_buf);
+    }
+    memcpy(mask_buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
+    if (chunk == LINK_MSG_DETAIL_CHUNKS - 1) {
+        msg_detail_ready = 1;
     }
 }
 
@@ -181,6 +270,19 @@ static void apply_frame(void) {
     }
     if (cmd == LINK_BMP && len == 1 + LINK_BMP_CHUNK) {
         mask_chunk(pay[0], pay + 1, len - 1);
+        return;
+    }
+    if (cmd == LINK_MSG_LIST_BMP && len == 1 + LINK_BMP_CHUNK) {
+        msg_list_chunk(pay[0], pay + 1, len - 1);
+        return;
+    }
+    if (cmd == LINK_MSG_DETAIL_BMP && len == 1 + LINK_BMP_CHUNK) {
+        msg_detail_chunk(pay[0], pay + 1, len - 1);
+        return;
+    }
+    if (cmd == LINK_MSG_CLEAR && len == 0) {
+        msg_list_ready = 0;
+        msg_detail_ready = 0;
         return;
     }
     if (cmd == LINK_LYRIC) {
@@ -351,7 +453,9 @@ void link_init(void) {
     copy_cstr(msgs[2], LINK_MSG_LEN, "消息3");
     lyric[0] = 0;
     media_mask_ready = 0;
-    memset(media_mask, 0, sizeof media_mask);
+    msg_list_ready = 0;
+    msg_detail_ready = 0;
+    memset(mask_buf, 0, sizeof mask_buf);
     last_rx_ms = 0;
     playing = 0;
     bright = 1;
@@ -394,6 +498,22 @@ int link_media_mask_ready(void) {
 
 const uint8_t *link_media_mask(void) {
     return media_mask;
+}
+
+int link_msg_list_ready(void) {
+    return msg_list_ready;
+}
+
+const uint8_t *link_msg_list_mask(void) {
+    return mask_buf;
+}
+
+int link_msg_detail_ready(void) {
+    return msg_detail_ready;
+}
+
+const uint8_t *link_msg_detail_mask(void) {
+    return mask_buf;
 }
 
 int link_connected(void) {

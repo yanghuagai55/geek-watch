@@ -1,7 +1,7 @@
 # 后端接入交接文档（Flutter 配套应用）
 
 > 面向负责「把界面接上真机」的 agent / 开发者。
-> 当前状态：**Windows 经典 SPP 已接入真机**（裸 RFCOMM + Dart FFI，通道 1），性能遥测、消息、歌词、亮度、播放态、抓屏均已跑通；BLE / 串口是明确报错的占位实现。
+> 当前状态：**Windows / Android 经典 SPP 均已接入真机**（裸 RFCOMM + Dart FFI / 原生 BluetoothSocket，通道 1），性能遥测、消息、歌词、亮度、播放态、抓屏均已跑通；Android 端由前台服务持有链路，并接入系统媒体会话与通知转发；BLE / 串口是明确报错的占位实现。
 > 手表固件侧协议与 PC 侧参考实现都在仓库根 `/README.md` 与 `host/ble_tool.py`，**先读那两个**。
 
 最后更新：2026-11-14 · 工作区改动（未提交）
@@ -13,7 +13,7 @@
 | 项目 | 值 |
 | --- | --- |
 | 工程目录 | `app/`（Flutter 3.50 / Dart 3.14，SDK 约束 `^3.14.0`） |
-| 目标平台 | Windows（已实测）、Android（可编译，未实机验证） |
+| 目标平台 | Windows（已实测）、Android（已实测，平板 + HC-04） |
 | 产物 | `app/build/windows/x64/runner/Release/watch_companion.exe` |
 | 依赖 | `material_ui ^1.1.0`（本 SDK 已把 `flutter/material.dart` 迁到这个包）、`prism_ui`（vendored 路径依赖） |
 
@@ -113,6 +113,9 @@ app/windows/runner/
 | 手表音乐页 | 未连接状态 | 4 秒收不到合法帧显示「无连接」；连接后显示 PC 下发的标题/歌词 | `0B` |
 | 设置页「跟随系统媒体」 | Windows 媒体跟随 | SMTC 读标题/艺人/播放态；标题长时分页轮播，有 `.lrc` 时按时间轴推送 | `0B` + `04` |
 | 设置页「关闭窗口后驻留托盘」 | 后台驻留 | 关闭窗口只隐藏，托盘双击恢复、右键退出 | 原生 `watch_companion/tray` |
+| Android 设备页 | 连接手表 | 系统蓝牙配对 HC-04 后，App 通过经典 SPP 连同一套 A5 帧；链路由前台服务 `WatchLinkService` 持有 | `BluetoothSocket` + `watch_companion/bluetooth` |
+| Android 设置页「跟随系统媒体」 | 媒体标题 | `WatchNotificationListener` 读 MediaSessionManager，原生渲染 128×32 点阵并分页轮播；手表按键 0x10 反向控制系统媒体 | `0B` + `04` + `10` |
+| Android 消息页 | 应用名列表/详情 | 通知只缓存最近 5 条（过滤 shell、系统广告与常驻状态）；手表打开一级页发 `0x14` 后才下发 128×112 应用名点阵，选中后 `0x15` 拉 128×160 详情点阵，离开 `0x16` 恢复媒体推送 | `14` + `15` + `16` + `22` + `23` + `24` |
 
 ### 4.2 仍是本地状态 / 尚未实现
 
@@ -211,7 +214,7 @@ Stream<String> get logs;
 ## 7. 平台差异
 
 - **Windows 经典 SPP（已实现）**：系统分配的 COM 口打不开，走裸 RFCOMM socket（`AF_BTH` + `BTPROTO_RFCOMM`，通道 1），Dart 侧用 `dart:ffi` 调 `ws2_32.dll`。参考实现见 `host/winui/Services/SppTransport.cs` 与 `host/ble_tool.py`。命令行验证：`dart run tool/spp_probe.dart`。
-- **Android**：暂未接入。BLE 需要 `flutter_blue_plus` 之类插件；经典 SPP 需要 `BluetoothSocket` + `BLUETOOTH_CONNECT` 运行时权限（Android 12+）。`WatchSession` 的工厂函数是唯一需要改的地方。
+- **Android（已实现经典 SPP + 前台服务）**：`WatchLinkService.kt` 用 `BluetoothSocket` 连 HC-04（反射通道 1，失败回退 SPP UUID），App 退出后服务继续持有链路并每 2 秒补心跳；断链/写失败会每 15 秒自动重连。`android_spp.dart` 只做 MethodChannel/EventChannel 包装，`dispose()` 走 `release()` 不关闭原生 socket。Android 12+ 需要 `BLUETOOTH_CONNECT`（系统会弹“附近设备”），Android 13+ 还需 `POST_NOTIFICATIONS`；读取媒体会话与通知要在设置里手动开启“通知使用权”。BLE / 串口仍未接入。
 - **串口（未实现）**：CH340 直连 PA2/PA3，`115200 8N1`；Windows 需要 `serial_port` 类插件或再写一份 CreateFile/DCB 的 FFI，Android 需 USB Host + OTG。
 - 三条链路共用同一套帧，`transport` 只影响建链方式。
 - **HC-04 同一时刻只允许一个无线连接**：调试探针与 App 不要同时连；手机连着时电脑也连不上。
@@ -234,12 +237,12 @@ Stream<String> get logs;
 
 ## 9. 约束与坑（踩过的）
 
-1. **中文字体是子集**：`assets/fonts/AT32SerifSC-SemiBold.otf` 只含 411 个汉字。**新增 UI 文案如果用了没收录的字，会显示豆腐块**。把新字加进 `assets/fonts/subset_chars.txt` 后重跑：
+1. **中文字体是子集**：`assets/fonts/AT32SerifSC-SemiBold.otf` 只含当前界面字符串用到的 **479 个字形**，不是全字库。**新增 UI 文案如果用了没收录的字，Windows 会回退雅黑、Android 可能出豆腐块**。新增文案后重跑：
    ```bat
-   python -m fontTools.subset <原版思源宋体.otf> --text-file=subset_chars.txt --no-hinting --output-file=assets/fonts/AT32SerifSC-SemiBold.otf
+   python tool/make_font_subset.py --source <原版 SourceHanSerifSC-SemiBold.otf>
    ```
-   （字体已按 OFL 要求改名，别改回原名。）
-2. **字体分工**：正文/标签 = 思源宋体（`AppFonts.han`），标题与大数字 = Playfair（`AppFonts.latin`）。新增文本不用写 `fontFamily`，跟随主题即可；只有"大数字"需要显式指定。
+   脚本会扫描 Dart 字符串、重写 `assets/fonts/subset_chars.txt`、重新子集化，并按 OFL 要求把内部字体名改成 `AT32 Serif SC`。不要改回「思源宋体 / Source Han Serif」原名。
+2. **字体分工**：正文/标签 = 思源宋体 SemiBold（`AppFonts.han`），标题与大数字 = Playfair（`AppFonts.latin`）。新增文本不用写 `fontFamily`，跟随主题即可；只有"大数字"需要显式指定。
 3. **许可证**：`app/` 整体 **GPL-3.0-or-later**（含 FlClash `prism_ui` 派生代码）。新增文件保留 GPL 头，改动 `prism_ui` 要更新 `THIRD_PARTY_NOTICES.md`。
 4. **1 Hz 刷新是有意收窄的**：只有页面内容订阅 controller（`ListenableBuilder` 包在 `app_shell.dart` 的内容区）。**别把 `AnimatedBuilder` 加回根部** —— 之前整树每秒重建会把液态玻璃 shader 反复重建，曾触发引擎侧崩溃（见下条）。
 5. **崩溃取证已内置**：闪退后 exe 同目录会留 `crash.log`（Dart 异常+堆栈）、`native_crash.log`（异常码/模块偏移）、`crash_*.dmp`。历史问题：`flutter_windows.dll` 引用计数崩溃（`0xc000041d` @ `0x102DA`），未能稳定复现；如果接入后复现，把这三个文件一起看。设置里可关「液态玻璃底栏」做 A/B。

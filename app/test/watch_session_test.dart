@@ -53,6 +53,9 @@ class FakeTransport implements WatchTransport {
     if (!_closed.isClosed) await _closed.close();
   }
 
+  @override
+  Future<void> release() => close();
+
   void push(Uint8List bytes) {
     if (!_data.isClosed) _data.add(bytes);
   }

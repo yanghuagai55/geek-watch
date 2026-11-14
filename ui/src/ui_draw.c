@@ -12,6 +12,7 @@ enum {
     KIND_SVG = 5,
     KIND_IMAGE = 6,
     KIND_MASK = 7,
+    KIND_MASK1 = 8,
     ITEM_MAX = 96,
     STR_MAX = 640,
     PIC_MAX = 24
@@ -826,6 +827,36 @@ static void raster_mask(const draw_item_t *it, int band_y) {
            pic_ref[it->str_off], KIND_MASK);
 }
 
+void ui_mask1_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                   const uint8_t *bits, uint16_t color, uint8_t opacity) {
+    draw_item_t *it;
+    int ref;
+
+    if (!items || !bits || w <= 0 || h <= 0 || !item_space() || opacity == 0) {
+        return;
+    }
+    ref = pic_add(bits);
+    if (ref < 0) {
+        return;
+    }
+    it = &items[item_n++];
+    it->x = x;
+    it->y = y;
+    it->w = w;
+    it->h = h;
+    it->color = color;
+    it->str_off = (uint16_t)ref;
+    it->kind = KIND_MASK1;
+    it->opacity = opacity;
+    it->scale = 1;
+    stamp(it);
+}
+
+static void raster_mask1(const draw_item_t *it, int band_y) {
+    bitmap(it, band_y, it->x, it->y, it->w, it->h, 1,
+           pic_ref[it->str_off], KIND_MASK1);
+}
+
 static void raster_text(const draw_item_t *it, int band_y) {
     use_item_xform(it);
     const char *s = strs + it->str_off;
@@ -1093,6 +1124,7 @@ void ui_draw_flush(void) {
             case KIND_SVG: raster_svg(&items[n], y); break;
             case KIND_IMAGE: raster_image(&items[n], y); break;
             case KIND_MASK: raster_mask(&items[n], y); break;
+            case KIND_MASK1: raster_mask1(&items[n], y); break;
             }
         }
         stats.raster_us += hal_tick_us() - t0;
