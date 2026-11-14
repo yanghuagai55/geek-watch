@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "media_monitor.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -34,12 +35,19 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_BUILD=${FLUTT
 # Disable Windows macros that collide with C++ standard library functions.
 target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
+# Windows SDK 的 C++/WinRT 头仍使用实验性 coroutine（VS 18 默认报弃用错误）。
+target_compile_definitions(${BINARY_NAME} PRIVATE
+  "_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS")
+
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 # 崩溃取证：MiniDumpWriteDump 来自 dbghelp。
 target_link_libraries(${BINARY_NAME} PRIVATE "dbghelp.lib")
+# 媒体会话（C++/WinRT）与托盘图标。
+target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

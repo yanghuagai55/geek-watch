@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
 
+import '../services/lrc_library.dart';
 import '../state/watch_controller.dart';
 import '../widgets/common.dart';
 
@@ -13,10 +16,13 @@ class SettingsPage extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return PageScroll(
       children: [
-        const PageHeader(
+        PageHeader(
           title: '设置',
           subtitle: '连接、显示与设备偏好',
-          trailing: StatusPill(label: '本地界面状态', icon: Icons.tune_rounded),
+          trailing: StatusPill(
+            label: controller.connected ? '硬件已连接' : '本地界面状态',
+            icon: Icons.tune_rounded,
+          ),
         ),
         const SizedBox(height: 22),
         _Section(
@@ -96,7 +102,7 @@ class SettingsPage extends StatelessWidget {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('启动后自动连接'),
-              subtitle: const Text('接入真实传输层后生效'),
+              subtitle: const Text('应用启动后自动建立当前链路'),
               value: controller.autoConnect,
               onChanged: controller.setAutoConnect,
             ),
@@ -106,6 +112,71 @@ class SettingsPage extends StatelessWidget {
               subtitle: const Text('同步电脑或手机的当前时间'),
               value: controller.autoSyncTime,
               onChanged: controller.setAutoSyncTime,
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _Section(
+          icon: Icons.queue_music_rounded,
+          title: '系统媒体与后台',
+          subtitle: '读取 Windows 媒体会话；关闭窗口后可驻留托盘',
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('跟随系统媒体'),
+              subtitle: const Text('标题过长会分页轮播；有同名 .lrc 时按时间轴推送歌词'),
+              value: controller.mediaFollow,
+              onChanged: controller.setMediaFollow,
+            ),
+            if (controller.mediaTitle.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.play_circle_outline_rounded,
+                      size: 16,
+                      color: scheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        controller.mediaArtist.isEmpty
+                            ? controller.mediaTitle
+                            : '${controller.mediaTitle} · ${controller.mediaArtist}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: scheme.onSurfaceVariant,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('关闭窗口后驻留托盘'),
+              subtitle: const Text('继续在右下角托盘运行，双击图标恢复窗口'),
+              value: controller.backgroundEnabled,
+              onChanged: controller.setBackgroundEnabled,
+            ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  if (!Platform.isWindows) return;
+                  final folder = Directory(LrcLibrary.defaultDirectory);
+                  if (!await folder.exists()) {
+                    await folder.create(recursive: true);
+                  }
+                  await Process.run('explorer', <String>[folder.path]);
+                },
+                icon: const Icon(Icons.folder_open_rounded, size: 17),
+                label: const Text('打开歌词目录'),
+              ),
             ),
           ],
         ),
@@ -174,7 +245,7 @@ class SettingsPage extends StatelessWidget {
         _Section(
           icon: Icons.watch_outlined,
           title: '手表显示',
-          subtitle: '此处只预览控件，不会写入设备',
+          subtitle: controller.connected ? '亮度会直接写入手表' : '连接后亮度写入设备',
           children: [
             Row(
               children: [
@@ -192,6 +263,7 @@ class SettingsPage extends StatelessWidget {
             Slider(
               value: controller.brightness,
               onChanged: controller.setBrightness,
+              onChangeEnd: (_) => controller.applyBrightness(),
             ),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(
@@ -226,17 +298,27 @@ class SettingsPage extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.cable_outlined, color: scheme.primary),
+                  Icon(
+                    controller.connected
+                        ? Icons.link_rounded
+                        : Icons.cable_outlined,
+                    color: scheme.primary,
+                  ),
                   const SizedBox(width: 10),
-                  const Text(
-                    '下一阶段接入',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  Text(
+                    controller.connected ? '链路已就绪' : '当前链路',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 10),
               Text(
-                '界面与协议参数已经对齐，真实硬件传输尚未启用。',
+                controller.connected
+                    ? '${controller.transportName} · 已连接，性能、消息、歌词与抓屏均走真实设备。'
+                    : '经典 SPP 已在 Windows 桌面端接入；BLE 与串口链路后续补齐。',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                   height: 1.5,
@@ -262,9 +344,13 @@ class SettingsPage extends StatelessWidget {
           runSpacing: 10,
           children: [
             FilledButton.icon(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('设置已应用到本次预览，尚未写入设备或磁盘。')),
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                final ok = await controller.applyBrightness();
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(ok ? '亮度已写入手表。' : '设置已应用到本地，连接后写入手表。'),
+                  ),
                 );
               },
               icon: const Icon(Icons.check_rounded, size: 18),

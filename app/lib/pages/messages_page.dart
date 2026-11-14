@@ -15,14 +15,15 @@ class MessagesPage extends StatefulWidget {
 }
 
 class _MessagesPageState extends State<MessagesPage> {
-  final List<String> _slots = ['晚上记得给手表充电。', '明天 09:30 硬件评审', 'HELLO AT32'];
   late final TextEditingController _message;
   int _selectedSlot = 0;
 
   @override
   void initState() {
     super.initState();
-    _message = TextEditingController(text: _slots.first);
+    _message = TextEditingController(
+      text: widget.controller.messageSlots.first,
+    );
   }
 
   @override
@@ -34,11 +35,30 @@ class _MessagesPageState extends State<MessagesPage> {
   void _selectSlot(int index) {
     setState(() {
       _selectedSlot = index;
-      _message.text = _slots[index];
+      _message.text = widget.controller.messageSlots[index];
       _message.selection = TextSelection.collapsed(
         offset: _message.text.length,
       );
     });
+  }
+
+  Future<void> _sendMessage() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!widget.controller.connected) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(const SnackBar(content: Text('请先连接手表，再发送消息。')));
+      return;
+    }
+    final ok = await widget.controller.sendMessage(
+      _selectedSlot,
+      _message.text,
+    );
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(ok ? '已写入消息槽 ${_selectedSlot + 1}。' : '发送失败：手表没有回应。'),
+      ),
+    );
   }
 
   @override
@@ -50,7 +70,10 @@ class _MessagesPageState extends State<MessagesPage> {
         PageHeader(
           title: '设备消息',
           subtitle: '管理手表上的三个消息槽',
-          trailing: StatusPill(label: '发送待接入', color: scheme.onSurfaceVariant),
+          trailing: StatusPill(
+            label: widget.controller.connected ? '已连接' : '未连接',
+            color: widget.controller.connected ? null : scheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 22),
         LayoutBuilder(
@@ -59,9 +82,11 @@ class _MessagesPageState extends State<MessagesPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SectionHeader(
+                  SectionHeader(
                     title: '编辑消息',
-                    subtitle: '先在本地预览内容，不会触碰硬件',
+                    subtitle: widget.controller.connected
+                        ? '发送时按 UTF-8 字符边界截到 23 字节'
+                        : '先在本地预览内容，连接后即可写入手表',
                   ),
                   const SizedBox(height: 20),
                   DropdownButtonFormField<int>(
@@ -127,16 +152,21 @@ class _MessagesPageState extends State<MessagesPage> {
                     children: [
                       FilledButton.icon(
                         onPressed: () {
-                          setState(() => _slots[_selectedSlot] = _message.text);
+                          widget.controller.setMessageSlot(
+                            _selectedSlot,
+                            _message.text,
+                          );
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已保存到本地消息槽预览。')),
+                            SnackBar(
+                              content: Text('已保存到本地消息槽 ${_selectedSlot + 1}。'),
+                            ),
                           );
                         },
                         icon: const Icon(Icons.save_outlined, size: 18),
                         label: const Text('保存预览'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: () => showPrototypeMessage(context, '消息发送'),
+                        onPressed: _sendMessage,
                         icon: const Icon(Icons.send_outlined, size: 17),
                         label: const Text('发送到手表'),
                       ),
@@ -146,7 +176,7 @@ class _MessagesPageState extends State<MessagesPage> {
               ),
             );
             final slots = _MessageSlots(
-              slots: _slots,
+              slots: widget.controller.messageSlots,
               selected: _selectedSlot,
               onSelected: _selectSlot,
             );

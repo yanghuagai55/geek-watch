@@ -59,6 +59,8 @@ void ui_draw_invalidate(void);
 uint8_t ui_app_get_fps(void);
 /* 强制回到表盘主页（关闭子页/菜单） */
 void ui_app_go_home(void);
+/* 打开音乐页（PC 下发媒体点阵时使用） */
+void ui_app_open_music(void);
 
 /* ---- layout: permille of the panel, never hard-coded pixels ----
    屏幕长边竖着放。0 贴着左或上，1000 贴着右或下。 */
@@ -158,6 +160,9 @@ void ui_svg_draw_p(int16_t x, int16_t y, uint8_t scale,
                    uint16_t color, uint8_t opacity, uint8_t width);
 void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                    uint8_t scale, const uint16_t *rgb565, uint8_t opacity);
+/* 4bpp 覆盖位图：每字节两个像素，高半字节在前，alpha 0..15。 */
+void ui_mask_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                  const uint8_t *cover4, uint16_t color, uint8_t opacity);
 void ui_text_draw(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale);
 int16_t ui_text_width(const char *utf8, uint8_t scale);
@@ -197,6 +202,11 @@ const char *link_message(int index);
 int link_brightness(void);
 const char *link_media_lyric(void);
 int link_media_playing(void);
+/* 0x0B 下发的 128x32 点阵位图（4bpp 覆盖）；ready 为 0 时音乐页回退文字歌词。 */
+int link_media_mask_ready(void);
+const uint8_t *link_media_mask(void);
+/* 最近 4 秒内收到过合法帧即认为 PC/手机在线。 */
+int link_connected(void);
 /* 调试模式打开后，07 命令里按住的键会并进按键电平。 */
 uint8_t link_key_level(void);
 void link_key_edges(uint8_t *down, uint8_t *up);

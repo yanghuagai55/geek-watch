@@ -14,13 +14,15 @@ class MusicPage extends StatefulWidget {
 }
 
 class _MusicPageState extends State<MusicPage> {
-  bool _playing = true;
   double _position = 0.36;
   late final TextEditingController _lyrics;
+  late int _controlSeq;
 
   @override
   void initState() {
     super.initState();
+    _controlSeq = widget.controller.controlSeq;
+    widget.controller.addListener(_onControl);
     _lyrics = TextEditingController(
       text: '穿过晚风与灯火\n把时间慢放成一首歌\n在城市睡着以前\n留一点安静给自己',
     );
@@ -28,8 +30,39 @@ class _MusicPageState extends State<MusicPage> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_onControl);
     _lyrics.dispose();
     super.dispose();
+  }
+
+  void _onControl() {
+    final seq = widget.controller.controlSeq;
+    if (seq == _controlSeq) return;
+    _controlSeq = seq;
+    final action = widget.controller.lastControlAction;
+    if (action != 3 && action != 4) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _position = 0);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(action == 3 ? '手表切到下一首。' : '手表切到上一首。')),
+      );
+    });
+  }
+
+  Future<void> _syncLyrics() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!widget.controller.connected) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(const SnackBar(content: Text('请先连接手表，再同步歌词。')));
+      return;
+    }
+    messenger.showSnackBar(const SnackBar(content: Text('正在同步歌词…')));
+    final sent = await widget.controller.syncLyrics(_lyrics.text);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(content: Text(sent > 0 ? '已同步 $sent 行歌词。' : '同步失败：手表没有回应。')),
+    );
   }
 
   @override
@@ -39,22 +72,27 @@ class _MusicPageState extends State<MusicPage> {
       children: [
         PageHeader(
           title: '播放与歌词',
-          subtitle: '手表音乐页与电脑反向控制的界面预览',
-          trailing: StatusPill(label: '控制待接入', color: scheme.onSurfaceVariant),
+          subtitle: '歌词下行，手表按键上行',
+          trailing: StatusPill(
+            label: widget.controller.connected ? '已连接' : '未连接',
+            color: widget.controller.connected ? null : scheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 22),
         LayoutBuilder(
           builder: (context, constraints) {
             final player = _PlayerCard(
-              playing: _playing,
+              playing: widget.controller.playing,
+              connected: widget.controller.connected,
               position: _position,
-              onPlay: () => setState(() => _playing = !_playing),
+              onPlay: () =>
+                  widget.controller.setPlayState(!widget.controller.playing),
               onPosition: (value) => setState(() => _position = value),
               onSkip: () {
                 setState(() => _position = 0);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('已预览切歌交互，未控制任何播放器。')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('电脑端切歌仍为界面演示。')));
               },
             );
             final lyrics = AppCard(
@@ -63,7 +101,9 @@ class _MusicPageState extends State<MusicPage> {
                 children: [
                   SectionHeader(
                     title: '当前歌词',
-                    subtitle: 'UTF-8 文本 · 本地编辑预览',
+                    subtitle: widget.controller.connected
+                        ? '按行发送，每帧 ≤27 字节'
+                        : '本地编辑预览，连接后可按行同步',
                     trailing: Icon(
                       Icons.lyrics_outlined,
                       color: scheme.primary,
@@ -95,7 +135,7 @@ class _MusicPageState extends State<MusicPage> {
                         label: const Text('保存预览'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: () => showPrototypeMessage(context, '歌词同步'),
+                        onPressed: _syncLyrics,
                         icon: const Icon(Icons.sync_rounded, size: 18),
                         label: const Text('同步到手表'),
                       ),
@@ -127,7 +167,7 @@ class _MusicPageState extends State<MusicPage> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  '后续由手表按键发出 0x10 控制帧：播放 / 暂停、上一首、下一首。',
+                  '手表按键会通过 0x10 控制帧回传播放 / 暂停；本页状态会跟随变化。',
                   style: TextStyle(fontSize: 12, height: 1.5),
                 ),
               ),
@@ -142,6 +182,7 @@ class _MusicPageState extends State<MusicPage> {
 class _PlayerCard extends StatelessWidget {
   const _PlayerCard({
     required this.playing,
+    required this.connected,
     required this.position,
     required this.onPlay,
     required this.onPosition,
@@ -149,6 +190,7 @@ class _PlayerCard extends StatelessWidget {
   });
 
   final bool playing;
+  final bool connected;
   final double position;
   final VoidCallback onPlay;
   final ValueChanged<double> onPosition;
@@ -244,14 +286,14 @@ class _PlayerCard extends StatelessWidget {
             children: [
               IconButton(
                 onPressed: onSkip,
-                tooltip: '上一首（界面预览）',
+                tooltip: '上一首（电脑端预览）',
                 iconSize: 30,
                 icon: const Icon(Icons.skip_previous_rounded),
               ),
               const SizedBox(width: 18),
               IconButton.filled(
                 onPressed: onPlay,
-                tooltip: '播放 / 暂停（界面预览）',
+                tooltip: connected ? '播放 / 暂停（同步到手表）' : '播放 / 暂停（界面预览）',
                 iconSize: 34,
                 style: IconButton.styleFrom(minimumSize: const Size(64, 64)),
                 icon: Icon(
@@ -261,14 +303,19 @@ class _PlayerCard extends StatelessWidget {
               const SizedBox(width: 18),
               IconButton(
                 onPressed: onSkip,
-                tooltip: '下一首（界面预览）',
+                tooltip: '下一首（电脑端预览）',
                 iconSize: 30,
                 icon: const Icon(Icons.skip_next_rounded),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          StatusPill(label: playing ? '演示播放中' : '演示已暂停', color: scheme.primary),
+          StatusPill(
+            label: connected
+                ? (playing ? '手表播放中' : '手表已暂停')
+                : (playing ? '演示播放中' : '演示已暂停'),
+            color: scheme.primary,
+          ),
         ],
       ),
     );

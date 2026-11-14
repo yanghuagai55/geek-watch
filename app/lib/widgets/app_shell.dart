@@ -101,15 +101,8 @@ class _AppShellState extends State<AppShell>
     _setExpanded(false);
   }
 
-  void _setPreviewConnection(BuildContext context, bool connected) {
-    widget.controller.setPreviewConnected(connected);
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('仅切换界面连接态，未连接真实手表。'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+  void _setConnection(BuildContext context, bool connected) {
+    setWatchConnection(context, widget.controller, connect: connected);
   }
 
   @override
@@ -266,7 +259,7 @@ class _AppShellState extends State<AppShell>
                         onClose: () => _setExpanded(false),
                         onSelected: _select,
                         onConnectionChanged: (value) =>
-                            _setPreviewConnection(context, value),
+                            _setConnection(context, value),
                       ),
                     ),
                   ),
@@ -280,31 +273,35 @@ class _AppShellState extends State<AppShell>
   }
 
   /// 只有页面内容订阅 1 Hz 数据；底栏、侧边栏、液态玻璃都不再每秒重建。
+  /// 页面必须在 builder 内构造，否则同一个 widget 实例会被 Element 直接复用，
+  /// 通知只会走到这里而不会让页面重新 build。
   Widget _buildContent() {
-    final pages = [
-      HomePage(controller: widget.controller, onNavigate: _select),
-      MessagesPage(controller: widget.controller),
-      MusicPage(controller: widget.controller),
-      SettingsPage(controller: widget.controller),
-    ];
     return ListenableBuilder(
       listenable: widget.controller,
-      builder: (context, _) => AnimatedSwitcher(
-        duration: widget.controller.animations
-            ? const Duration(milliseconds: 220)
-            : Duration.zero,
-        transitionBuilder: (child, animation) => FadeTransition(
-          opacity: animation,
-          child: SlideTransition(
-            position: Tween(
-              begin: const Offset(0.012, 0),
-              end: Offset.zero,
-            ).animate(animation),
-            child: child,
+      builder: (context, _) {
+        final pages = [
+          HomePage(controller: widget.controller, onNavigate: _select),
+          MessagesPage(controller: widget.controller),
+          MusicPage(controller: widget.controller),
+          SettingsPage(controller: widget.controller),
+        ];
+        return AnimatedSwitcher(
+          duration: widget.controller.animations
+              ? const Duration(milliseconds: 220)
+              : Duration.zero,
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween(
+                begin: const Offset(0.012, 0),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
           ),
-        ),
-        child: KeyedSubtree(key: ValueKey(_index), child: pages[_index]),
-      ),
+          child: KeyedSubtree(key: ValueKey(_index), child: pages[_index]),
+        );
+      },
     );
   }
 }
@@ -542,9 +539,9 @@ class _CompactConnectionBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final active = controller.previewConnected;
+    final active = controller.connected;
     return Tooltip(
-      message: '${controller.transportName} · ${active ? '演示连接态' : '未连接硬件'}',
+      message: '${controller.transportName} · ${controller.connectionLabel}',
       child: Container(
         width: 48,
         height: 54,
@@ -601,7 +598,7 @@ class _ConnectionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final active = controller.previewConnected;
+    final active = controller.connected;
     return AppCard(
       radius: 16,
       padding: const EdgeInsets.all(14),
@@ -611,12 +608,17 @@ class _ConnectionPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           StatusPill(
-            label: '${controller.transportLabel} · ${active ? '演示连接' : '未连接'}',
+            label:
+                '${controller.transportLabel} · ${controller.connectionLabel}',
             color: active ? scheme.primary : scheme.onSurfaceVariant,
           ),
           const SizedBox(height: 9),
           Text(
-            '当前通道：${controller.transportName}\n硬件传输尚未接入',
+            controller.connected
+                ? '链路已就绪，可发送消息、歌词与抓屏'
+                : controller.hasHardware
+                ? '当前通道：${controller.transportName}\n点击连接建立真实链路'
+                : '当前通道：${controller.transportName}\n界面预览模式，未连接硬件',
             style: TextStyle(
               color: scheme.onSurfaceVariant,
               fontSize: 10.5,
@@ -628,9 +630,11 @@ class _ConnectionPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: () => onConnectionChanged(true),
+                  onPressed: active || controller.connecting
+                      ? null
+                      : () => onConnectionChanged(true),
                   icon: const Icon(Icons.link_rounded, size: 16),
-                  label: const Text('连接'),
+                  label: Text(controller.connecting ? '连接中' : '连接'),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     visualDensity: VisualDensity.compact,
@@ -640,7 +644,9 @@ class _ConnectionPanel extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => onConnectionChanged(false),
+                  onPressed: active && !controller.connecting
+                      ? () => onConnectionChanged(false)
+                      : null,
                   icon: const Icon(Icons.link_off_rounded, size: 16),
                   label: const Text('断开'),
                   style: OutlinedButton.styleFrom(

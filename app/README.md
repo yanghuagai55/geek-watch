@@ -1,10 +1,12 @@
 # AT32 Watch Companion
 
-Flutter 手表配套界面，支持 Windows 与 Android。当前阶段仅 UI 预览，设备传输、消息发送、歌词同步和反向播放控制尚未接入。
+Flutter 手表配套界面，支持 Windows 与 Android。Windows 端已通过经典 SPP（裸 RFCOMM）接入真机：性能遥测、消息、歌词、亮度、播放态与抓屏均可用；BLE / 串口尚未接入。
+
+另外已接入 **Windows 系统媒体（SMTC）**：自动读取当前播放的标题/艺人/播放状态并显示到手表音乐页；长标题分页轮播，存在同名 `.lrc` 时按时间轴推送歌词。手表上的播放/暂停/上下首会反向控制 Windows 当前媒体。设置里可开启「关闭窗口后驻留托盘」，软件会缩到右下角继续后台运行。
 
 > 要把界面接上真机（HTTP/蓝牙/串口/协议帧），先看
-> [BACKEND_HANDOFF.md](BACKEND_HANDOFF.md)：包含待接入清单、建议的 service 分层、
-> 协议速查表和已踩过的坑。
+> [BACKEND_HANDOFF.md](BACKEND_HANDOFF.md)：包含已实现架构、协议速查表和已踩过的坑。
+> 不启 UI 直连真机自检：`dart run tool/spp_probe.dart`。
 
 ## Run
 

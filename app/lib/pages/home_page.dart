@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../services/snapshot_image.dart';
 import '../state/watch_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
@@ -29,10 +30,13 @@ class HomePage extends StatelessWidget {
         final scheme = Theme.of(context).colorScheme;
         return PageScroll(
           children: [
-            const PageHeader(
+            PageHeader(
               title: '手表工作台',
               subtitle: '实时表盘与设备状态，一眼掌握。',
-              trailing: StatusPill(label: '界面预览', icon: Icons.tune_rounded),
+              trailing: StatusPill(
+                label: controller.connected ? '硬件已连接' : '界面预览',
+                icon: Icons.tune_rounded,
+              ),
             ),
             const SizedBox(height: 22),
             _HeroCard(controller: controller, onNavigate: onNavigate),
@@ -45,45 +49,51 @@ class HomePage extends StatelessWidget {
                 spacing: 8,
                 children: [
                   StatusPill(
-                    label: controller.demoStreaming ? 'LIVE · 演示' : '已暂停',
-                    color: controller.demoStreaming
+                    label: controller.telemetryLabel,
+                    color: controller.liveTelemetry || controller.demoStreaming
                         ? null
                         : scheme.onSurfaceVariant,
                   ),
-                  IconButton(
-                    onPressed: () =>
-                        controller.setDemoStreaming(!controller.demoStreaming),
-                    tooltip: controller.demoStreaming ? '暂停演示数据' : '继续演示数据',
-                    iconSize: 20,
-                    icon: Icon(
-                      controller.demoStreaming
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
+                  if (!controller.liveTelemetry)
+                    IconButton(
+                      onPressed: () => controller.setDemoStreaming(
+                        !controller.demoStreaming,
+                      ),
+                      tooltip: controller.demoStreaming ? '暂停演示数据' : '继续演示数据',
+                      iconSize: 20,
+                      icon: Icon(
+                        controller.demoStreaming
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: 12),
             _Metrics(controller: controller),
             const SizedBox(height: 26),
-            const SectionHeader(title: '快捷功能', subtitle: '先完成交互与布局，硬件能力随后接入'),
+            const SectionHeader(title: '快捷功能', subtitle: '消息、歌词、画面与播放控制'),
             const SizedBox(height: 12),
-            _QuickActions(onNavigate: onNavigate),
+            _QuickActions(controller: controller, onNavigate: onNavigate),
             const SizedBox(height: 18),
             AppCard(
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
               child: Row(
                 children: [
                   Icon(
-                    Icons.info_outline_rounded,
+                    controller.connected
+                        ? Icons.link_rounded
+                        : Icons.info_outline_rounded,
                     size: 18,
                     color: scheme.primary,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      '当前数据仅用于 UI 验收，不代表已连接真实手表。',
+                      controller.connected
+                          ? '性能数据来自手表实时回传，约每秒一帧。'
+                          : '当前数据仅用于 UI 验收，不代表已连接真实手表。',
                       style: TextStyle(
                         color: scheme.onSurfaceVariant,
                         fontSize: 12,
@@ -132,7 +142,9 @@ class _HeroCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 StatusPill(
-                  label: '本地演示 · 未连接硬件',
+                  label: controller.connected
+                      ? '${controller.transportName} · 已连接'
+                      : '本地演示 · 未连接硬件',
                   color: isDark ? AppPalette.mint : AppPalette.mintDeep,
                 ),
                 const SizedBox(height: 18),
@@ -177,9 +189,15 @@ class _HeroCard extends StatelessWidget {
                   runSpacing: 10,
                   children: [
                     FilledButton.icon(
-                      onPressed: () => showPrototypeMessage(context, '设备连接'),
-                      icon: const Icon(Icons.bluetooth_rounded, size: 18),
-                      label: const Text('连接设备'),
+                      onPressed: () =>
+                          toggleWatchConnection(context, controller),
+                      icon: Icon(
+                        controller.connected
+                            ? Icons.link_off_rounded
+                            : Icons.bluetooth_rounded,
+                        size: 18,
+                      ),
+                      label: Text(controller.connected ? '断开设备' : '连接设备'),
                     ),
                     OutlinedButton.icon(
                       onPressed: () => onNavigate(1),
@@ -248,23 +266,24 @@ class _PortraitHome extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 StatusPill(
-                  label: controller.demoStreaming ? 'LIVE · 演示' : '已暂停',
-                  color: controller.demoStreaming
+                  label: controller.telemetryLabel,
+                  color: controller.liveTelemetry || controller.demoStreaming
                       ? null
                       : scheme.onSurfaceVariant,
                 ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () =>
-                      controller.setDemoStreaming(!controller.demoStreaming),
-                  tooltip: controller.demoStreaming ? '暂停演示数据' : '继续演示数据',
-                  iconSize: 18,
-                  icon: Icon(
-                    controller.demoStreaming
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
+                if (!controller.liveTelemetry)
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        controller.setDemoStreaming(!controller.demoStreaming),
+                    tooltip: controller.demoStreaming ? '暂停演示数据' : '继续演示数据',
+                    iconSize: 18,
+                    icon: Icon(
+                      controller.demoStreaming
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -273,7 +292,7 @@ class _PortraitHome extends StatelessWidget {
           const SizedBox(height: 20),
           const SectionHeader(title: '快捷功能'),
           const SizedBox(height: 10),
-          _QuickActions(onNavigate: onNavigate),
+          _QuickActions(controller: controller, onNavigate: onNavigate),
           const SizedBox(height: 18),
           const _IntroFooter(),
         ],
@@ -319,10 +338,7 @@ class _PortraitHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        StatusPill(
-          label: controller.previewConnected ? '演示连接' : '界面预览',
-          icon: Icons.tune_rounded,
-        ),
+        StatusPill(label: controller.connectionLabel, icon: Icons.tune_rounded),
       ],
     );
   }
@@ -373,9 +389,9 @@ class _PortraitWatchCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      '${controller.transportLabel} · ${controller.previewConnected ? '演示连接' : '未连接硬件'}',
+                      '${controller.transportLabel} · ${controller.connectionLabel}',
                       style: TextStyle(
-                        color: controller.previewConnected
+                        color: controller.connected
                             ? AppPalette.mint
                             : AppPalette.muted,
                         fontSize: 10.5,
@@ -384,9 +400,15 @@ class _PortraitWatchCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     FilledButton.icon(
-                      onPressed: () => showPrototypeMessage(context, '设备连接'),
-                      icon: const Icon(Icons.bluetooth_rounded, size: 16),
-                      label: const Text('连接设备'),
+                      onPressed: () =>
+                          toggleWatchConnection(context, controller),
+                      icon: Icon(
+                        controller.connected
+                            ? Icons.link_off_rounded
+                            : Icons.bluetooth_rounded,
+                        size: 16,
+                      ),
+                      label: Text(controller.connected ? '断开设备' : '连接设备'),
                       style: FilledButton.styleFrom(
                         minimumSize: const Size(0, 36),
                         padding: const EdgeInsets.symmetric(
@@ -431,7 +453,7 @@ class _PortraitMetrics extends StatelessWidget {
       MiniMetricCard(
         label: 'RAM',
         value: controller.ramUsed.toStringAsFixed(1),
-        unit: '/ 16 KB',
+        unit: '/ ${controller.ramTotal.toStringAsFixed(1)} KB',
         color: scheme.primary,
         icon: Icons.memory_rounded,
         history: controller.ramHistory,
@@ -507,7 +529,7 @@ class _Metrics extends StatelessWidget {
       MetricCard(
         label: 'RAM',
         value: controller.ramUsed.toStringAsFixed(1),
-        unit: '/ 16 KB',
+        unit: '/ ${controller.ramTotal.toStringAsFixed(1)} KB',
         detail:
             '剩余 ${(controller.ramTotal - controller.ramUsed).toStringAsFixed(1)} KB',
         progress: controller.ramUsed / controller.ramTotal,
@@ -565,9 +587,78 @@ class _Metrics extends StatelessWidget {
   }
 }
 
-class _QuickActions extends StatelessWidget {
-  const _QuickActions({required this.onNavigate});
+Future<void> _showSnapshot(
+  BuildContext context,
+  WatchController controller,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.hideCurrentSnackBar();
+  if (!controller.connected) {
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('请先连接手表，再抓取屏幕画面。'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    return;
+  }
 
+  messenger.showSnackBar(
+    const SnackBar(content: Text('正在抓取手表画面…'), duration: Duration(seconds: 30)),
+  );
+  final snapshot = await controller.requestSnapshot();
+  messenger.hideCurrentSnackBar();
+  if (snapshot == null) {
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('抓屏失败：链路超时或没有收到完整画面。'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+    return;
+  }
+
+  final image = await decodeWatchSnapshot(snapshot);
+  if (!context.mounted) {
+    image.dispose();
+    return;
+  }
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Dialog(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '手表屏幕 · ${snapshot.width} × ${snapshot.height}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 14),
+            RawImage(
+              image: image,
+              width: 256,
+              height: 320,
+              filterQuality: FilterQuality.none,
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  image.dispose();
+}
+
+class _QuickActions extends StatelessWidget {
+  const _QuickActions({required this.controller, required this.onNavigate});
+
+  final WatchController controller;
   final ValueChanged<int> onNavigate;
 
   @override
@@ -585,7 +676,7 @@ class _QuickActions extends StatelessWidget {
         Icons.screenshot_monitor_outlined,
         '屏幕镜像',
         '128 × 160 · RGB565',
-        () => showPrototypeMessage(context, '屏幕镜像'),
+        () => _showSnapshot(context, controller),
       ),
       (
         Icons.play_circle_outline_rounded,

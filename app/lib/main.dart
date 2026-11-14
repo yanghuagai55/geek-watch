@@ -4,16 +4,33 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'core/app_settings.dart';
 import 'core/crash_log.dart';
+import 'services/system_tray.dart';
+import 'services/watch_session.dart';
 import 'state/watch_controller.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_shell.dart';
 
 void main() {
-  runZonedGuarded(() {
+  runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
     installCrashLogging();
-    runApp(const WatchCompanionApp());
+    final saved = await AppSettings.load();
+    final session = WatchSession();
+    // 调试时可在 `flutter run` 控制台看到链路日志。
+    session.logs.listen(debugPrint);
+    final controller = WatchController(session: session)..applyPersisted(saved);
+
+    Timer? saveTimer;
+    controller.onSettingsChanged = () {
+      saveTimer?.cancel();
+      saveTimer = Timer(const Duration(milliseconds: 600), () {
+        unawaited(AppSettings.save(controller.persistedSettings));
+      });
+    };
+
+    runApp(WatchCompanionApp(controller: controller));
     if (const bool.fromEnvironment('CRASH_TEST')) {
       Future<void>.delayed(const Duration(seconds: 2), () {
         throw StateError('crash-test: 验证 crash.log 写入');
@@ -45,6 +62,18 @@ class _WatchCompanionAppState extends State<WatchCompanionApp> {
     // 只关心主题变化：1 Hz 的演示数据刷新交给页面内部的局部监听，
     // 避免整棵树（含液态玻璃底栏）每秒重建一次。
     _controller.addListener(_syncThemeMode);
+    if (_controller.backgroundEnabled) {
+      unawaited(SystemTray.setEnabled(true));
+    }
+    if (_controller.session != null && _controller.autoConnect) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _autoConnect());
+    }
+  }
+
+  Future<void> _autoConnect() async {
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    final error = await _controller.connect();
+    if (error != null) debugPrint('自动连接失败：$error');
   }
 
   @override

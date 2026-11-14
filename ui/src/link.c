@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <string.h>
+
 /* 蓝牙透传串口。
    手机 -> 手表：
      01 校时    年低 年高 月 日 时 分 秒
@@ -11,6 +13,7 @@
      07 按键    1 字节，bit0 上一项 bit1 确定 bit2 下一项。仅调试模式生效
      08 调试    1 开 0 关
      0A 回主页  无数据，关闭子页并回到表盘
+     0B 点阵    块号 0..3 + 128 字节 1bpp（128x32，共 512 字节）
      13 传感器  无数据，回一行 DBG ... 调试文本
    手表 -> 手机：
      10 控制    1 播放 2 暂停
@@ -28,14 +31,19 @@ enum {
     LINK_DEBUG = 0x08,
     LINK_PERF = 0x09,
     LINK_HOME = 0x0A,
+    LINK_BMP = 0x0B,
     LINK_STATS = 0x12,
     LINK_SENSOR = 0x13,
     LINK_CTRL = 0x10,
     LINK_IMG = 0x11,
-    LINK_PAY = 28,
+    LINK_PAY = 160,
     LINK_MSG_N = 3,
     LINK_MSG_LEN = 24,
     LINK_LYRIC_LEN = 28,
+    LINK_BMP_W = 128,
+    LINK_BMP_H = 32,
+    LINK_BMP_CHUNK = 128,
+    LINK_BMP_CHUNKS = 4,
     ST_MARK = 0,
     ST_CMD = 1,
     ST_LEN = 2,
@@ -49,6 +57,10 @@ enum {
 
 static char msgs[LINK_MSG_N][LINK_MSG_LEN];
 static char lyric[LINK_LYRIC_LEN];
+/* 128x32 的 4bpp 覆盖位图，由 0x0B 分 4 块接收；0 表示保留给文字歌词。 */
+static uint8_t media_mask[LINK_BMP_W * LINK_BMP_H / 2];
+static int media_mask_ready;
+static uint32_t last_rx_ms;
 static int playing;
 static int bright;
 static int snap_arm;
@@ -110,6 +122,37 @@ static void send_ctrl(uint8_t action) {
     hal_link_write(frame, 5);
 }
 
+/* 块号 0..3，每块 128 字节 = 8 行 1bpp；展开成 4bpp 覆盖位图。 */
+static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
+    const int rows = LINK_BMP_H / LINK_BMP_CHUNKS;
+    int r, c;
+
+    if (chunk >= LINK_BMP_CHUNKS || n < LINK_BMP_CHUNK) {
+        return;
+    }
+    if (chunk == 0) {
+        media_mask_ready = 0;
+        memset(media_mask, 0, sizeof media_mask);
+        /* 新的媒体行到达时自动切到音乐页，让标题/歌词常驻可见。 */
+        ui_app_open_music();
+    }
+    for (r = 0; r < rows; r++) {
+        uint8_t *dst = media_mask + (chunk * rows + r) * (LINK_BMP_W / 2);
+        const uint8_t *line = src + r * (LINK_BMP_W / 8);
+        for (c = 0; c < LINK_BMP_W; c++) {
+            uint8_t v = ((line[c >> 3] >> (7 - (c & 7))) & 1) ? 0x0F : 0x00;
+            if (c & 1) {
+                dst[c >> 1] = (uint8_t)((dst[c >> 1] & 0xF0) | v);
+            } else {
+                dst[c >> 1] = (uint8_t)((dst[c >> 1] & 0x0F) | (uint8_t)(v << 4));
+            }
+        }
+    }
+    if (chunk == LINK_BMP_CHUNKS - 1) {
+        media_mask_ready = 1;
+    }
+}
+
 static int time_ok(const uint8_t *p) {
     int month = p[2];
     int day = p[3];
@@ -136,8 +179,13 @@ static void apply_frame(void) {
         copy_text(msgs[pay[0]], LINK_MSG_LEN, pay + 1, len - 1);
         return;
     }
+    if (cmd == LINK_BMP && len == 1 + LINK_BMP_CHUNK) {
+        mask_chunk(pay[0], pay + 1, len - 1);
+        return;
+    }
     if (cmd == LINK_LYRIC) {
         copy_text(lyric, LINK_LYRIC_LEN, pay, len);
+        media_mask_ready = 0;
         return;
     }
     if (cmd == LINK_STATE && len == 1) {
@@ -286,6 +334,7 @@ static void feed(uint8_t b) {
     }
     if (b == sum) {
         no_ack = 0;
+        last_rx_ms = hal_tick_ms();
         apply_frame();
         if (!no_ack) {
             ack_ok++;
@@ -301,6 +350,9 @@ void link_init(void) {
     copy_cstr(msgs[1], LINK_MSG_LEN, "消息2");
     copy_cstr(msgs[2], LINK_MSG_LEN, "消息3");
     lyric[0] = 0;
+    media_mask_ready = 0;
+    memset(media_mask, 0, sizeof media_mask);
+    last_rx_ms = 0;
     playing = 0;
     bright = 1;
     snap_arm = snap_on = perf_requested = 0;
@@ -334,6 +386,19 @@ int link_brightness(void) {
 
 const char *link_media_lyric(void) {
     return lyric;
+}
+
+int link_media_mask_ready(void) {
+    return media_mask_ready;
+}
+
+const uint8_t *link_media_mask(void) {
+    return media_mask;
+}
+
+int link_connected(void) {
+    uint32_t now = hal_tick_ms();
+    return last_rx_ms != 0 && (uint32_t)(now - last_rx_ms) < 4000u;
 }
 
 int link_media_playing(void) {

@@ -1191,6 +1191,19 @@ void ui_nav_goto(ui_page_id_t page) {
     st->scroll.x = (int16_t)((int)page * 256);
 }
 
+/* PC 下发媒体点阵时调用：直接打开音乐页。 */
+void ui_app_open_music(void) {
+    if (!st) {
+        return;
+    }
+    if (ui_menu_level(&st->music) > UI_MENU_ICON) {
+        return;
+    }
+    ui_nav_goto(UI_PAGE_MUSIC);
+    st->focus = UI_PAGE_MUSIC;
+    on_confirm(&st->music);
+}
+
 void ui_settings_set_debug(int enabled) {
     if (!st) {
         return;

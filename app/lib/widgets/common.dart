@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../state/watch_controller.dart';
 import '../theme/app_theme.dart';
 
 class AppCard extends StatelessWidget {
@@ -285,5 +286,61 @@ void showPrototypeMessage(BuildContext context, String feature) {
       content: Text('$feature将在传输层接入后开放，当前为界面预览。'),
       duration: const Duration(seconds: 2),
     ),
+  );
+}
+
+/// 连接/断开统一入口：有会话时走真实链路，无会话时保持界面预览行为。
+Future<void> setWatchConnection(
+  BuildContext context,
+  WatchController controller, {
+  required bool connect,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.hideCurrentSnackBar();
+
+  if (connect) {
+    if (controller.connected) return;
+    if (!controller.hasHardware) {
+      controller.setPreviewConnected(true);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('仅切换界面连接态，未连接真实手表。'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(content: Text('正在连接${controller.transportName}…')),
+    );
+    final error = await controller.connect();
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          error == null ? '已连接${controller.transportName}。' : '连接失败：$error',
+        ),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+    return;
+  }
+
+  if (!controller.connected) return;
+  await controller.disconnect();
+  messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(
+    const SnackBar(content: Text('已断开手表链路。'), duration: Duration(seconds: 2)),
+  );
+}
+
+Future<void> toggleWatchConnection(
+  BuildContext context,
+  WatchController controller,
+) {
+  return setWatchConnection(
+    context,
+    controller,
+    connect: !controller.connected,
   );
 }
