@@ -35,6 +35,10 @@ class WatchSession {
   final StreamController<WatchStats> _stats =
       StreamController<WatchStats>.broadcast();
   final StreamController<int> _controls = StreamController<int>.broadcast();
+  final StreamController<WatchSettings> _watchSettings =
+      StreamController<WatchSettings>.broadcast();
+  final StreamController<WatchSport> _sport =
+      StreamController<WatchSport>.broadcast();
   final StreamController<String> _logs = StreamController<String>.broadcast();
 
   late final WatchFrameParser _parser = WatchFrameParser(
@@ -70,6 +74,12 @@ class WatchSession {
 
   /// 手表按键产生的播放控制（1 播放 / 2 暂停 / 3 下一首 / 4 上一首）。
   Stream<int> get controls => _controls.stream;
+
+  /// 手表当前设置（亮度、抬腕、按键音、状态灯、熄屏等）。
+  Stream<WatchSettings> get watchSettings => _watchSettings.stream;
+
+  /// 手表今日运动数据（步数、距离、卡路里、活跃分钟、12 个时段桶）。
+  Stream<WatchSport> get sport => _sport.stream;
 
   /// 链路日志（已连接、握手无回应、断开原因等）。
   Stream<String> get logs => _logs.stream;
@@ -112,6 +122,7 @@ class WatchSession {
     );
     _log(ok ? '握手成功' : '握手无回应');
     _startTelemetry();
+    if (ok) unawaited(querySettings());
   }
 
   Future<void> disconnect() async {
@@ -220,6 +231,21 @@ class WatchSession {
     return _command(WatchCmd.brightness, <int>[level.clamp(0, 2)]);
   }
 
+  /// 拉取手表当前设置；手表用 0x1A 回。
+  Future<bool> querySettings() {
+    return _command(WatchCmd.getSettings);
+  }
+
+  /// key：1 抬腕 2 按键音 3 亮度 4 蓝牙 5 状态灯 6 熄屏。
+  Future<bool> setSetting(int key, int value) {
+    return _command(WatchCmd.setting, <int>[key, value]);
+  }
+
+  /// 拉取今日运动数据；手表用 0x27 回。
+  Future<bool> requestSport() {
+    return _command(WatchCmd.sport);
+  }
+
   /// 请求一帧 128×160 画面；超时或链路断开返回 null。
   Future<WatchSnapshot?> requestSnapshot({
     Duration timeout = const Duration(seconds: 60),
@@ -255,6 +281,8 @@ class WatchSession {
     await _states.close();
     await _stats.close();
     await _controls.close();
+    await _watchSettings.close();
+    await _sport.close();
     await _logs.close();
   }
 
@@ -309,6 +337,14 @@ class WatchSession {
         if (frame.data.isNotEmpty && !_controls.isClosed) {
           _controls.add(frame.data[0]);
         }
+      case WatchCmd.settingsState:
+        final settings = WatchSettings.fromFrame(frame);
+        if (settings != null && !_watchSettings.isClosed) {
+          _watchSettings.add(settings);
+        }
+      case WatchCmd.sport:
+        final sport = WatchSport.fromFrame(frame);
+        if (sport != null && !_sport.isClosed) _sport.add(sport);
       case WatchCmd.image:
         final snapshot = WatchSnapshot.fromFrame(frame);
         final waiter = _snapshot;
@@ -345,6 +381,9 @@ class WatchSession {
     final snapshot = _snapshot;
     _snapshot = null;
     if (snapshot != null && !snapshot.isCompleted) snapshot.complete(null);
+
+    // 只释放 Dart 侧监听；Android 前台服务会自己重连，稍后由控制器挂回。
+    unawaited(transport.release().catchError((Object _) {}));
 
     _setState(LinkState.failed);
     _log('链路已断开');

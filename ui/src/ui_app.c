@@ -763,10 +763,13 @@ static void draw_msg_app(uint8_t a) {
     if (row_h < 20) {
         row_h = 20;
     }
+    if (vis >= st->messages.count) {
+        vis = st->messages.count > 0 ? st->messages.count - 1 : 0;
+    }
     if (a == 255) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     }
-    if (link_msg_list_ready()) {
+    if (link_msg_list_ready() && st->messages.count > 0) {
         /* 高亮先画，点阵只画文字像素，背景保持透明。 */
         ui_draw_round(2, (int16_t)(top + vis * row_h + 1),
                       (int16_t)(UI_W - 4), (int16_t)(row_h - 2),
@@ -775,11 +778,12 @@ static void draw_msg_app(uint8_t a) {
                       3, (int16_t)(row_h - 2), 1, col_ring, a);
         ui_mask1_draw(0, (int16_t)top, UI_W, 112,
                       link_msg_list_mask(), col_text, a);
-    } else {
+    } else if (link_msg_list_empty() || st->messages.count == 0) {
         ui_text_draw_center((int16_t)(UI_W / 2),
                             (int16_t)(top + (UI_H - top) / 2 - 8),
                             "无消息", col_dim, a, 2);
     }
+    /* 其余情况是列表正在加载：保持空白，避免“无消息”闪一下。 */
     draw_header("消息", a, 1);
 }
 
@@ -839,10 +843,8 @@ static void draw_message_page(uint8_t a) {
     if (link_msg_detail_ready()) {
         /* 详情页不要标题，整屏都是手机渲染好的正文。 */
         ui_mask1_draw(0, 0, UI_W, UI_H, link_msg_detail_mask(), col_text, a);
-    } else {
-        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2 - 8),
-                            "无消息", col_dim, a, 2);
     }
+    /* 加载中保持空白，避免每次进来先闪“无消息”。 */
 }
 
 static void draw_about_page(uint8_t a) {
@@ -975,6 +977,7 @@ static void on_confirm(ui_menu_t *menu) {
         if (!st->screen_asleep) {
             hal_backlight_set(backlight_level());
         }
+        link_notify_settings();
         ui_menu_back(menu);
         return;
     }
@@ -1033,6 +1036,7 @@ static void on_confirm(ui_menu_t *menu) {
         default:
             break;
         }
+        link_notify_settings();
         return;
     }
     if (menu == &st->sport) {
@@ -1045,6 +1049,11 @@ static void on_confirm(ui_menu_t *menu) {
         return;
     }
     if (menu == &st->messages) {
+        /* 列表还在加载或确实没有消息时，不进入二级页。 */
+        if (!link_msg_list_ready() || menu->count <= 0 ||
+            menu->focus >= menu->count) {
+            return;
+        }
         link_request_message_detail(menu->focus);
     }
     ui_menu_enter_child(menu, 1);
@@ -1158,9 +1167,13 @@ void ui_nav_goto(ui_page_id_t page) {
     st->scroll.x = (int16_t)((int)page * 256);
 }
 
-/* PC 下发媒体点阵时调用：直接打开音乐页。 */
+/* PC 下发媒体点阵时调用：只有停在表盘或音乐页才自动打开，
+   避免把正在看消息/设置的界面强行拉走。 */
 void ui_app_open_music(void) {
     if (!st) {
+        return;
+    }
+    if (st->focus != UI_PAGE_FACE && st->focus != UI_PAGE_MUSIC) {
         return;
     }
     if (ui_menu_level(&st->music) > UI_MENU_ICON) {
@@ -1171,22 +1184,76 @@ void ui_app_open_music(void) {
     on_confirm(&st->music);
 }
 
-void ui_settings_set_debug(int enabled) {
+/* 消息应用是否处于打开状态（列表或详情）。 */
+int ui_app_message_active(void) {
+    if (!st) {
+        return 0;
+    }
+    return st->focus == UI_PAGE_MSG &&
+           ui_menu_level(&st->messages) > UI_MENU_ICON;
+}
+
+/* 手机下发 0x25：列表实际条数，限制焦点停留在有效行。 */
+void ui_app_set_message_count(int count) {
     if (!st) {
         return;
     }
-    enabled = enabled ? 1 : 0;
-    if (enabled == st->debug) {
-        return;
+    if (count < 0) {
+        count = 0;
     }
-    st->debug = enabled;
-    settings_get()->debug = (uint8_t)enabled;
-    ui_trace_emit(enabled ? "ui_settings_set_debug(1)" : "ui_settings_set_debug(0)");
+    if (count > MSG_N) {
+        count = MSG_N;
+    }
+    st->messages.count = count;
+    if (st->messages.focus >= count) {
+        st->messages.focus = count > 0 ? count - 1 : 0;
+    }
+    if (st->messages.child_focus >= count) {
+        st->messages.child_focus = 0;
+    }
+}
+
+void ui_settings_set_debug(int enabled) {
     ui_anim_play(enabled ? UI_ANIM_FADE_IN : UI_ANIM_FADE_OUT, &st->overlay);
 }
 
 int ui_settings_get_debug(void) {
     return st ? st->debug : 0;
+}
+
+/* App 远程修改手表设置：1 抬腕 2 按键音 3 亮度 4 蓝牙 5 状态灯 6 熄屏。 */
+void ui_settings_apply(int key, int value) {
+    settings_t *s = settings_get();
+    if (!st) {
+        return;
+    }
+    switch (key) {
+    case 1:
+        s->raise_wrist = (uint8_t)(value ? 1 : 0);
+        break;
+    case 2:
+        s->key_beep = (uint8_t)(value ? 1 : 0);
+        break;
+    case 3:
+        s->brightness = (uint8_t)(value <= 0 ? 0 : (value >= 2 ? 2 : 1));
+        if (!st->screen_asleep) {
+            hal_backlight_set(backlight_level());
+        }
+        break;
+    case 4:
+        s->bluetooth = (uint8_t)(value ? 1 : 0);
+        break;
+    case 5:
+        s->led_mode = (uint8_t)(value <= 0 ? 0 : (value >= 2 ? 2 : 1));
+        hal_led_mode(s->led_mode);
+        break;
+    case 6:
+        s->screen_off = (uint8_t)(value <= 0 ? 0 : (value >= 4 ? 4 : value));
+        st->active_ms = hal_tick_ms();
+        break;
+    default:
+        break;
+    }
 }
 
 static void draw_app_content(ui_menu_t *menu, uint8_t a) {

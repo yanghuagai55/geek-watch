@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../state/watch_controller.dart';
@@ -14,15 +16,12 @@ class MusicPage extends StatefulWidget {
 }
 
 class _MusicPageState extends State<MusicPage> {
-  double _position = 0.36;
   late final TextEditingController _lyrics;
-  late int _controlSeq;
 
   @override
   void initState() {
     super.initState();
-    _controlSeq = widget.controller.controlSeq;
-    widget.controller.addListener(_onControl);
+    // 演示歌词单独收录，不再当成“当前歌曲”。
     _lyrics = TextEditingController(
       text: '穿过晚风与灯火\n把时间慢放成一首歌\n在城市睡着以前\n留一点安静给自己',
     );
@@ -30,24 +29,8 @@ class _MusicPageState extends State<MusicPage> {
 
   @override
   void dispose() {
-    widget.controller.removeListener(_onControl);
     _lyrics.dispose();
     super.dispose();
-  }
-
-  void _onControl() {
-    final seq = widget.controller.controlSeq;
-    if (seq == _controlSeq) return;
-    _controlSeq = seq;
-    final action = widget.controller.lastControlAction;
-    if (action != 3 && action != 4) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() => _position = 0);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(action == 3 ? '手表切到下一首。' : '手表切到上一首。')),
-      );
-    });
   }
 
   Future<void> _syncLyrics() async {
@@ -67,43 +50,39 @@ class _MusicPageState extends State<MusicPage> {
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final scheme = Theme.of(context).colorScheme;
+    final missingAccess = Platform.isAndroid && !controller.notificationAccess;
     return PageScroll(
       children: [
         PageHeader(
-          title: '播放与歌词',
-          subtitle: '歌词下行，手表按键上行',
+          title: '正在播放',
+          subtitle: Platform.isAndroid
+              ? '跟随手机系统媒体；播放、切歌与进度可直接控制手机'
+              : '歌词下行，手表按键上行',
           trailing: StatusPill(
-            label: widget.controller.connected ? '已连接' : '未连接',
-            color: widget.controller.connected ? null : scheme.onSurfaceVariant,
+            label: controller.hasMedia
+                ? (controller.playing ? '手机播放中' : '手机已暂停')
+                : (controller.connected ? '等待媒体' : '未连接'),
+            color: controller.connected ? null : scheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 22),
         LayoutBuilder(
           builder: (context, constraints) {
             final player = _PlayerCard(
-              playing: widget.controller.playing,
-              connected: widget.controller.connected,
-              position: _position,
-              onPlay: () =>
-                  widget.controller.setPlayState(!widget.controller.playing),
-              onPosition: (value) => setState(() => _position = value),
-              onSkip: () {
-                setState(() => _position = 0);
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('电脑端切歌仍为界面演示。')));
-              },
+              controller: controller,
+              missingAccess: missingAccess,
             );
             final lyrics = AppCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SectionHeader(
-                    title: '当前歌词',
-                    subtitle: widget.controller.connected
-                        ? '按行发送，每帧 ≤27 字节'
-                        : '本地编辑预览，连接后可按行同步',
+                    title: '歌词演示 · 晚风手记',
+                    subtitle: controller.connected
+                        ? '仅作演示，按行发送，每帧 ≤27 字节'
+                        : '本地演示歌词，连接后可按行同步',
                     trailing: Icon(
                       Icons.lyrics_outlined,
                       color: scheme.primary,
@@ -116,7 +95,7 @@ class _MusicPageState extends State<MusicPage> {
                     maxLines: 12,
                     style: const TextStyle(height: 1.8),
                     decoration: const InputDecoration(
-                      hintText: '粘贴当前歌词…',
+                      hintText: '粘贴要演示的歌词…',
                       alignLabelWithHint: true,
                     ),
                   ),
@@ -161,44 +140,63 @@ class _MusicPageState extends State<MusicPage> {
         ),
         const SizedBox(height: 16),
         AppCard(
-          child: Row(
-            children: [
-              Icon(Icons.watch_outlined, color: scheme.primary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '手表按键会通过 0x10 控制帧回传播放 / 暂停；本页状态会跟随变化。',
-                  style: TextStyle(fontSize: 12, height: 1.5),
-                ),
-              ),
-            ],
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            '手表按键通过 0x10 控制帧回传播放 / 暂停 / 上下首，由前台服务直接操作系统媒体；'
+            'App 退到后台后仍可控制。',
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontSize: 12,
+              height: 1.5,
+            ),
           ),
         ),
+        if (Platform.isAndroid) ...[
+          const SizedBox(height: 16),
+          TroubleshootingCard(
+            controller: controller,
+            showMedia: true,
+            hint: '媒体标题与控制依赖“通知读取权限”；'
+                '汽水音乐等 App 需要有活动媒体会话。'
+                '电池白名单可减少 MIUI/HyperOS 清理后台。',
+          ),
+        ],
       ],
     );
   }
 }
 
-class _PlayerCard extends StatelessWidget {
+class _PlayerCard extends StatefulWidget {
   const _PlayerCard({
-    required this.playing,
-    required this.connected,
-    required this.position,
-    required this.onPlay,
-    required this.onPosition,
-    required this.onSkip,
+    required this.controller,
+    required this.missingAccess,
   });
 
-  final bool playing;
-  final bool connected;
-  final double position;
-  final VoidCallback onPlay;
-  final ValueChanged<double> onPosition;
-  final VoidCallback onSkip;
+  final WatchController controller;
+  final bool missingAccess;
+
+  @override
+  State<_PlayerCard> createState() => _PlayerCardState();
+}
+
+class _PlayerCardState extends State<_PlayerCard> {
+  double? _drag;
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final scheme = Theme.of(context).colorScheme;
+    final hasMedia = controller.hasMedia;
+    final duration = controller.mediaDuration;
+    final position = (_drag ?? controller.mediaPosition)
+        .clamp(0.0, duration > 0 ? duration : 0.0)
+        .toDouble();
+    final subtitle = hasMedia
+        ? (controller.mediaArtist.isEmpty ? '未知歌手' : controller.mediaArtist)
+        : widget.missingAccess
+        ? '通知读取未授权，无法获取手机歌曲'
+        : (controller.connected ? '在手机上打开音乐 App 播放' : '手表未连接');
+
     return AppCard(
       child: Column(
         children: [
@@ -247,23 +245,43 @@ class _PlayerCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 22),
-          const Text(
-            '晚风手记',
-            style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
+          Text(
+            hasMedia ? controller.mediaTitle : '未检测到播放',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 5),
           Text(
-            '界面演示 · 未连接播放器',
+            subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 18),
-          Slider(value: position, onChanged: onPosition),
+          Slider(
+            value: duration > 0
+                ? (position / duration).clamp(0.0, 1.0).toDouble()
+                : 0,
+            onChanged: duration > 0
+                ? (value) => setState(() => _drag = value * duration)
+                : null,
+            onChangeEnd: duration > 0
+                ? (value) {
+                    final target = value * duration;
+                    setState(() => _drag = null);
+                    controller.seekMedia(target);
+                  }
+                : null,
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Row(
               children: [
                 Text(
-                  _time(position * 222),
+                  _time(position),
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
                     fontSize: 10,
@@ -271,7 +289,7 @@ class _PlayerCard extends StatelessWidget {
                 ),
                 const Spacer(),
                 Text(
-                  '03:42',
+                  _time(duration),
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
                     fontSize: 10,
@@ -285,25 +303,33 @@ class _PlayerCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               IconButton(
-                onPressed: onSkip,
-                tooltip: '上一首（电脑端预览）',
+                onPressed: hasMedia
+                    ? () => controller.skipMedia(next: false)
+                    : null,
+                tooltip: '上一首',
                 iconSize: 30,
                 icon: const Icon(Icons.skip_previous_rounded),
               ),
               const SizedBox(width: 18),
               IconButton.filled(
-                onPressed: onPlay,
-                tooltip: connected ? '播放 / 暂停（同步到手表）' : '播放 / 暂停（界面预览）',
+                onPressed: hasMedia
+                    ? () => controller.setPlayState(!controller.playing)
+                    : null,
+                tooltip: controller.playing ? '暂停手机播放' : '播放手机媒体',
                 iconSize: 34,
                 style: IconButton.styleFrom(minimumSize: const Size(64, 64)),
                 icon: Icon(
-                  playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  controller.playing
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
                 ),
               ),
               const SizedBox(width: 18),
               IconButton(
-                onPressed: onSkip,
-                tooltip: '下一首（电脑端预览）',
+                onPressed: hasMedia
+                    ? () => controller.skipMedia(next: true)
+                    : null,
+                tooltip: '下一首',
                 iconSize: 30,
                 icon: const Icon(Icons.skip_next_rounded),
               ),
@@ -311,10 +337,10 @@ class _PlayerCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           StatusPill(
-            label: connected
-                ? (playing ? '手表播放中' : '手表已暂停')
-                : (playing ? '演示播放中' : '演示已暂停'),
-            color: scheme.primary,
+            label: hasMedia
+                ? (controller.playing ? '手机播放中' : '手机已暂停')
+                : '未检测到系统媒体',
+            color: hasMedia ? scheme.primary : scheme.onSurfaceVariant,
           ),
         ],
       ),
@@ -322,7 +348,10 @@ class _PlayerCard extends StatelessWidget {
   }
 
   static String _time(double seconds) {
-    final value = seconds.round();
-    return '${(value ~/ 60).toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
+    final value = seconds.isFinite ? seconds.round() : 0;
+    final minutes = value ~/ 60;
+    final rest = value % 60;
+    return '${minutes.toString().padLeft(2, '0')}:'
+        '${rest.toString().padLeft(2, '0')}';
   }
 }

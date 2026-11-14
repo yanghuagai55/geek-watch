@@ -27,6 +27,10 @@ abstract final class WatchCmd {
   static const int image = 0x11;
   static const int stats = 0x12;
   static const int sensor = 0x13;
+  static const int setting = 0x18;
+  static const int getSettings = 0x19;
+  static const int settingsState = 0x1A;
+  static const int sport = 0x27;
   static const int nop = 0x7F;
 }
 
@@ -36,6 +40,77 @@ abstract final class WatchControl {
   static const int pause = 2;
   static const int next = 3;
   static const int previous = 4;
+}
+
+/// 0x1A：手表当前设置。key 与固件 ui_settings_apply 一致：
+/// 1 抬腕 2 按键音 3 亮度 4 蓝牙 5 状态灯 6 熄屏。
+class WatchSettings {
+  const WatchSettings({
+    required this.raiseWrist,
+    required this.keyBeep,
+    required this.brightness,
+    required this.bluetooth,
+    required this.ledMode,
+    required this.screenOff,
+  });
+
+  final bool raiseWrist;
+  final bool keyBeep;
+  final int brightness;
+  final bool bluetooth;
+  final int ledMode;
+  final int screenOff;
+
+  static WatchSettings? fromFrame(WatchFrame frame) {
+    if (frame.data.length < 6) return null;
+    return WatchSettings(
+      raiseWrist: frame.data[0] != 0,
+      keyBeep: frame.data[1] != 0,
+      brightness: frame.data[2].clamp(0, 2).toInt(),
+      bluetooth: frame.data[3] != 0,
+      ledMode: frame.data[4].clamp(0, 2).toInt(),
+      screenOff: frame.data[5].clamp(0, 4).toInt(),
+    );
+  }
+}
+
+/// 0x27：手表今日运动数据。
+/// 5 个 u32（步数/距离米/卡路里/活跃分钟/目标）+ 12 个 u16 桶（每 2 小时一段）。
+class WatchSport {
+  const WatchSport({
+    required this.steps,
+    required this.distanceM,
+    required this.calories,
+    required this.activeMin,
+    required this.goal,
+    required this.buckets,
+  });
+
+  final int steps;
+  final int distanceM;
+  final int calories;
+  final int activeMin;
+  final int goal;
+  final List<int> buckets;
+
+  static WatchSport? fromFrame(WatchFrame frame) {
+    final data = frame.data;
+    if (frame.cmd != WatchCmd.sport || data.length < 44) return null;
+    int u32(int offset) =>
+        data[offset] |
+        (data[offset + 1] << 8) |
+        (data[offset + 2] << 16) |
+        (data[offset + 3] << 24);
+    int u16(int offset) => data[offset] | (data[offset + 1] << 8);
+    return WatchSport(
+      steps: u32(0),
+      distanceM: u32(4),
+      calories: u32(8),
+      activeMin: u32(12),
+      goal: u32(16),
+      buckets: <int>[for (var i = 0; i < 12; i++) u16(20 + i * 2)],
+    );
+  }
 }
 
 const int watchMessageMax = 23;

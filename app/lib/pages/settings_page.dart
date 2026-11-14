@@ -306,15 +306,19 @@ class SettingsPage extends StatelessWidget {
         const SizedBox(height: 16),
         _Section(
           icon: Icons.watch_outlined,
-          title: '手表显示',
-          subtitle: controller.connected ? '亮度会直接写入手表' : '连接后亮度写入设备',
+          title: '手表设置',
+          subtitle: controller.connected
+              ? (controller.watchSettingsLoaded
+                    ? '与手表设置页一致，改动即时生效'
+                    : '正在读取手表设置…')
+              : '连接后读取手表当前档位',
           children: [
             Row(
               children: [
                 const Text('亮度', style: TextStyle(fontWeight: FontWeight.w600)),
                 const Spacer(),
                 Text(
-                  '${(controller.brightness * 100).round()}%',
+                  const ['低', '中', '高'][controller.watchBrightness],
                   style: TextStyle(
                     color: scheme.primary,
                     fontWeight: FontWeight.w700,
@@ -322,34 +326,85 @@ class SettingsPage extends StatelessWidget {
                 ),
               ],
             ),
-            Slider(
-              value: controller.brightness,
-              onChanged: controller.setBrightness,
-              onChangeEnd: (_) => controller.applyBrightness(),
+            const SizedBox(height: 10),
+            SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 0, label: Text('低')),
+                ButtonSegment(value: 1, label: Text('中')),
+                ButtonSegment(value: 2, label: Text('高')),
+              ],
+              selected: {controller.watchBrightness},
+              showSelectedIcon: false,
+              onSelectionChanged: (value) =>
+                  controller.setWatchBrightness(value.first),
             ),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<String>(
-              initialValue: controller.screenTimeout,
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('抬腕亮屏'),
+              subtitle: const Text('抬起手腕时自动点亮屏幕'),
+              value: controller.raiseWrist,
+              onChanged: controller.setRaiseWrist,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('按键音'),
+              subtitle: const Text('按键时蜂鸣器短鸣'),
+              value: controller.keyBeep,
+              onChanged: controller.setKeyBeep,
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Text('状态灯', style: TextStyle(fontWeight: FontWeight.w600)),
+                const Spacer(),
+                Text(
+                  const ['关闭', '常亮', '闪烁'][controller.ledMode],
+                  style: TextStyle(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 0, label: Text('关闭')),
+                ButtonSegment(value: 1, label: Text('常亮')),
+                ButtonSegment(value: 2, label: Text('闪烁')),
+              ],
+              selected: {controller.ledMode},
+              showSelectedIcon: false,
+              onSelectionChanged: (value) => controller.setLedMode(value.first),
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<int>(
+              key: ValueKey(controller.screenOff),
+              initialValue: controller.screenOff,
               decoration: const InputDecoration(
                 labelText: '自动熄屏',
                 prefixIcon: Icon(Icons.bedtime_outlined),
               ),
-              items: const ['15 秒', '30 秒', '1 分钟', '2 分钟', '5 分钟']
+              items: const ['关', '30 秒', '1 分钟', '2 分钟', '5 分钟']
+                  .asMap()
+                  .entries
                   .map(
-                    (value) =>
-                        DropdownMenuItem(value: value, child: Text(value)),
+                    (entry) => DropdownMenuItem(
+                      value: entry.key,
+                      child: Text(entry.value),
+                    ),
                   )
                   .toList(),
               onChanged: (value) {
-                if (value != null) controller.setScreenTimeout(value);
+                if (value != null) controller.setScreenOff(value);
               },
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('24 小时制'),
-              subtitle: const Text('同步影响主页表盘预览'),
-              value: controller.use24Hour,
-              onChanged: controller.setUse24Hour,
+              title: const Text('蓝牙'),
+              subtitle: const Text('需在手表设置里切换，手机端只读显示'),
+              value: controller.watchBluetooth,
+              onChanged: null,
             ),
           ],
         ),
@@ -408,15 +463,15 @@ class SettingsPage extends StatelessWidget {
             FilledButton.icon(
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
-                final ok = await controller.applyBrightness();
+                final ok = await controller.refreshWatchSettings();
                 messenger.showSnackBar(
                   SnackBar(
-                    content: Text(ok ? '亮度已写入手表。' : '设置已应用到本地，连接后写入手表。'),
+                    content: Text(ok ? '已读取手表当前设置。' : '请先连接手表。'),
                   ),
                 );
               },
-              icon: const Icon(Icons.check_rounded, size: 18),
-              label: const Text('保存设置'),
+              icon: const Icon(Icons.sync_rounded, size: 18),
+              label: const Text('读取手表设置'),
             ),
             OutlinedButton.icon(
               onPressed: controller.resetSettings,

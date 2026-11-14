@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        NotificationRules.load(applicationContext)
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENTS)
             .setStreamHandler(object : EventChannel.StreamHandler {
@@ -70,6 +71,57 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                     "isConnected" -> result.success(WatchLinkService.isConnected)
+                    "nowPlaying" -> result.success(
+                        MediaBridge.nowPlaying(applicationContext),
+                    )
+                    "mediaControl" -> {
+                        val action = call.argument<String>("action") ?: ""
+                        MediaBridge.controlAction(action, applicationContext)
+                        result.success(true)
+                    }
+                    "seekTo" -> {
+                        val position = call.argument<Number>("positionMs")
+                            ?.toLong() ?: 0L
+                        MediaBridge.seekTo(position, applicationContext)
+                        result.success(true)
+                    }
+                    "messageCount" -> result.success(
+                        WatchLinkService.cachedMessageCount,
+                    )
+                    "messageRules" -> result.success(
+                        mapOf(
+                            "mode" to NotificationRules.mode,
+                            "packages" to NotificationRules.packages.toList(),
+                            "maxMessages" to NotificationRules.maxMessages,
+                            "merge" to NotificationRules.merge,
+                        ),
+                    )
+                    "setMessageRules" -> {
+                        NotificationRules.update(
+                            mode = call.argument<String>("mode") ?: "all",
+                            packages = call
+                                .argument<List<String>>("packages")
+                                ?.toSet()
+                                ?: emptySet(),
+                            maxMessages = call
+                                .argument<Number>("maxMessages")
+                                ?.toInt()
+                                ?: 5,
+                            merge = call.argument<Boolean>("merge") ?: true,
+                        )
+                        WatchLinkService.instance?.applyMessageRules()
+                        android.util.Log.d(
+                            "WatchLink",
+                            "消息规则 mode=${NotificationRules.mode} " +
+                                "apps=${NotificationRules.packages.size} " +
+                                "max=${NotificationRules.maxMessages} " +
+                                "merge=${NotificationRules.merge}",
+                        )
+                        result.success(true)
+                    }
+                    "notificationApps" -> result.success(
+                        NotificationRules.apps(applicationContext),
+                    )
                     "setMediaFollow" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: true
                         WatchLinkService.instance?.setMediaFollow(enabled)

@@ -73,7 +73,7 @@ class HomePage extends StatelessWidget {
             const SizedBox(height: 12),
             _Metrics(controller: controller),
             const SizedBox(height: 26),
-            const SectionHeader(title: '快捷功能', subtitle: '消息、歌词、画面与播放控制'),
+            const SectionHeader(title: '快捷功能', subtitle: '消息、运动、画面与播放控制'),
             const SizedBox(height: 12),
             _QuickActions(controller: controller, onNavigate: onNavigate),
             const SizedBox(height: 18),
@@ -200,7 +200,7 @@ class _HeroCard extends StatelessWidget {
                       label: Text(controller.connected ? '断开设备' : '连接设备'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: () => onNavigate(1),
+                      onPressed: () => onNavigate(2),
                       icon: const Icon(
                         Icons.chat_bubble_outline_rounded,
                         size: 17,
@@ -664,10 +664,15 @@ class _QuickActions extends StatelessWidget {
       (
         Icons.chat_bubble_outline_rounded,
         '设备消息',
-        '3 个消息槽 · UTF-8',
+        '通知路由 · 手动发送',
+        () => onNavigate(2),
+      ),
+      (
+        Icons.directions_run_rounded,
+        '运动数据',
+        '今日步数 · 活动分布',
         () => onNavigate(1),
       ),
-      (Icons.lyrics_outlined, '歌词传输', '当前歌词 · 播放状态', () => onNavigate(2)),
       (
         Icons.screenshot_monitor_outlined,
         '屏幕镜像',
@@ -678,7 +683,7 @@ class _QuickActions extends StatelessWidget {
         Icons.play_circle_outline_rounded,
         '播放控制',
         '播放暂停 · 上下一首',
-        () => onNavigate(2),
+        () => onNavigate(3),
       ),
     ];
     return LayoutBuilder(

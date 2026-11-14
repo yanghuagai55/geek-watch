@@ -93,9 +93,11 @@ class MetricCard extends StatelessWidget {
                         label,
                         style: TextStyle(
                           color: scheme.onSurfaceVariant,
-                          fontSize: 11,
+                          fontFamily: AppFonts.latin,
+                          fontFamilyFallback: AppFonts.headingFallback,
+                          fontSize: 17,
                           fontWeight: FontWeight.w700,
-                          letterSpacing: 1.1,
+                          letterSpacing: 0.5,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -210,9 +212,11 @@ class MiniMetricCard extends StatelessWidget {
                         label,
                         style: TextStyle(
                           color: scheme.onSurfaceVariant,
-                          fontSize: 10,
+                          fontFamily: AppFonts.latin,
+                          fontFamilyFallback: AppFonts.headingFallback,
+                          fontSize: 15,
                           fontWeight: FontWeight.w700,
-                          letterSpacing: 0.7,
+                          letterSpacing: 0.4,
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -238,16 +242,23 @@ class MiniMetricCard extends StatelessWidget {
                     ),
                   ),
                 ],
-                const SizedBox(width: 12),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: compact ? 22 : 24,
-                    height: 1,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: AppFonts.latin,
-                    fontFamilyFallback: AppFonts.headingFallback,
-                    fontFeatures: const [FontFeature.tabularFigures()],
+                const SizedBox(width: 10),
+                // 固定宽度并右对齐：数字位数变化时曲线和文字都不再左右跳。
+                SizedBox(
+                  width: 80,
+                  child: Text(
+                    value,
+                    textAlign: TextAlign.right,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: compact ? 22 : 24,
+                      height: 1,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: AppFonts.latin,
+                      fontFamilyFallback: AppFonts.headingFallback,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
               ],
@@ -268,11 +279,23 @@ class _SparklinePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (values.length < 2) return;
+    var low = values.reduce(math.min);
+    var high = values.reduce(math.max);
+    if (high - low < 1e-6) {
+      // 全是同一个值（例如 FPS=0）时把线放中间，不要贴底。
+      low -= 0.5;
+      high += 0.5;
+    } else {
+      final padding = (high - low) * 0.12;
+      low -= padding;
+      high += padding;
+    }
+    final span = high - low;
     final points = <Offset>[];
     for (var i = 0; i < values.length; i++) {
       final x = i / (values.length - 1) * size.width;
-      final normalized = values[i].clamp(0.04, 1.0);
-      final y = size.height - math.max(2, normalized * size.height * 0.88);
+      final ratio = ((values[i] - low) / span).clamp(0.0, 1.0);
+      final y = size.height - 2 - ratio * (size.height - 4);
       points.add(Offset(x, y));
     }
     final line = Path()..moveTo(points.first.dx, points.first.dy);
@@ -307,6 +330,8 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SparklinePainter oldDelegate) {
-    return oldDelegate.values != values || oldDelegate.color != color;
+    // history 是原地 removeAt/add 的可变 List，引用永远相同，
+    // 必须无条件重绘，否则曲线会一直停住。
+    return true;
   }
 }

@@ -52,9 +52,10 @@ app/lib/
 ├── theme/app_theme.dart          调色板 AppPalette、字体常量 AppFonts、明暗两套 ThemeData
 ├── pages/
 │   ├── home_page.dart            主页：表盘卡 + 三张性能卡 + 快捷功能（含屏幕镜像对话框）
-│   ├── messages_page.dart        消息：3 个槽 + UTF-8 字节计数 + 发送
+│   ├── sport_page.dart           运动：手表 MPU6050 今日步数、距离、卡路里、12 个时段柱状图
+│   ├── messages_page.dart        消息：通知路由规则（全部/选中应用、条数、合并）+ 手动发送
 │   ├── music_page.dart           音乐：播放器卡 + 进度条 + 歌词逐行同步 + 手表控制跟随
-│   └── settings_page.dart        设置：链路、地址/串口/波特率、主题、亮度、熄屏、24h
+│   └── settings_page.dart        设置：链路、Android 后台、主题、手表设置（亮度/抬腕/按键音/状态灯/熄屏）
 └── widgets/
     ├── app_shell.dart            导航外壳：桌面 76→236px 折叠侧栏、竖屏 prism 液态玻璃底栏
     ├── common.dart               AppCard / PageHeader / StatusPill / 连接切换入口
@@ -107,7 +108,7 @@ app/windows/runner/
 | 消息页「发送到手表」 | 写消息槽 | 成功/失败提示；按字符边界截到 23 字节 | `02` 槽号 + UTF-8 |
 | 音乐页「同步到手表」 | 逐行歌词 + 播放态 | 每行一帧，间隔 350ms；返回成功行数 | `03` ≤27 字节、`04` |
 | 音乐页播放/暂停 | 播放态 | 本地状态立即切换，同时下行 `04` | `04` |
-| 设置页亮度滑杆 / 保存设置 | 亮度 | 松手与保存时写设备，0/1/2 三档 | `05` |
+| 设置页「手表设置」 | 亮度/抬腕/按键音/状态灯/熄屏 | 与手表设置页一一对应，改动即时下发；连接后回读并回显当前档位；蓝牙只读 | `18` / `19` → `1A` |
 | 连接成功 | 自动校时 | 后台发送，不阻塞「已连接」提示 | `01` |
 | 手表按键 | 反向控制 | `10` 帧直接调用 Windows 媒体 play/pause/next/prev（SMTC），同时更新音乐页状态 | `10` |
 | 手表音乐页 | 未连接状态 | 4 秒收不到合法帧显示「无连接」；连接后显示 PC 下发的标题/歌词 | `0B` |
@@ -115,7 +116,11 @@ app/windows/runner/
 | 设置页「关闭窗口后驻留托盘」 | 后台驻留 | 关闭窗口只隐藏，托盘双击恢复、右键退出 | 原生 `watch_companion/tray` |
 | Android 设备页 | 连接手表 | 系统蓝牙配对 HC-04 后，App 通过经典 SPP 连同一套 A5 帧；链路由前台服务 `WatchLinkService` 持有 | `BluetoothSocket` + `watch_companion/bluetooth` |
 | Android 设置页「跟随系统媒体」 | 媒体标题 | `WatchNotificationListener` 读 MediaSessionManager，原生渲染 128×32 点阵并分页轮播；手表按键 0x10 反向控制系统媒体 | `0B` + `04` + `10` |
-| Android 消息页 | 应用名列表/详情 | 通知只缓存最近 5 条（过滤 shell、系统广告与常驻状态）；手表打开一级页发 `0x14` 后才下发 128×112 应用名点阵，选中后 `0x15` 拉 128×160 详情点阵，离开 `0x16` 恢复媒体推送 | `14` + `15` + `16` + `22` + `23` + `24` |
+| Android 消息页 | 应用名列表/详情 | 路由规则（全部 / 仅选中应用）、最多 1..5 条、同应用合并都持久化在原生服务；通知过滤 shell/系统广告/常驻状态。手表打开一级页发 `0x14` 后先收 `0x25` 数量再收 128×112 应用名点阵，选中后 `0x15` 拉 128×160 详情点阵，离开 `0x16` 恢复媒体推送 | `14` + `15` + `16` + `22` + `23` + `24` + `25` + `26` |
+| 点阵压缩 | 0x26 RLE | 每 128 字节块先试游程编码（值+连续数），比原始 129B 更短才用；固件解出 128B 后复用原分块逻辑，失败自动退回 `0B/22/23` | `26` |
+| Android 自动恢复 | 断线重挂 | 前台服务每 15 秒重连；App 每 2 秒查原生 `isConnected`，一旦服务重连成功就自动重建会话，无需手点连接 | `watch_companion/bluetooth` |
+| Android 媒体页 | 手机歌曲 | 原生读取 MediaSession 标题/艺人/播放态/进度，App 每秒轮询显示；播放/暂停/上下首/拖动进度直接控制手机；固件在消息页期间忽略媒体点阵，不会抢界面 | `nowPlaying` / `mediaControl` / `seekTo` |
+| Windows / Android 运动页 | 今日运动 | 每 5 秒发 `0x27`，手表回步数/距离/卡路里/活跃分钟/目标（u32×5）和 12 个 2 小时桶（u16×12）；断开后保留上次读数并标注同步时间 | `27` |
 
 ### 4.2 仍是本地状态 / 尚未实现
 
@@ -147,7 +152,10 @@ Future<bool> syncTime(DateTime now);          // 01
 Future<bool> sendMessage(int slot, String t); // 02，按 UTF-8 字符边界截到 23 字节
 Future<bool> sendLyric(String text);          // 03，≤27 字节
 Future<bool> setPlayState(bool playing);      // 04
-Future<bool> setBrightness(int level);        // 05，0/1/2
+Future<bool> setBrightness(int level);        // 05，0/1/2（旧固件兼容）
+Future<bool> querySettings();                 // 19 → 收 1A
+Future<bool> setSetting(int key, int value);  // 18
+Future<bool> requestSport();                  // 27 → 收 27
 Future<WatchSnapshot?> requestSnapshot();     // 06 → 收 11
 Stream<WatchStats> get stats;                 // 12
 Stream<int> get controls;                     // 10
@@ -162,6 +170,12 @@ Stream<String> get logs;
 3. 接收 **不要用 `SO_RCVTIMEO` + `WSAGetLastError` 判超时**：`WSAGetLastError` 是线程局部的，Dart isolate 的两次 FFI 调用可能落在不同 OS 线程，超时会被误读成 0 并断开链路。现在用 `select()`（20ms）+ 可读后再 `recv()`，控制流不依赖错误码。
 4. isolate 只负责 `select/recv`；发送由主 isolate 直接写同一个 socket（帧很小），避免每帧一次端口往返。`closesocket` 也能从主 isolate 打断阻塞的接收。
 5. 连接失败重试 3 次、间隔 400ms；HC-04 同一时刻只支持一个无线连接，重复快速连接偶尔需要等一下。
+
+**字体（手机界面）**：
+
+- 正文用完整思源宋体 SemiBold（Source Han Serif SC SemiBold，24.7MB / 44779 个 cmap 字形），
+  内部家族名按 OFL 要求改为 `AT32 Serif SC`；标题级字阶用 Playfair Display（`AT32 Playfair`）。
+- 不再做字符子集，设置页等长尾中文不会再缺字；APK 因此增大约 20MB（压缩后）。
 
 **0x0B 点阵（解决歌词方框）**：
 
@@ -204,6 +218,15 @@ Stream<String> get logs;
 | `11` 画面 | 表→PC | `A5 11 FF 长度3 宽2 高2 像素...`，长度 3 字节小端 |
 | `12` 性能 | 表→PC | 8×u32；`[6]` 低 16=整片 SRAM 已用（字节）、高 16=CPU×10；`[7]` 低 16=SRAM 总量（字节）、高 16=完整帧 FPS |
 | `13` 传感器 | 表→PC | 无数据，回一行 `DBG ...`，**不回 ok** |
+| `18` 设置 | PC→表 | key value：1 抬腕 2 按键音 3 亮度 4 蓝牙 5 状态灯 6 熄屏；回 `1A` |
+| `19` 要设置 | PC→表 | 无数据；回 `1A` |
+| `1A` 设置状态 | 表→PC | 6 字节：抬腕/按键音/亮度/蓝牙/状态灯/熄屏 |
+| `22` 列表点阵 | PC→表 | 块号 0..13 + 128 字节 1bpp（128×112） |
+| `23` 详情点阵 | PC→表 | 块号 0..19 + 128 字节 1bpp（128×160） |
+| `24` 清空消息 | PC→表 | 无数据，回到“无消息” |
+| `25` 消息数量 | PC→表 | 1 字节 0..5，先于 `22` 下发 |
+| `26` RLE 点阵 | PC→表 | 类型 1 媒体/2 列表/3 详情 + 块号 + (值, 连续数) 对 |
+| `27` 运动 | PC→表 | 无数据；回 44 字节：5×u32（步数/距离/卡路里/活跃分钟/目标）+ 12×u16 时段桶 |
 
 > 两处历史不一致已按固件 `ui/src/link.c` 与真机实测确认：
 > 1. `04` 播放态确实存在，`1` 播放 / `0` 暂停；

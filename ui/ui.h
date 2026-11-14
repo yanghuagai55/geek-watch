@@ -210,12 +210,18 @@ int link_media_mask_ready(void);
 const uint8_t *link_media_mask(void);
 /* 消息页：列表 128x112、详情 128x160 的 1bpp 点阵，由手机按需下发。 */
 int link_msg_list_ready(void);
+int link_msg_list_empty(void);
 const uint8_t *link_msg_list_mask(void);
 int link_msg_detail_ready(void);
 const uint8_t *link_msg_detail_mask(void);
 void link_request_messages(void);
 void link_request_message_detail(int index);
 void link_leave_messages(void);
+void link_notify_settings(void);
+void ui_settings_apply(int key, int value);
+void ui_app_set_message_count(int count);
+/* 消息应用打开时，忽略媒体点阵，避免覆盖消息缓冲/抢走界面。 */
+int ui_app_message_active(void);
 /* 最近 4 秒内收到过合法帧即认为 PC/手机在线。 */
 int link_connected(void);
 /* 调试模式打开后，07 命令里按住的键会并进按键电平。 */

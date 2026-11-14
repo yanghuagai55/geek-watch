@@ -8,6 +8,7 @@ import '../pages/home_page.dart';
 import '../pages/messages_page.dart';
 import '../pages/music_page.dart';
 import '../pages/settings_page.dart';
+import '../pages/sport_page.dart';
 import '../state/watch_controller.dart';
 import '../theme/app_theme.dart';
 import 'common.dart';
@@ -45,6 +46,12 @@ class _AppShellState extends State<AppShell>
       Icons.home_rounded,
       '主页',
       CompanionGlyphs.dashboard,
+    ),
+    _NavItem(
+      Icons.directions_run_outlined,
+      Icons.directions_run_rounded,
+      '运动',
+      CompanionGlyphs.sport,
     ),
     _NavItem(
       Icons.chat_bubble_outline_rounded,
@@ -281,6 +288,7 @@ class _AppShellState extends State<AppShell>
       builder: (context, _) {
         final pages = [
           HomePage(controller: widget.controller, onNavigate: _select),
+          SportPage(controller: widget.controller),
           MessagesPage(controller: widget.controller),
           MusicPage(controller: widget.controller),
           SettingsPage(controller: widget.controller),

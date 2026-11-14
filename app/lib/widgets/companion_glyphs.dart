@@ -14,6 +14,18 @@ abstract final class CompanionGlyphs {
     GlyphBox(13.5, 12.5, 20.5, 20.5, 2),
   ]);
 
+  static const sport = Glyph([
+    GlyphPolyline([
+      GlyphVertex(3, 12),
+      GlyphVertex(7, 12),
+      GlyphVertex(9, 7),
+      GlyphVertex(12, 17),
+      GlyphVertex(15, 10),
+      GlyphVertex(17, 12),
+      GlyphVertex(21, 12),
+    ], role: GlyphRole.line),
+  ]);
+
   static const messages = Glyph([
     GlyphBox(3.5, 4.5, 20.5, 16.5, 3.5),
     GlyphPolyline([

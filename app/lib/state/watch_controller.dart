@@ -18,11 +18,21 @@ import '../services/watch_transport.dart';
 
 export '../services/watch_transport.dart' show TransportType;
 
+/// 通知栏里出现过的应用，供“只转发选中应用”勾选。
+class NotificationApp {
+  const NotificationApp({required this.package, required this.label});
+
+  final String package;
+  final String label;
+}
+
 class WatchController extends ChangeNotifier {
   WatchController({bool startTicker = true, this.session}) {
     _stateSub = session?.states.listen(_onLinkState);
     _statsSub = session?.stats.listen(_applyStats);
     _controlsSub = session?.controls.listen(_applyControl);
+    _settingsSub = session?.watchSettings.listen(_applyWatchSettings);
+    _sportSub = session?.sport.listen(_applySport);
     if (startTicker) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
     }
@@ -36,6 +46,8 @@ class WatchController extends ChangeNotifier {
   StreamSubscription<LinkState>? _stateSub;
   StreamSubscription<WatchStats>? _statsSub;
   StreamSubscription<int>? _controlsSub;
+  StreamSubscription<WatchSettings>? _settingsSub;
+  StreamSubscription<WatchSport>? _sportSub;
 
   DateTime now = DateTime.now();
   ThemeMode themeMode = ThemeMode.dark;
@@ -49,8 +61,24 @@ class WatchController extends ChangeNotifier {
   bool demoStreaming = true;
   bool liquidGlass = true;
   bool use24Hour = true;
-  double brightness = 0.65;
-  String screenTimeout = '30 秒';
+
+  /// 手表实际设置（0x1A 回传）。
+  bool raiseWrist = true;
+  bool keyBeep = true;
+  int watchBrightness = 1;
+  bool watchBluetooth = true;
+  int ledMode = 1;
+  int screenOff = 0;
+  bool watchSettingsLoaded = false;
+
+  /// 今日运动（0x27）。断开后保留最后一次读数，界面会标明“上次同步”。
+  int steps = 0;
+  int stepGoal = 8000;
+  int distanceM = 0;
+  int calories = 0;
+  int activeMinutes = 0;
+  List<int> sportBuckets = List<int>.filled(12, 0);
+  DateTime? sportSyncedAt;
   bool previewConnected = false;
   LinkState linkState = LinkState.idle;
   String? lastError;
@@ -65,11 +93,27 @@ class WatchController extends ChangeNotifier {
   bool backgroundEnabled = false;
   String mediaTitle = '';
   String mediaArtist = '';
+  double mediaPosition = 0;
+  double mediaDuration = 0;
+
+  /// Android：服务缓存的通知条数（最多 5 条）。
+  int cachedNotifications = 0;
+
+  bool get hasMedia => mediaTitle.isNotEmpty;
 
   /// Android 系统集成：通知转发、通知读取权限、电池优化白名单。
   bool notificationForward = true;
   bool notificationAccess = false;
   bool batteryExempt = false;
+
+  /// 通知路由规则（原生服务持久化，App 重启后回读）。
+  /// all = 全部通知；selected = 只转发勾选的应用。
+  String routeMode = 'all';
+  Set<String> routePackages = <String>{};
+  int maxMessages = 5;
+  bool mergeNotifications = true;
+  List<NotificationApp> knownApps = const <NotificationApp>[];
+  bool messageRulesLoaded = false;
 
   /// 主页预览用的真机画面（连接后自动抓一帧，点击可刷新）。
   ui.Image? deviceScreen;
@@ -123,27 +167,21 @@ class WatchController extends ChangeNotifier {
   }
 
   String get telemetryLabel {
+    if (!connected) return '未连接';
     if (_liveTelemetry) return '实时';
-    return demoStreaming ? 'LIVE · 演示' : '已暂停';
+    return '等待数据';
   }
 
-  double ramUsed = 10.0;
+  double ramUsed = 0;
   double ramTotal = 16.0;
-  double cpu = 18.4;
-  int fps = 60;
+  double cpu = 0;
+  int fps = 0;
 
-  final List<double> ramHistory = List<double>.generate(
-    28,
-    (i) => 0.58 + 0.035 * math.sin(i * 0.55),
-  );
-  final List<double> cpuHistory = List<double>.generate(
-    28,
-    (i) => 0.18 + 0.045 * math.sin(i * 0.7),
-  );
-  final List<double> fpsHistory = List<double>.generate(
-    28,
-    (i) => i % 7 == 0 ? 1.0 : 60 / 61,
-  );
+  // 必须是可增长列表：_append 会 removeAt(0) + add，定长列表会抛异常，
+  // 表现为数值在变、曲线却一直是平线（历史数组永远停在初始 0）。
+  final List<double> ramHistory = List<double>.filled(28, 0, growable: true);
+  final List<double> cpuHistory = List<double>.filled(28, 0, growable: true);
+  final List<double> fpsHistory = List<double>.filled(28, 0, growable: true);
 
   Future<String?> connect() async {
     final active = session;
@@ -166,6 +204,7 @@ class WatchController extends ChangeNotifier {
           active.syncTime(DateTime.now()).catchError((Object _) => false),
         );
       }
+      unawaited(active.requestSport().catchError((Object _) => false));
       unawaited(capturePreview());
       return null;
     } catch (error) {
@@ -235,12 +274,11 @@ class WatchController extends ChangeNotifier {
     return active.setPlayState(value);
   }
 
-  /// 把 0..1 的滑杆映射成 0/1/2 三档亮度。
-  Future<bool> applyBrightness() {
+  /// 让手表回一帧 0x1A，刷新设置页显示的档位。
+  Future<bool> refreshWatchSettings() {
     final active = session;
     if (active == null || !connected) return Future<bool>.value(false);
-    final level = brightness < 0.34 ? 0 : (brightness < 0.67 ? 1 : 2);
-    return active.setBrightness(level);
+    return active.querySettings();
   }
 
   Future<bool> syncTime() {
@@ -287,6 +325,12 @@ class WatchController extends ChangeNotifier {
     linkState = state;
     if (state != LinkState.connected) {
       _liveTelemetry = false;
+      ramUsed = 0;
+      cpu = 0;
+      fps = 0;
+      _fillZero(ramHistory);
+      _fillZero(cpuHistory);
+      _fillZero(fpsHistory);
       _stopMediaPager();
       deviceScreen?.dispose();
       deviceScreen = null;
@@ -303,6 +347,7 @@ class WatchController extends ChangeNotifier {
     await AndroidWatchBridge.setMediaFollow(mediaFollow);
     await AndroidWatchBridge.setNotificationForward(notificationForward);
     await refreshAndroidStatus();
+    await refreshMessageRules();
   }
 
   Future<void> refreshAndroidStatus() async {
@@ -337,25 +382,164 @@ class WatchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _applyWatchSettings(WatchSettings settings) {
+    raiseWrist = settings.raiseWrist;
+    keyBeep = settings.keyBeep;
+    watchBrightness = settings.brightness;
+    watchBluetooth = settings.bluetooth;
+    ledMode = settings.ledMode;
+    screenOff = settings.screenOff;
+    watchSettingsLoaded = true;
+    notifyListeners();
+  }
+
+  void _applySport(WatchSport sport) {
+    steps = sport.steps;
+    stepGoal = sport.goal > 0 ? sport.goal : 8000;
+    distanceM = sport.distanceM;
+    calories = sport.calories;
+    activeMinutes = sport.activeMin;
+    sportBuckets = List<int>.unmodifiable(sport.buckets);
+    sportSyncedAt = DateTime.now();
+    notifyListeners();
+  }
+
+  /// 主动拉一次今日运动数据。
+  Future<bool> refreshSport() {
+    final active = session;
+    if (active == null || !connected) return Future<bool>.value(false);
+    return active.requestSport();
+  }
+
+  void _sendSetting(int key, int value) {
+    final active = session;
+    if (active == null) return;
+    unawaited(active.setSetting(key, value));
+  }
+
+  void setRaiseWrist(bool value) {
+    raiseWrist = value;
+    _sendSetting(1, value ? 1 : 0);
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void setKeyBeep(bool value) {
+    keyBeep = value;
+    _sendSetting(2, value ? 1 : 0);
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void setWatchBrightness(int value) {
+    watchBrightness = value.clamp(0, 2);
+    _sendSetting(3, watchBrightness);
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void setLedMode(int value) {
+    ledMode = value.clamp(0, 2);
+    _sendSetting(5, ledMode);
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void setScreenOff(int value) {
+    screenOff = value.clamp(0, 4);
+    _sendSetting(6, screenOff);
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  /// 回读原生服务持久化的通知路由规则。
+  Future<void> refreshMessageRules() async {
+    if (!Platform.isAndroid) return;
+    final rules = await AndroidWatchBridge.messageRules();
+    final mode = '${rules['mode'] ?? 'all'}';
+    routeMode = mode == 'selected' ? 'selected' : 'all';
+    routePackages = <String>{
+      for (final item in (rules['packages'] as List<Object?>? ?? const []))
+        '$item',
+    };
+    maxMessages = ((rules['maxMessages'] as num?)?.toInt() ?? 5).clamp(1, 5);
+    mergeNotifications = rules['merge'] != false;
+    final apps = await AndroidWatchBridge.notificationApps();
+    knownApps = <NotificationApp>[
+      for (final item in apps)
+        NotificationApp(
+          package: '${item['package'] ?? ''}',
+          label: '${item['label'] ?? item['package'] ?? ''}',
+        ),
+    ];
+    messageRulesLoaded = true;
+    notifyListeners();
+  }
+
+  void setRouteMode(String value) {
+    routeMode = value == 'selected' ? 'selected' : 'all';
+    unawaited(_pushMessageRules());
+    notifyListeners();
+  }
+
+  void toggleRoutePackage(String package, bool selected) {
+    if (selected) {
+      routePackages = <String>{...routePackages, package};
+    } else {
+      routePackages = <String>{
+        for (final item in routePackages)
+          if (item != package) item,
+      };
+    }
+    unawaited(_pushMessageRules());
+    notifyListeners();
+  }
+
+  void setMaxMessages(int value) {
+    maxMessages = value.clamp(1, 5);
+    unawaited(_pushMessageRules());
+    notifyListeners();
+  }
+
+  void setMergeNotifications(bool value) {
+    mergeNotifications = value;
+    unawaited(_pushMessageRules());
+    notifyListeners();
+  }
+
+  Future<void> _pushMessageRules() {
+    if (!Platform.isAndroid) return Future<void>.value();
+    return AndroidWatchBridge.setMessageRules(
+      mode: routeMode,
+      packages: routePackages,
+      maxMessages: maxMessages,
+      merge: mergeNotifications,
+    );
+  }
+
   void _applyControl(int action) {
     lastControlAction = action;
     controlSeq++;
-    if (action == WatchControl.play) {
-      playing = true;
-      _controlMedia('play');
+    // Android 的 0x10 已由前台服务直接操作系统媒体，这里只同步界面。
+    if (Platform.isWindows) {
+      if (action == WatchControl.play) _controlMedia('play');
+      if (action == WatchControl.pause) _controlMedia('pause');
+      if (action == WatchControl.next) _controlMedia('next');
+      if (action == WatchControl.previous) _controlMedia('previous');
     }
-    if (action == WatchControl.pause) {
-      playing = false;
-      _controlMedia('pause');
-    }
-    if (action == WatchControl.next) _controlMedia('next');
-    if (action == WatchControl.previous) _controlMedia('previous');
+    if (action == WatchControl.play) playing = true;
+    if (action == WatchControl.pause) playing = false;
     notifyListeners();
   }
 
   void _controlMedia(String action) {
-    if (!Platform.isWindows) return;
-    unawaited(_mediaMonitor.control(action));
+    if (Platform.isWindows) {
+      unawaited(_mediaMonitor.control(action));
+      return;
+    }
+    if (Platform.isAndroid) {
+      unawaited(AndroidWatchBridge.mediaControl(action));
+    }
   }
 
   void _syncMediaPolling() {
@@ -481,7 +665,13 @@ class WatchController extends ChangeNotifier {
   void _tick() {
     _ticks += 1;
     now = DateTime.now();
-    if (demoStreaming && !_liveTelemetry) {
+    if (!connected) {
+      // 没连接就老实显示 0，不再跑演示数据。
+      ramUsed = 0;
+      cpu = 0;
+      fps = 0;
+    } else if (session == null && demoStreaming && !_liveTelemetry) {
+      // 仅用于没有硬件会话的纯界面预览。
       final phase = _ticks / 3;
       ramUsed = 10.0 + 0.16 * math.sin(phase * 0.7);
       cpu = 18.4 + 4.2 * math.sin(phase) + 1.4 * math.cos(phase * 0.43);
@@ -490,7 +680,98 @@ class WatchController extends ChangeNotifier {
       _append(cpuHistory, cpu / 100);
       _append(fpsHistory, fps / 61);
     }
+    // 运动数据 5 秒一次；抓屏期间让路，避免把帧插进图像流。
+    final activeSession = session;
+    if (connected &&
+        activeSession != null &&
+        _ticks % 5 == 0 &&
+        !activeSession.isCapturing) {
+      unawaited(
+        activeSession.requestSport().catchError((Object _) => false),
+      );
+    }
+    if (Platform.isAndroid) {
+      unawaited(_pollAndroidMedia());
+      if (_ticks % 2 == 0) {
+        unawaited(_pollMessageCount());
+        unawaited(_maybeReattach());
+      }
+    }
     notifyListeners();
+  }
+
+  bool _reattaching = false;
+  DateTime? _lastReattachAttempt;
+
+  /// 前台服务自己重连成功后，Flutter 侧自动挂回，不必手点“连接”。
+  Future<void> _maybeReattach() async {
+    if (!Platform.isAndroid || session == null || _reattaching) return;
+    if (connected || connecting) return;
+    final now = DateTime.now();
+    final last = _lastReattachAttempt;
+    if (last != null && now.difference(last) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastReattachAttempt = now;
+    _reattaching = true;
+    try {
+      if (!await AndroidWatchBridge.isConnected()) return;
+      if (connected || connecting) return;
+      await connect();
+    } finally {
+      _reattaching = false;
+    }
+  }
+
+  bool _pollingAndroidMedia = false;
+
+  /// Android 没有 SMTC，改为每秒向原生服务要一次当前媒体与进度。
+  Future<void> _pollAndroidMedia() async {
+    if (!Platform.isAndroid || _pollingAndroidMedia) return;
+    _pollingAndroidMedia = true;
+    try {
+      final info = await AndroidWatchBridge.nowPlaying();
+      if (info == null) return;
+      final title = (info['title'] as String?)?.trim() ?? '';
+      final artist = (info['artist'] as String?)?.trim() ?? '';
+      final isPlaying = info['playing'] == true;
+      final position = (info['positionMs'] as num?)?.toDouble() ?? 0;
+      final duration = (info['durationMs'] as num?)?.toDouble() ?? 0;
+      mediaTitle = title;
+      mediaArtist = artist;
+      playing = isPlaying;
+      mediaPosition = position;
+      mediaDuration = duration;
+      notifyListeners();
+    } finally {
+      _pollingAndroidMedia = false;
+    }
+  }
+
+  Future<void> _pollMessageCount() async {
+    if (!Platform.isAndroid) return;
+    final count = await AndroidWatchBridge.messageCount();
+    if (count != cachedNotifications) {
+      cachedNotifications = count;
+      notifyListeners();
+    }
+  }
+
+  /// 手机端切歌；手表按键走原生 0x10，不会重复触发。
+  void skipMedia({required bool next}) {
+    _controlMedia(next ? 'next' : 'previous');
+  }
+
+  void seekMedia(double seconds) {
+    if (Platform.isAndroid) {
+      unawaited(AndroidWatchBridge.seekTo((seconds * 1000).round()));
+    }
+  }
+
+  static void _fillZero(List<double> values) {
+    for (var i = 0; i < values.length; i++) {
+      values[i] = 0;
+    }
   }
 
   static void _append(List<double> values, double value) {
@@ -563,13 +844,6 @@ class WatchController extends ChangeNotifier {
   void setDemoStreaming(bool value) => _update(() => demoStreaming = value);
   void setLiquidGlass(bool value) => _update(() => liquidGlass = value);
   void setUse24Hour(bool value) => _update(() => use24Hour = value);
-  void setBrightness(double value) {
-    brightness = value;
-    notifyListeners();
-    onSettingsChanged?.call();
-  }
-
-  void setScreenTimeout(String value) => _update(() => screenTimeout = value);
   void setAddress(String value) {
     deviceAddress = value;
     onSettingsChanged?.call();
@@ -600,8 +874,6 @@ class WatchController extends ChangeNotifier {
     demoStreaming = true;
     liquidGlass = true;
     use24Hour = true;
-    brightness = 0.65;
-    screenTimeout = '30 秒';
     previewConnected = false;
     mediaFollow = true;
     notificationForward = true;
@@ -641,9 +913,10 @@ class WatchController extends ChangeNotifier {
     deviceAddress = readString('deviceAddress', deviceAddress);
     serialPort = readString('serialPort', serialPort);
     baudRate = readString('baudRate', baudRate);
-    final level = values['brightness'];
-    if (level is num) brightness = level.toDouble().clamp(0.0, 1.0);
-    if (Platform.isAndroid) unawaited(refreshAndroidStatus());
+    if (Platform.isAndroid) {
+      unawaited(refreshAndroidStatus());
+      unawaited(refreshMessageRules());
+    }
   }
 
   Map<String, Object?> get persistedSettings => <String, Object?>{
@@ -657,7 +930,6 @@ class WatchController extends ChangeNotifier {
     'deviceAddress': deviceAddress,
     'serialPort': serialPort,
     'baudRate': baudRate,
-    'brightness': brightness,
   };
 
   void _update(VoidCallback change) {
@@ -673,6 +945,8 @@ class WatchController extends ChangeNotifier {
     _stateSub?.cancel();
     _statsSub?.cancel();
     _controlsSub?.cancel();
+    _settingsSub?.cancel();
+    _sportSub?.cancel();
     deviceScreen?.dispose();
     unawaited(session?.dispose());
     super.dispose();

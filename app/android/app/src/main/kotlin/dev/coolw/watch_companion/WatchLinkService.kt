@@ -68,6 +68,9 @@ class WatchLinkService : Service() {
         val isConnected: Boolean
             get() = instance?.connected?.get() == true
 
+        val cachedMessageCount: Int
+            get() = instance?.messageCount() ?: 0
+
         fun attachSink(value: EventChannel.EventSink?) {
             sink = value
             if (value != null) {
@@ -128,7 +131,7 @@ class WatchLinkService : Service() {
 
     private val scanner = FrameScanner { cmd, first ->
         when (cmd) {
-            0x10 -> MediaBridge.control(first)
+            0x10 -> MediaBridge.control(first, applicationContext)
             0x14 -> onMessageListRequested()
             0x15 -> onMessageDetailRequested(first)
             0x16 -> onMessageLeave()
@@ -141,6 +144,7 @@ class WatchLinkService : Service() {
         prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         mediaFollow = prefs.getBoolean(KEY_MEDIA, true)
         notificationForward = prefs.getBoolean(KEY_NOTIFY, true)
+        NotificationRules.load(this)
         createChannel()
     }
 
@@ -578,16 +582,18 @@ class WatchLinkService : Service() {
     /** 0x0B：128×32 单色点阵，分 4 块；媒体需要先清掉旧文字歌词。 */
     private fun sendBitmap(bits: ByteArray): Boolean {
         if (bits.size != WatchTextRasterizer.BYTES) return false
-        return sendMaskChunks(0x0B, bits, clearLyric = true)
+        return sendMaskChunks(0x0B, bits, 1, clearLyric = true)
     }
 
     /**
      * 点阵按 128 字节一块下发；消息列表 0x22（14 块）、详情 0x23（20 块）。
+     * 每块先试 RLE（0x26），压缩后没有变小就退回原始分块。
      * 与抓屏互斥，并和媒体点阵共用一把锁，避免两块图交叉。
      */
     private fun sendMaskChunks(
         cmd: Int,
         bits: ByteArray,
+        maskType: Int,
         clearLyric: Boolean = false,
     ): Boolean =
         synchronized(bitmapLock) {
@@ -601,15 +607,30 @@ class WatchLinkService : Service() {
                     )
                 }
                 val chunks = bits.size / 128
+                var rleSaved = 0
+                var rawBlocks = 0
                 for (chunk in 0 until chunks) {
                     if (!connected.get()) return false
                     waitForCapture()
                     if (!connected.get()) return false
 
-                    val payload = ByteArray(1 + 128)
-                    payload[0] = chunk.toByte()
-                    System.arraycopy(bits, chunk * 128, payload, 1, 128)
-                    val frame = buildFrame(cmd, payload)
+                    val encoded = rleEncode(bits, chunk * 128)
+                    // 原始分块是 1+128 字节；RLE 只有更短时才值得用。
+                    val frame = if (encoded.size <= 126) {
+                        rleSaved += 128 - encoded.size
+                        // 2 字节头 + RLE 数据；固件解出 128 字节后走原分块逻辑。
+                        val payload = ByteArray(2 + encoded.size)
+                        payload[0] = maskType.toByte()
+                        payload[1] = chunk.toByte()
+                        System.arraycopy(encoded, 0, payload, 2, encoded.size)
+                        buildFrame(0x26, payload)
+                    } else {
+                        rawBlocks++
+                        val payload = ByteArray(1 + 128)
+                        payload[0] = chunk.toByte()
+                        System.arraycopy(bits, chunk * 128, payload, 1, 128)
+                        buildFrame(cmd, payload)
+                    }
 
                     // 抓屏刚好开始时先让路，抓完再补这一块，不能半途丢掉。
                     var sent = false
@@ -625,11 +646,35 @@ class WatchLinkService : Service() {
                     if (!sent) return false
                     Thread.sleep(6)
                 }
+                Log.d(
+                    "WatchLink",
+                    "点阵 type=$maskType 完成：RLE 省 ${rleSaved}B，原始块 $rawBlocks",
+                )
                 true
             } finally {
                 bitmapBusy.set(false)
             }
         }
+
+    /** 128 字节 1bpp 块的游程编码；最坏 256 字节，调用方按大小决定是否采用。 */
+    private fun rleEncode(bits: ByteArray, offset: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream(96)
+        var i = 0
+        while (i < 128) {
+            val value = bits[offset + i]
+            var run = 1
+            while (i + run < 128 &&
+                bits[offset + i + run] == value &&
+                run < 255
+            ) {
+                run++
+            }
+            out.write(value.toInt() and 0xFF)
+            out.write(run)
+            i += run
+        }
+        return out.toByteArray()
+    }
 
     private fun waitForCapture() {
         val deadline = SystemClock.uptimeMillis() + 8_000
@@ -649,16 +694,28 @@ class WatchLinkService : Service() {
     // ---- 通知缓存与消息页 ---------------------------------------------------
 
     /** 通知只进缓存，等手表打开一级消息页时再要。 */
-    fun cacheNotification(app: String, title: String, text: String, key: String) {
+    fun cacheNotification(
+        app: String,
+        title: String,
+        text: String,
+        key: String,
+        pkg: String,
+    ) {
         if (!notificationForward) return
         mainHandler.post {
             messages.removeAll { it.key == key }
-            messages.addFirst(
-                CachedMessage(key, WatchMessageRasterizer.Item(app, title, text)),
-            )
-            while (messages.size > 5) {
-                messages.removeLast()
+            if (NotificationRules.merge) {
+                // 同一应用只留最新一条，避免占满全部位置。
+                messages.removeAll { it.pkg == pkg }
             }
+            messages.addFirst(
+                CachedMessage(
+                    key,
+                    pkg,
+                    WatchMessageRasterizer.Item(app, title, text),
+                ),
+            )
+            trimMessages()
         }
     }
 
@@ -666,7 +723,20 @@ class WatchLinkService : Service() {
         mainHandler.post { messages.removeAll { it.key == key } }
     }
 
-    /** 手表打开一级消息页：渲染最近 5 条列表并下发，期间暂停媒体推送。 */
+    /** 规则修改后立即把缓存收紧到新的条数上限。 */
+    fun applyMessageRules() {
+        mainHandler.post { trimMessages() }
+    }
+
+    private fun trimMessages() {
+        while (messages.size > NotificationRules.maxMessages) {
+            messages.removeLast()
+        }
+    }
+
+    fun messageCount(): Int = messages.size
+
+    /** 手表打开一级消息页：渲染当前缓存的列表并下发，期间暂停媒体推送。 */
     private fun onMessageListRequested() {
         mainHandler.post {
             messageMode = true
@@ -677,8 +747,15 @@ class WatchLinkService : Service() {
                 worker.execute { writeOrReport(buildFrame(0x24, ByteArray(0))) }
                 return@post
             }
+            Log.d("WatchLink", "消息列表请求：${items.size} 条")
             worker.execute {
-                sendMaskChunks(0x22, WatchMessageRasterizer.list(items))
+                // 先告诉手表实际条数，避免焦点落在空行。
+                synchronized(bitmapLock) {
+                    writeOrReport(
+                        buildFrame(0x25, byteArrayOf(items.size.toByte())),
+                    )
+                }
+                sendMaskChunks(0x22, WatchMessageRasterizer.list(items), 2)
             }
         }
     }
@@ -689,7 +766,7 @@ class WatchLinkService : Service() {
             messageMode = true
             val item = messages.getOrNull(index)?.item
             worker.execute {
-                sendMaskChunks(0x23, WatchMessageRasterizer.detail(item))
+                sendMaskChunks(0x23, WatchMessageRasterizer.detail(item), 3)
             }
         }
     }
@@ -796,6 +873,7 @@ class WatchLinkService : Service() {
 
 private data class CachedMessage(
     val key: String,
+    val pkg: String,
     val item: WatchMessageRasterizer.Item,
 )
 

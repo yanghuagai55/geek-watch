@@ -353,3 +353,191 @@ Future<void> toggleWatchConnection(
     connect: !controller.connected,
   );
 }
+
+/// 页面底部的小字权限/疑难解答区，音乐页与消息页共用。
+class TroubleshootingCard extends StatelessWidget {
+  const TroubleshootingCard({
+    super.key,
+    required this.controller,
+    required this.hint,
+    this.showMedia = false,
+  });
+
+  final WatchController controller;
+  final String hint;
+  final bool showMedia;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final mediaText = controller.hasMedia
+        ? [
+            controller.mediaTitle,
+            if (controller.mediaArtist.isNotEmpty) controller.mediaArtist,
+          ].join(' · ')
+        : '未检测到';
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.help_outline_rounded,
+                size: 16,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                '疑难解答 · 当前权限',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: controller.refreshAndroidStatus,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: const Size(0, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('刷新', style: TextStyle(fontSize: 11)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          _StatusLine(
+            icon: Icons.notifications_active_outlined,
+            label: '通知读取权限',
+            value: controller.notificationAccess ? '已授权' : '未授权',
+            ok: controller.notificationAccess,
+          ),
+          _StatusLine(
+            icon: Icons.battery_saver_outlined,
+            label: '电池优化白名单',
+            value: controller.batteryExempt ? '已加入' : '未加入',
+            ok: controller.batteryExempt,
+          ),
+          _StatusLine(
+            icon: Icons.bluetooth_rounded,
+            label: '手表连接',
+            value: controller.connected ? 'SPP 已连接' : '未连接',
+            ok: controller.connected,
+          ),
+          if (showMedia)
+            _StatusLine(
+              icon: Icons.music_note_outlined,
+              label: '系统媒体',
+              value: mediaText,
+              ok: controller.hasMedia,
+            )
+          else
+            _StatusLine(
+              icon: Icons.inbox_outlined,
+              label: '已缓存通知',
+              value: '${controller.cachedNotifications} 条（最多 5 条）',
+              ok: controller.cachedNotifications > 0,
+            ),
+          if (!controller.notificationAccess ||
+              !controller.batteryExempt) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                if (!controller.notificationAccess)
+                  OutlinedButton(
+                    onPressed: () async {
+                      await controller.openNotificationAccess();
+                      await Future<void>.delayed(const Duration(seconds: 2));
+                      await controller.refreshAndroidStatus();
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 30),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      textStyle: const TextStyle(fontSize: 11),
+                    ),
+                    child: const Text('去授权通知读取'),
+                  ),
+                if (!controller.batteryExempt)
+                  OutlinedButton(
+                    onPressed: () async {
+                      await controller.openBatterySettings();
+                      await Future<void>.delayed(const Duration(seconds: 2));
+                      await controller.refreshAndroidStatus();
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 30),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      textStyle: const TextStyle(fontSize: 11),
+                    ),
+                    child: const Text('加入电池白名单'),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text(
+            hint,
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontSize: 10.5,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusLine extends StatelessWidget {
+  const _StatusLine({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.ok,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool ok;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: scheme.onSurfaceVariant,
+                fontSize: 11,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: ok ? scheme.primary : const Color(0xFFE0A45C),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
