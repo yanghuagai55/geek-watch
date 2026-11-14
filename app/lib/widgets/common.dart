@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
@@ -370,6 +371,7 @@ class TroubleshootingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final android = Platform.isAndroid;
     final mediaText = controller.hasMedia
         ? [
             controller.mediaTitle,
@@ -394,30 +396,39 @@ class TroubleshootingCard extends StatelessWidget {
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
               const Spacer(),
-              TextButton(
-                onPressed: controller.refreshAndroidStatus,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: const Size(0, 28),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              if (android)
+                TextButton(
+                  onPressed: controller.refreshAndroidStatus,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('刷新', style: TextStyle(fontSize: 11)),
                 ),
-                child: const Text('刷新', style: TextStyle(fontSize: 11)),
-              ),
             ],
           ),
           const SizedBox(height: 4),
-          _StatusLine(
-            icon: Icons.notifications_active_outlined,
-            label: '通知读取权限',
-            value: controller.notificationAccess ? '已授权' : '未授权',
-            ok: controller.notificationAccess,
-          ),
-          _StatusLine(
-            icon: Icons.battery_saver_outlined,
-            label: '电池优化白名单',
-            value: controller.batteryExempt ? '已加入' : '未加入',
-            ok: controller.batteryExempt,
-          ),
+          if (android) ...[
+            _StatusLine(
+              icon: Icons.notifications_active_outlined,
+              label: '通知读取权限',
+              value: controller.notificationAccess ? '已授权' : '未授权',
+              ok: controller.notificationAccess,
+            ),
+            _StatusLine(
+              icon: Icons.battery_saver_outlined,
+              label: '电池优化白名单',
+              value: controller.batteryExempt ? '已加入' : '未加入',
+              ok: controller.batteryExempt,
+            ),
+          ] else
+            const _StatusLine(
+              icon: Icons.notifications_off_outlined,
+              label: '系统通知转发',
+              value: 'Windows 暂未接入',
+              ok: false,
+            ),
           _StatusLine(
             icon: Icons.bluetooth_rounded,
             label: '手表连接',
@@ -431,15 +442,23 @@ class TroubleshootingCard extends StatelessWidget {
               value: mediaText,
               ok: controller.hasMedia,
             )
-          else
+          else if (android)
             _StatusLine(
               icon: Icons.inbox_outlined,
               label: '已缓存通知',
               value: '${controller.cachedNotifications} 条（最多 5 条）',
               ok: controller.cachedNotifications > 0,
+            )
+          else
+            _StatusLine(
+              icon: Icons.inbox_outlined,
+              label: '消息槽',
+              value: controller.connected ? '可手动发送' : '未连接',
+              ok: controller.connected,
             ),
-          if (!controller.notificationAccess ||
-              !controller.batteryExempt) ...[
+          if (android &&
+              (!controller.notificationAccess ||
+                  !controller.batteryExempt)) ...[
             const SizedBox(height: 6),
             Wrap(
               spacing: 8,

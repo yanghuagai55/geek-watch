@@ -166,73 +166,47 @@ class _MessagesPageState extends State<MessagesPage> {
           title: '设备消息',
           subtitle: Platform.isAndroid
               ? '系统通知按规则筛选后，渲染成点阵送到手表消息页'
-              : '通过消息槽把文本发到手表',
+              : '消息槽手动发送；系统通知转发暂未接入 Windows',
           trailing: StatusPill(
             label: controller.connected ? '已连接' : '未连接',
             color: controller.connected ? null : scheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 22),
-        if (Platform.isAndroid) ...[
-          _NotificationRules(controller: controller),
-          const SizedBox(height: 16),
-          AppCard(
-            child: ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(top: 8),
-              shape: const Border(),
-              leading: Icon(Icons.edit_note_rounded, color: scheme.primary),
-              title: const Text(
-                '手动发送测试消息',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-              subtitle: Text(
-                '走 0x02 文本槽，不经过系统通知',
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 11,
-                ),
-              ),
-              children: [_composer(context)],
+        _NotificationRules(
+          controller: controller,
+          enabled: Platform.isAndroid,
+        ),
+        const SizedBox(height: 16),
+        AppCard(
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(top: 8),
+            shape: const Border(),
+            leading: Icon(Icons.edit_note_rounded, color: scheme.primary),
+            title: const Text(
+              '手动发送测试消息',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
-          ),
-          const SizedBox(height: 16),
-          TroubleshootingCard(
-            controller: controller,
-            hint:
-                '手表打开一级消息页时才回传应用名列表，选中后才加载详情。'
-                '若列表为空，请先开启通知读取权限，并检查路由规则是否放行目标应用。',
-          ),
-        ] else ...[
-          AppCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SectionHeader(
-                  title: '编辑消息',
-                  subtitle: controller.connected
-                      ? '发送时按 UTF-8 字符边界截到 23 字节'
-                      : '先在本地预览内容，连接后即可写入手表',
-                ),
-                const SizedBox(height: 20),
-                _composer(context),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          AppCard(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              '协议说明：0x02 消息帧使用「槽号 + UTF-8」；发送阶段会按完整字符截断，'
-              '避免产生半个汉字。手表一级消息页显示的是最近几条系统通知，与这三个槽互不影响。',
+            subtitle: Text(
+              '走 0x02 文本槽，不经过系统通知',
               style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: 12,
-                height: 1.5,
+                color: scheme.onSurfaceVariant,
+                fontSize: 11,
               ),
             ),
+            children: [_composer(context)],
           ),
-        ],
+        ),
+        const SizedBox(height: 16),
+        TroubleshootingCard(
+          controller: controller,
+          hint: Platform.isAndroid
+              ? '手表打开一级消息页时才回传应用名列表，选中后才加载详情。'
+                    '若列表为空，请先开启通知读取权限，并检查路由规则是否放行目标应用。'
+              : 'Windows 端暂未接入系统通知，上面的路由规则和发送限制只影响 Android。'
+                    '可以展开“手动发送测试消息”，或连接 Android 手机后使用通知转发。',
+        ),
       ],
     );
   }
@@ -240,9 +214,10 @@ class _MessagesPageState extends State<MessagesPage> {
 
 /// 通知路由规则：全部 / 仅选中应用、发送条数、重复应用合并。
 class _NotificationRules extends StatelessWidget {
-  const _NotificationRules({required this.controller});
+  const _NotificationRules({required this.controller, required this.enabled});
 
   final WatchController controller;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -255,11 +230,41 @@ class _NotificationRules extends StatelessWidget {
             title: '通知路由',
             subtitle: '手表只显示应用名；你选中某条后才把正文渲染成整屏详情',
             trailing: TextButton.icon(
-              onPressed: controller.refreshMessageRules,
+              onPressed: enabled ? controller.refreshMessageRules : null,
               icon: const Icon(Icons.refresh_rounded, size: 16),
               label: const Text('刷新应用', style: TextStyle(fontSize: 11)),
             ),
           ),
+          if (!enabled) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline_rounded,
+                    size: 15,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Windows 端暂未接入系统通知，下面的规则与开关只影响 Android。',
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 10.5,
+                        height: 1.45,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
           SegmentedButton<String>(
             segments: const [
@@ -276,8 +281,9 @@ class _NotificationRules extends StatelessWidget {
             ],
             selected: {controller.routeMode},
             showSelectedIcon: false,
-            onSelectionChanged: (value) =>
-                controller.setRouteMode(value.first),
+            onSelectionChanged: enabled
+                ? (value) => controller.setRouteMode(value.first)
+                : null,
           ),
           if (controller.routeMode == 'selected') ...[
             const SizedBox(height: 12),
@@ -308,10 +314,12 @@ class _NotificationRules extends StatelessWidget {
                     ),
                   ),
                   value: controller.routePackages.contains(app.package),
-                  onChanged: (value) => controller.toggleRoutePackage(
-                    app.package,
-                    value ?? false,
-                  ),
+                  onChanged: enabled
+                      ? (value) => controller.toggleRoutePackage(
+                          app.package,
+                          value ?? false,
+                        )
+                      : null,
                 ),
           ],
           const Divider(height: 30),
@@ -328,7 +336,9 @@ class _NotificationRules extends StatelessWidget {
                 ChoiceChip(
                   label: Text('$count 条'),
                   selected: controller.maxMessages == count,
-                  onSelected: (_) => controller.setMaxMessages(count),
+                  onSelected: enabled
+                      ? (_) => controller.setMaxMessages(count)
+                      : null,
                 ),
             ],
           ),
@@ -338,11 +348,13 @@ class _NotificationRules extends StatelessWidget {
             title: const Text('重复应用合并显示'),
             subtitle: const Text('同一应用的新通知覆盖旧条目，避免占满全部位置'),
             value: controller.mergeNotifications,
-            onChanged: controller.setMergeNotifications,
+            onChanged: enabled ? controller.setMergeNotifications : null,
           ),
           Text(
-            '当前已缓存 ${controller.cachedNotifications} 条'
-            '${controller.mergeNotifications ? '（已按应用合并）' : ''}',
+            enabled
+                ? '当前已缓存 ${controller.cachedNotifications} 条'
+                      '${controller.mergeNotifications ? '（已按应用合并）' : ''}'
+                : 'Windows 端不缓存系统通知',
             style: TextStyle(
               color: scheme.onSurfaceVariant,
               fontSize: 10.5,
