@@ -1,0 +1,652 @@
+import 'package:material_ui/material_ui.dart';
+
+import '../state/watch_controller.dart';
+import '../theme/app_theme.dart';
+import '../widgets/common.dart';
+import '../widgets/metric_card.dart';
+import '../widgets/watch_face.dart';
+
+class HomePage extends StatelessWidget {
+  const HomePage({
+    super.key,
+    required this.controller,
+    required this.onNavigate,
+  });
+
+  final WatchController controller;
+  final ValueChanged<int> onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final portrait =
+            constraints.maxWidth < 760 &&
+            constraints.maxHeight > constraints.maxWidth;
+        if (portrait) {
+          return _PortraitHome(controller: controller, onNavigate: onNavigate);
+        }
+        final scheme = Theme.of(context).colorScheme;
+        return PageScroll(
+          children: [
+            const PageHeader(
+              title: '手表工作台',
+              subtitle: '实时表盘与设备状态，一眼掌握。',
+              trailing: StatusPill(label: '界面预览', icon: Icons.tune_rounded),
+            ),
+            const SizedBox(height: 22),
+            _HeroCard(controller: controller, onNavigate: onNavigate),
+            const SizedBox(height: 26),
+            SectionHeader(
+              title: '实时性能',
+              subtitle: 'RAM、主循环负载与屏幕帧率',
+              trailing: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                children: [
+                  StatusPill(
+                    label: controller.demoStreaming ? 'LIVE · 演示' : '已暂停',
+                    color: controller.demoStreaming
+                        ? null
+                        : scheme.onSurfaceVariant,
+                  ),
+                  IconButton(
+                    onPressed: () =>
+                        controller.setDemoStreaming(!controller.demoStreaming),
+                    tooltip: controller.demoStreaming ? '暂停演示数据' : '继续演示数据',
+                    iconSize: 20,
+                    icon: Icon(
+                      controller.demoStreaming
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            _Metrics(controller: controller),
+            const SizedBox(height: 26),
+            const SectionHeader(title: '快捷功能', subtitle: '先完成交互与布局，硬件能力随后接入'),
+            const SizedBox(height: 12),
+            _QuickActions(onNavigate: onNavigate),
+            const SizedBox(height: 18),
+            AppCard(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline_rounded,
+                    size: 18,
+                    color: scheme.primary,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '当前数据仅用于 UI 验收，不代表已连接真实手表。',
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _HeroCard extends StatelessWidget {
+  const _HeroCard({required this.controller, required this.onNavigate});
+
+  final WatchController controller;
+  final ValueChanged<int> onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+    return AppCard(
+      radius: 24,
+      padding: const EdgeInsets.all(28),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? const [Color(0xFF1C2B26), Color(0xFF141D1A), Color(0xFF101615)]
+            : const [Color(0xFFDDEFE3), Color(0xFFEAF3E8), Color(0xFFF5F4E9)],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stacked = constraints.maxWidth < 650;
+          final intro = SizedBox(
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: stacked
+                  ? CrossAxisAlignment.center
+                  : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                StatusPill(
+                  label: '本地演示 · 未连接硬件',
+                  color: isDark ? AppPalette.mint : AppPalette.mintDeep,
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'AT32 Watch',
+                  textAlign: stacked ? TextAlign.center : TextAlign.start,
+                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                    color: isDark
+                        ? AppPalette.warmWhite
+                        : const Color(0xFF18241F),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.8,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'AT32F421K8T7  ·  128 × 160  ·  ST7735S',
+                  textAlign: stacked ? TextAlign.center : TextAlign.start,
+                  style: TextStyle(
+                    color: isDark ? AppPalette.mintSoft : AppPalette.mintDeep,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '把表盘、消息和音乐带到大屏。\n保留手表的安静，也保留每一处细节。',
+                  textAlign: stacked ? TextAlign.center : TextAlign.start,
+                  style: TextStyle(
+                    color: isDark ? AppPalette.muted : scheme.onSurfaceVariant,
+                    height: 1.6,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Wrap(
+                  alignment: stacked
+                      ? WrapAlignment.center
+                      : WrapAlignment.start,
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () => showPrototypeMessage(context, '设备连接'),
+                      icon: const Icon(Icons.bluetooth_rounded, size: 18),
+                      label: const Text('连接设备'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => onNavigate(1),
+                      icon: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 17,
+                      ),
+                      label: const Text('消息预览'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+          final watch = SizedBox(
+            width: stacked ? 148 : 174,
+            child: WatchFace(
+              now: controller.now,
+              use24Hour: controller.use24Hour,
+            ),
+          );
+          if (stacked) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                intro,
+                const SizedBox(height: 24),
+                Center(child: watch),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: intro),
+              const SizedBox(width: 32),
+              watch,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PortraitHome extends StatelessWidget {
+  const _PortraitHome({required this.controller, required this.onNavigate});
+
+  final WatchController controller;
+  final ValueChanged<int> onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 112),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PortraitHeader(controller: controller),
+          const SizedBox(height: 16),
+          _PortraitWatchCard(controller: controller),
+          const SizedBox(height: 20),
+          SectionHeader(
+            title: '实时性能',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                StatusPill(
+                  label: controller.demoStreaming ? 'LIVE · 演示' : '已暂停',
+                  color: controller.demoStreaming
+                      ? null
+                      : scheme.onSurfaceVariant,
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () =>
+                      controller.setDemoStreaming(!controller.demoStreaming),
+                  tooltip: controller.demoStreaming ? '暂停演示数据' : '继续演示数据',
+                  iconSize: 18,
+                  icon: Icon(
+                    controller.demoStreaming
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          _PortraitMetrics(controller: controller),
+          const SizedBox(height: 20),
+          const SectionHeader(title: '快捷功能'),
+          const SizedBox(height: 10),
+          _QuickActions(onNavigate: onNavigate),
+          const SizedBox(height: 18),
+          const _IntroFooter(),
+        ],
+      ),
+    );
+  }
+}
+
+class _PortraitHeader extends StatelessWidget {
+  const _PortraitHeader({required this.controller});
+
+  final WatchController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'AT32 Watch',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -1,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'AT32F421K8T7  ·  128 × 160',
+                style: TextStyle(
+                  color: scheme.primary,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        StatusPill(
+          label: controller.previewConnected ? '演示连接' : '界面预览',
+          icon: Icons.tune_rounded,
+        ),
+      ],
+    );
+  }
+}
+
+class _PortraitWatchCard extends StatelessWidget {
+  const _PortraitWatchCard({required this.controller});
+
+  final WatchController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final watchWidth = constraints.maxWidth < 330 ? 116.0 : 136.0;
+        return AppCard(
+          radius: 22,
+          padding: const EdgeInsets.all(18),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF1C2B26), Color(0xFF141D1A), Color(0xFF101615)],
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const StatusPill(label: '屏幕预览', color: AppPalette.mint),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '实时表盘',
+                      style: TextStyle(
+                        color: AppPalette.warmWhite,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${controller.now.month}月${controller.now.day}日 · 周${weekdays[controller.now.weekday - 1]}',
+                      style: const TextStyle(
+                        color: AppPalette.muted,
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '${controller.transportLabel} · ${controller.previewConnected ? '演示连接' : '未连接硬件'}',
+                      style: TextStyle(
+                        color: controller.previewConnected
+                            ? AppPalette.mint
+                            : AppPalette.muted,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: () => showPrototypeMessage(context, '设备连接'),
+                      icon: const Icon(Icons.bluetooth_rounded, size: 16),
+                      label: const Text('连接设备'),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 36),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        textStyle: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: watchWidth,
+                child: WatchFace(
+                  now: controller.now,
+                  use24Hour: controller.use24Hour,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PortraitMetrics extends StatelessWidget {
+  const _PortraitMetrics({required this.controller});
+
+  final WatchController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final cards = [
+      MiniMetricCard(
+        label: 'RAM',
+        value: controller.ramUsed.toStringAsFixed(1),
+        unit: '/ 16 KB',
+        color: scheme.primary,
+        icon: Icons.memory_rounded,
+        history: controller.ramHistory,
+      ),
+      MiniMetricCard(
+        label: 'CPU',
+        value: '${controller.cpu.toStringAsFixed(1)}%',
+        unit: '主循环占用',
+        color: scheme.onSurface,
+        icon: Icons.speed_rounded,
+        history: controller.cpuHistory,
+      ),
+      MiniMetricCard(
+        label: 'FPS',
+        value: '${controller.fps}',
+        unit: '帧/秒',
+        color: scheme.secondary,
+        icon: Icons.monitor_heart_outlined,
+        history: controller.fpsHistory,
+      ),
+    ];
+    return Column(
+      children: [
+        for (var i = 0; i < cards.length; i++) ...[
+          cards[i],
+          if (i < cards.length - 1) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _IntroFooter extends StatelessWidget {
+  const _IntroFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      child: Column(
+        children: [
+          const Text(
+            '把表盘、消息和音乐带到大屏。',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '保留手表的安静，也保留每一处细节。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontSize: 11.5,
+              height: 1.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Metrics extends StatelessWidget {
+  const _Metrics({required this.controller});
+
+  final WatchController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final cards = [
+      MetricCard(
+        label: 'RAM',
+        value: controller.ramUsed.toStringAsFixed(1),
+        unit: '/ 16 KB',
+        detail:
+            '剩余 ${(controller.ramTotal - controller.ramUsed).toStringAsFixed(1)} KB',
+        progress: controller.ramUsed / controller.ramTotal,
+        centerText:
+            '${(controller.ramUsed / controller.ramTotal * 100).round()}%',
+        color: scheme.primary,
+        icon: Icons.memory_rounded,
+        history: controller.ramHistory,
+      ),
+      MetricCard(
+        label: 'CPU',
+        value: controller.cpu.toStringAsFixed(1),
+        unit: '%',
+        detail: '120 MHz · 1 秒采样',
+        progress: controller.cpu / 100,
+        centerText: '${controller.cpu.round()}%',
+        color: scheme.onSurface,
+        icon: Icons.speed_rounded,
+        history: controller.cpuHistory,
+      ),
+      MetricCard(
+        label: 'FPS',
+        value: '${controller.fps}',
+        unit: 'fps',
+        detail: '${(1000 / controller.fps).toStringAsFixed(1)} ms 帧周期',
+        progress: controller.fps / 61,
+        centerText: 'LIVE',
+        color: scheme.secondary,
+        icon: Icons.monitor_heart_outlined,
+        history: controller.fpsHistory,
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 790) {
+          return Row(
+            children: [
+              for (var i = 0; i < cards.length; i++) ...[
+                Expanded(child: cards[i]),
+                if (i < cards.length - 1) const SizedBox(width: 12),
+              ],
+            ],
+          );
+        }
+        return Column(
+          children: [
+            for (var i = 0; i < cards.length; i++) ...[
+              cards[i],
+              if (i < cards.length - 1) const SizedBox(height: 12),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _QuickActions extends StatelessWidget {
+  const _QuickActions({required this.onNavigate});
+
+  final ValueChanged<int> onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final items = [
+      (
+        Icons.chat_bubble_outline_rounded,
+        '设备消息',
+        '3 个消息槽 · UTF-8',
+        () => onNavigate(1),
+      ),
+      (Icons.lyrics_outlined, '歌词传输', '当前歌词 · 播放状态', () => onNavigate(2)),
+      (
+        Icons.screenshot_monitor_outlined,
+        '屏幕镜像',
+        '128 × 160 · RGB565',
+        () => showPrototypeMessage(context, '屏幕镜像'),
+      ),
+      (
+        Icons.play_circle_outline_rounded,
+        '播放控制',
+        '播放暂停 · 上下一首',
+        () => onNavigate(2),
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 900 ? 4 : 2;
+        const gap = 12.0;
+        final itemWidth =
+            (constraints.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final item in items)
+              SizedBox(
+                width: itemWidth,
+                height: 116,
+                child: AppCard(
+                  onTap: item.$4,
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(item.$1, size: 21, color: scheme.primary),
+                          const Spacer(),
+                          Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      Text(
+                        item.$2,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        item.$3,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: scheme.onSurfaceVariant,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}

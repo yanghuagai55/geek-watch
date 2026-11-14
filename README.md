@@ -308,7 +308,8 @@ SPP 抓屏 40,964 字节约 4 秒，消息页、音乐页均已用实机截图�
 
 ## 许可与字体
 
-- **代码：MIT**，见 [LICENSE](LICENSE)。`ui_ease_in_out` 为 LVGL（MIT）缓动的整数移植，已注明出处。
+- **固件与 PC 工具（`ui/`、`at32/`、`host/`）：MIT**，见 [LICENSE](LICENSE)。`ui_ease_in_out` 为 LVGL（MIT）缓动的整数移植，已注明出处。
+- **Flutter 配套应用（`app/`）：GPL-3.0-or-later**，见 [app/LICENSE](app/LICENSE)。原因是竖屏导航使用了 FlClash 的 `prism_ui`（同为 GPL-3.0-or-later），完整来源与修改说明见 [app/THIRD_PARTY_NOTICES.md](app/THIRD_PARTY_NOTICES.md)。分发 `app/` 二进制时须同时提供对应完整源码。
 - **字模表不入库**：`ui/src/font_data.c` / `font_data_full.c` / `song_data.c` 已 gitignore。
   历史表光栅自商业字体（华文琥珀 STHupo、SimSun/Consolas），不可公开传播；克隆后按上文自举生成。
 - **推荐开源字体（自举/替换用，均允许光栅再分发）**：
