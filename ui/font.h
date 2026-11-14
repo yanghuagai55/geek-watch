@@ -6,7 +6,7 @@
 /* 点阵字模。数据由 host/gen_font.c 生成，放在 Flash 侧，不占 16KB 预算。 */
 
 typedef struct ui_glyph {
-    uint32_t cp;
+    uint16_t cp;
     uint8_t w;
     uint8_t h;
     uint8_t advance;

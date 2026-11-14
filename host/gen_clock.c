@@ -265,33 +265,35 @@ static int write_preview(const char *path, const digit_t *digits, int cell_w, in
     return 1;
 }
 
-static int emit_cover(FILE *fp, const digit_t *g, int n, int *off_base) {
+static int emit_cover(FILE *fp, const digit_t *g, int n, int *off_base, int *offs) {
     int i;
     int bytes = 0;
     for (i = 0; i < n; i++) {
         int count = g[i].w * g[i].h;
-        int p;
+        int p = 0;
+        int col = 0;
+        offs[i] = *off_base;
         fprintf(fp, "    /* %d */\n", i);
-        for (p = 0; p < count; p += 2) {
-            int hi = (g[i].gray[p] * 15 + 32) / 64;
-            int lo = 0;
-            if (p + 1 < count) {
-                lo = (g[i].gray[p + 1] * 15 + 32) / 64;
+        while (p < count) {
+            int v = (g[i].gray[p] * 15 + 32) / 64;
+            int run = 1;
+            if (v > 15) v = 15;
+            while (p + run < count && run < 16) {
+                int nv = (g[i].gray[p + run] * 15 + 32) / 64;
+                if (nv > 15) nv = 15;
+                if (nv != v) break;
+                run++;
             }
-            if (hi > 15) {
-                hi = 15;
-            }
-            if (lo > 15) {
-                lo = 15;
-            }
-            fprintf(fp, "0x%02X,", (hi << 4) | lo);
+            fprintf(fp, "0x%02X,", ((run - 1) << 4) | v);
             bytes++;
-            if ((p / 2) % 12 == 11) {
+            (*off_base)++;
+            col++;
+            if (col % 12 == 0) {
                 fprintf(fp, "\n");
             }
+            p += run;
         }
         fprintf(fp, "\n");
-        *off_base += (count + 1) / 2;
     }
     return bytes;
 }
@@ -304,6 +306,8 @@ static int write_song(const char *path,
     int i;
     int off;
     int bytes;
+    int toffs[64];
+    int doffs[16];
 
     fp = fopen(path, "wb");
     if (!fp) {
@@ -315,22 +319,17 @@ static int write_song(const char *path,
     fprintf(fp, "const int song_line_h[2] = {%d, %d};\n\n", title_h, clock_h);
     fprintf(fp, "const uint8_t song_cover[] = {\n");
     off = 0;
-    bytes = emit_cover(fp, titles, title_n, &off);
-    bytes += emit_cover(fp, digits, 10, &off);
+    bytes = emit_cover(fp, titles, title_n, &off, toffs);
+    bytes += emit_cover(fp, digits, 10, &off, doffs);
     fprintf(fp, "};\n\n");
     fprintf(fp, "const song_glyph_t song_glyph[] = {\n");
-    off = 0;
     for (i = 0; i < title_n; i++) {
-        int count = titles[i].w * titles[i].h;
         fprintf(fp, "    {0x%04X, 0, %d, %d, %d, %d, %d, %d},\n",
-                cps[i], titles[i].w, titles[i].h, tadv[i], tx[i], ty[i], off);
-        off += (count + 1) / 2;
+                cps[i], titles[i].w, titles[i].h, tadv[i], tx[i], ty[i], toffs[i]);
     }
     for (i = 0; i < 10; i++) {
-        int count = digits[i].w * digits[i].h;
         fprintf(fp, "    {'%d', 1, %d, %d, %d, %d, %d, %d},\n",
-                i, digits[i].w, digits[i].h, dadv[i], dx[i], dy[i], off);
-        off += (count + 1) / 2;
+                i, digits[i].w, digits[i].h, dadv[i], dx[i], dy[i], doffs[i]);
     }
     fprintf(fp, "};\n\n");
     fprintf(fp, "const int song_glyph_n = %d;\n", title_n + 10);

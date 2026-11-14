@@ -144,10 +144,10 @@ static void send_ctrl(uint8_t action) {
     hal_link_write(frame, 5);
 }
 
-static void send_empty(uint8_t cmd) {
+static void send_empty(uint8_t code) {
     uint8_t frame[4];
     frame[0] = LINK_MARK;
-    frame[1] = cmd;
+    frame[1] = code;
     frame[2] = 0;
     frame[3] = (uint8_t)(frame[0] ^ frame[1] ^ frame[2]);
     hal_link_write(frame, 4);

@@ -87,9 +87,9 @@ void ui_song_draw(int face, int16_t x, int16_t y, const char *utf8,
         uint32_t cp = utf8_next(&s);
         const song_glyph_t *g = find_song(face, cp);
         if (g && g->w && g->h) {
-            ui_mask_draw((int16_t)(pen + g->x), (int16_t)(y + g->y),
-                         (int16_t)g->w, (int16_t)g->h,
-                         song_cover + g->off, color, opacity);
+            ui_mask_rle_draw((int16_t)(pen + g->x), (int16_t)(y + g->y),
+                             (int16_t)g->w, (int16_t)g->h,
+                             song_cover + g->off, color, opacity);
             pen += g->advance;
         } else {
             char ch[5];

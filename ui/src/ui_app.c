@@ -387,7 +387,7 @@ static void draw_stack(int scroll, int n, int focus_vis, int y0, int pitch,
             continue;
         }
         stack_box(scroll, i, y0, pitch, &x, &y, &w, &h);
-        draw_labeled_card(x, y, w, h, 0, names[i], 0, a);
+        draw_labeled_card(x, y, w, h, 0, names[i], i == 0 ? side0 : 0, a);
     }
     stack_box(scroll, focus_vis, y0, pitch, &x, &y, &w, &h);
     draw_labeled_card(x, y, w, h, 1, names[focus_vis],
@@ -668,7 +668,7 @@ static void draw_sport_child(uint8_t a) {
     int n = st->sport.child_count;
     int scroll = st->sport.child_scroll.x;
     int vis = vis_index(scroll, n);
-    int y0, pitch, i, x, y, w, h;
+    int y0, pitch;
 
     sport_get(&ss);
     snprintf(l0, sizeof l0, "%lu步", (unsigned long)ss.steps);
@@ -677,15 +677,7 @@ static void draw_sport_child(uint8_t a) {
     names[2] = "加1000步";
     list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    for (i = 0; i < n; i++) {
-        if (i == vis) {
-            continue;
-        }
-        stack_box(scroll, i, y0, pitch, &x, &y, &w, &h);
-        draw_labeled_card(x, y, w, h, 0, names[i], i == 0 ? l0 : 0, a);
-    }
-    stack_box(scroll, vis, y0, pitch, &x, &y, &w, &h);
-    draw_labeled_card(x, y, w, h, 1, names[vis], vis == 0 ? l0 : 0, a);
+    draw_stack(scroll, n, vis, y0, pitch, names, l0, a);
     draw_header("运动", a, 0);
 }
 
@@ -875,7 +867,6 @@ static void draw_about_page(uint8_t a) {
     int y0;
     int pitch;
     int i;
-    int x, y, w, h;
 
     about_fill(&info);
     snprintf(lines[0], sizeof lines[0], "版本 %s", info.version);
@@ -897,15 +888,7 @@ static void draw_about_page(uint8_t a) {
 
     list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    for (i = 0; i < ABOUT_N; i++) {
-        if (i == vis) {
-            continue;
-        }
-        stack_box(scroll, i, y0, pitch, &x, &y, &w, &h);
-        draw_labeled_card(x, y, w, h, 0, names[i], 0, a);
-    }
-    stack_box(scroll, vis, y0, pitch, &x, &y, &w, &h);
-    draw_labeled_card(x, y, w, h, 1, names[vis], 0, a);
+    draw_stack(scroll, ABOUT_N, vis, y0, pitch, names, 0, a);
     draw_header("关于", a, 0);
 }
 

@@ -348,22 +348,19 @@ int host_self_test(const char *output_dir) {
         }
         {
             int header = header_h();
-            int y0 = header + (UI_H - header) / 2;
-            int border_x = (UI_W - UI_MX(860)) / 2;
-            if (hal_host_pixel(border_x, y0) != UI_COL_MINT) {
-                return fail("msg list is not the stack");
+            int line_y = header - UI_MY(12);
+            if (hal_host_pixel(UI_W / 2, line_y) != UI_COL_LINE) {
+                return fail("msg list header missing");
             }
         }
         save_shot("shot_msg.bmp");
         tap(HAL_KEY2);
         frames(20);
         {
-            int px = UI_MX(70) + UI_MX(30);
-            int py = header_h() + UI_MY(25) + UI_MY(170);
-            if (hal_host_pixel(px, py) != UI_COL_SURFACE) {
-                fprintf(stderr, "FAIL: msg detail card=%04x at %d,%d\n",
-                        hal_host_pixel(px, py), px, py);
-                return 1;
+            int header = header_h();
+            int line_y = header - UI_MY(12);
+            if (hal_host_pixel(UI_W / 2, line_y) != UI_COL_BG) {
+                return fail("msg detail did not open");
             }
         }
         save_shot("shot_msg_detail.bmp");
@@ -375,17 +372,14 @@ int host_self_test(const char *output_dir) {
         frames(32);
         hal_host_set_keys(0);
         frames(40);
-        /* 焦点边框与详情卡都消失，才说明两级页面均已退出。 */
+        /* 回到消息图标首页：顶栏分割线消失，中心磁贴恢复。 */
         {
             int header = header_h();
-            int y0 = header + (UI_H - header) / 2;
-            int border_x = (UI_W - UI_MX(860)) / 2;
-            int px = UI_MX(70) + UI_MX(30);
-            int py = header_h() + UI_MY(25) + UI_MY(170);
-            if (hal_host_pixel(border_x, y0) == UI_COL_MINT) {
+            int line_y = header - UI_MY(12);
+            if (hal_host_pixel(UI_W / 2, line_y) == UI_COL_LINE) {
                 return fail("long enter did not close msg");
             }
-            if (hal_host_pixel(px, py) == UI_COL_SURFACE) {
+            if (hal_host_pixel(UI_W / 2, UI_MY(100) + 4) == UI_COL_BG) {
                 return fail("msg card stayed on icon");
             }
         }
