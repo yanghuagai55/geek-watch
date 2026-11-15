@@ -14,6 +14,7 @@ enum {
     KIND_MASK = 7,
     KIND_MASK1 = 8,
     KIND_RIPPLE = 9,
+    KIND_EXT_IMAGE = 10,
     ITEM_MAX = 96,
     STR_MAX = 640,
     PIC_MAX = 24
@@ -1039,6 +1040,100 @@ static void raster_mask1(const draw_item_t *it, int band_y) {
            pic_ref[it->str_off], KIND_MASK1);
 }
 
+void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                       uint32_t ext_offset, uint8_t fmt,
+                       uint16_t color, uint8_t opacity) {
+    draw_item_t *it;
+
+    if (!items || w <= 0 || h <= 0 || !item_space() || opacity == 0 ||
+        ext_offset >= HAL_EXT_FLASH_SIZE || fmt < UI_EXT_FMT_1BPP ||
+        fmt > UI_EXT_FMT_RGB565) {
+        return;
+    }
+    it = &items[item_n++];
+    it->x = x;
+    it->y = y;
+    it->w = w;
+    it->h = h;
+    it->color = color;
+    it->str_off = (uint16_t)ext_offset;
+    it->kind = KIND_EXT_IMAGE;
+    it->opacity = opacity;
+    it->scale = 1;
+    stamp(it);
+    it->pal_n = fmt;
+}
+
+static void raster_ext_image(const draw_item_t *it, int band_y) {
+    int x0, x1, y0, y1, x, y;
+    int sw = it->w, sh = it->h;
+    int scale = it->scale ? it->scale : 1;
+    uint8_t fmt = it->pal_n;
+    int row_bytes;
+    int loaded_sy = -1;
+    uint8_t row_buf[256];
+    sample_axis_t ay, ax0;
+
+    use_item_xform(it);
+    if (fmt == UI_EXT_FMT_1BPP) {
+        row_bytes = (sw + 7) >> 3;
+    } else if (fmt == UI_EXT_FMT_4BPP) {
+        row_bytes = (sw + 1) >> 1;
+    } else {
+        row_bytes = sw * 2;
+    }
+    if (row_bytes <= 0 || row_bytes > (int)sizeof row_buf) {
+        return;
+    }
+    x0 = tf_ox + it->x * tf_s / 256;
+    x1 = tf_ox + (it->x + sw * scale - 1) * tf_s / 256 + 1;
+    y0 = tf_oy + it->y * tf_s / 256;
+    y1 = tf_oy + (it->y + sh * scale - 1) * tf_s / 256 + 1;
+    if (x0 < clip_x0) x0 = clip_x0;
+    if (x1 > clip_x1) x1 = clip_x1;
+    if (y0 < band_y) y0 = band_y;
+    if (y1 > clip_y1) y1 = clip_y1;
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+    ax0 = sample_begin((x0 - (tf_ox + it->x * tf_s / 256)) * 256, tf_s * scale);
+    ay = sample_begin((y0 - (tf_oy + it->y * tf_s / 256)) * 256, tf_s * scale);
+    for (y = y0; y < y1; y++, sample_next(&ay)) {
+        sample_axis_t ax = ax0;
+        int sy = ay.value;
+        if (sy < 0 || sy >= sh) {
+            continue;
+        }
+        if (sy != loaded_sy) {
+            uint32_t off = (uint32_t)it->str_off + (uint32_t)sy * (uint32_t)row_bytes;
+            if (!hal_ext_flash_read(off, row_buf, (uint32_t)row_bytes)) {
+                return;
+            }
+            loaded_sy = sy;
+        }
+        for (x = x0; x < x1; x++, sample_next(&ax)) {
+            int sx = ax.value;
+            if (sx < 0 || sx >= sw) {
+                continue;
+            }
+            if (fmt == UI_EXT_FMT_1BPP) {
+                if ((row_buf[sx >> 3] >> (7 - (sx & 7))) & 1) {
+                    pixel(x, y, band_y, it->color, it->opacity);
+                }
+            } else if (fmt == UI_EXT_FMT_4BPP) {
+                uint8_t b = row_buf[sx >> 1];
+                uint8_t a4 = (sx & 1) ? (b & 15u) : (b >> 4);
+                if (a4) {
+                    pixel(x, y, band_y, it->color, (uint8_t)((int)it->opacity * a4 / 15));
+                }
+            } else {
+                uint16_t c = (uint16_t)(row_buf[sx * 2] | ((uint16_t)row_buf[sx * 2 + 1] << 8));
+                pixel(x, y, band_y, c, it->opacity);
+            }
+        }
+    }
+}
+
 static void raster_text(const draw_item_t *it, int band_y) {
     use_item_xform(it);
     const char *s = strs + it->str_off;
@@ -1082,7 +1177,7 @@ static history_t describe(const draw_item_t *it) {
     h = hash_bytes(h, fields, sizeof fields);
     h = hash_bytes(h, &it->pal_off, sizeof it->pal_off);
     h = hash_bytes(h, &it->pal_n, sizeof it->pal_n);
-    if (it->kind == KIND_RIPPLE) {
+    if (it->kind == KIND_RIPPLE || it->kind == KIND_EXT_IMAGE) {
         h = hash_bytes(h, &it->str_off, sizeof it->str_off);
     }
     if (it->kind == KIND_TEXT) {
@@ -1314,6 +1409,7 @@ void ui_draw_flush(void) {
             case KIND_MASK: raster_mask(&items[n], y); break;
             case KIND_MASK1: raster_mask1(&items[n], y); break;
             case KIND_RIPPLE: raster_ripple(&items[n], y); break;
+            case KIND_EXT_IMAGE: raster_ext_image(&items[n], y); break;
             }
         }
         stats.raster_us += hal_tick_us() - t0;

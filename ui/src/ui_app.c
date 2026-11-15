@@ -77,6 +77,9 @@ typedef struct app {
     uint8_t rip_level;
     int8_t rip_idx;
     uint8_t rip_from_dot;
+    uint8_t msg_was_open;
+    uint8_t msg_prev_level;
+    uint8_t music_was_open;
 } app_t;
 
 static app_t *st;
@@ -1119,6 +1122,15 @@ static void draw_settings_app(uint8_t a) {
 
 static void draw_message_page(uint8_t a) {
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    if (link_img_preview_ready()) {
+        int16_t iw = 0, ih = 0;
+        uint8_t fmt = 0;
+        uint32_t ext_off = 0;
+        link_img_preview_info(&iw, &ih, &fmt, &ext_off);
+        ui_ext_image_draw((int16_t)((UI_W - iw) / 2), (int16_t)((UI_H - ih) / 2),
+                          iw, ih, ext_off, fmt, col_text, a);
+        return;
+    }
     if (link_msg_detail_ready()) {
         /* 详情页不要标题，整屏都是手机渲染好的正文。 */
         ui_mask1_draw(0, 0, UI_W, UI_H, link_msg_detail_mask(), col_text, a);
@@ -1310,8 +1322,11 @@ static void on_confirm(ui_menu_t *menu) {
     if (result == UI_MENU_OPENED) {
         st->reveal_ms = hal_tick_ms();
         if (menu == &st->messages) {
-            /* 打开一级消息页才向手机要列表，节省手表 RAM。 */
+            /* 打开一级消息页才向手机要列表（或从外置 Flash 恢复），节省手表 RAM。 */
             link_request_messages();
+        } else if (menu == &st->music) {
+            /* 打开音乐页时按需分配动态缓冲并从外置 Flash 恢复曲名点阵。 */
+            link_enter_music();
         }
     }
     if (result != UI_MENU_ROW) {
@@ -1551,6 +1566,15 @@ int ui_app_message_active(void) {
            ui_menu_level(&st->messages) > UI_MENU_ICON;
 }
 
+/* 音乐应用是否处于打开状态。 */
+int ui_app_music_active(void) {
+    if (!st) {
+        return 0;
+    }
+    return st->focus == UI_PAGE_MUSIC &&
+           (ui_menu_level(&st->music) > UI_MENU_ICON || st->music.zoom.scale > 0);
+}
+
 /* 手机下发 0x25：列表实际条数，限制焦点停留在有效行。 */
 void ui_app_set_message_count(int count) {
     int prev_focus;
@@ -1731,21 +1755,25 @@ static void draw_pushed(ui_menu_t *menu) {
 }
 
 static void msg_link_sync(void) {
-    static int was_open;
-    static int prev_level = UI_MENU_ICON;
     int level = st->messages.level;
     int open = level != UI_MENU_ICON;
+    int music_open = st->music.level != UI_MENU_ICON;
 
-    /* 从详情返回列表时详情图已覆盖缓冲，重新要一份列表。 */
-    if (prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
+    /* 从详情返回列表时：若有外置 Flash 缓存将立即恢复列表缓冲，并通知手机刷新。 */
+    if (st->msg_prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
         link_request_messages();
     }
-    if (was_open && !open) {
-        /* 离开消息应用：让手机恢复媒体推送。 */
+    if (st->msg_was_open && !open) {
+        /* 离开消息应用：释放消息动态 RAM 缓冲并让手机恢复媒体推送。 */
         link_leave_messages();
     }
-    was_open = open;
-    prev_level = level;
+    if (st->music_was_open && !music_open) {
+        /* 离开音乐应用：释放媒体点阵动态 RAM 缓冲。 */
+        link_leave_music();
+    }
+    st->msg_was_open = (uint8_t)open;
+    st->msg_prev_level = (uint8_t)level;
+    st->music_was_open = (uint8_t)music_open;
 }
 
 static int dot_alpha(uint32_t now) {
@@ -1997,10 +2025,19 @@ void ui_app_go_home(void) {
     if (!st) {
         return;
     }
+    if (st->messages.level != UI_MENU_ICON) {
+        link_leave_messages();
+    }
+    if (st->music.level != UI_MENU_ICON) {
+        link_leave_music();
+    }
     reset_menu_home(&st->settings, SET_N);
     reset_menu_home(&st->messages, MSG_N);
     reset_menu_home(&st->sport, 1);
     reset_menu_home(&st->music, 1);
+    st->msg_was_open = 0;
+    st->msg_prev_level = UI_MENU_ICON;
+    st->music_was_open = 0;
     st->sensor_open = 0;
     st->nav_key = 0;
     st->nav_repeat = 0;

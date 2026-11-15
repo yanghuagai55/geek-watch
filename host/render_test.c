@@ -473,10 +473,30 @@ static int test_arena(void) {
         ui_mem_init();
         REQUIRE(ui_mem_alloc(UI_RAM_BUDGET, 1) != NULL, "arena exact capacity");
         REQUIRE(!ui_mem_alloc(1, 1), "arena overflow accepted");
+        /* Dynamic block free, out-of-order coalescing, and gap reuse. */
+        ui_mem_init();
+        {
+            void *b0 = ui_mem_alloc(512, 4);
+            void *b1 = ui_mem_alloc(1024, 4);
+            void *b2 = ui_mem_alloc(1024, 4);
+            void *b3 = ui_mem_alloc(512, 4);
+            void *merged;
+            REQUIRE(b0 && b1 && b2 && b3, "dynamic block allocs");
+            ui_mem_free(b2);
+            ui_mem_free(b1);
+            merged = ui_mem_alloc(2048, 4);
+            REQUIRE(merged == b1, "coalesced middle gap reuse");
+            ui_mem_free(b0);
+            ui_mem_free(merged);
+            ui_mem_free(b3);
+            ui_mem_get(&later, NULL);
+            REQUIRE(later == 0 && ui_mem_avail() == UI_RAM_BUDGET,
+                    "all freed blocks returned to arena");
+        }
     }
     ui_init();
     ui_mem_get(&first, &total);
-    REQUIRE(total == 4864u + 4u * UI_W * UI_BAND_H, "declared RAM budget");
+    REQUIRE(total == 7424u + 4u * UI_W * UI_BAND_H, "declared RAM budget");
     REQUIRE(UI_BAND_H == 4, "four-row DMA buffers");
     REQUIRE(first >= 4u * UI_W * UI_BAND_H && first < total, "two buffers fit arena");
     for (pass = 0; pass < 32; pass++) {
@@ -842,6 +862,40 @@ static int test_face_snapshot_and_keys(void) {
     return 0;
 }
 
+static int test_ext_flash_and_stream(void) {
+    uint8_t rgb_row[16];
+    uint8_t read_back[16];
+    int i;
+
+    REQUIRE(hal_ext_flash_present(), "simulated 32KB ext flash online");
+    REQUIRE(!hal_ext_flash_write(HAL_EXT_FLASH_SIZE - 4u, rgb_row, 8u),
+            "ext flash out-of-bounds write rejected");
+    for (i = 0; i < 8; i++) {
+        uint16_t c = (i & 1) ? UI_COL_MINT : UI_COL_AMBER;
+        rgb_row[i * 2] = (uint8_t)(c & 0xFFu);
+        rgb_row[i * 2 + 1] = (uint8_t)(c >> 8);
+    }
+    for (i = 0; i < 8; i++) {
+        REQUIRE(hal_ext_flash_write(LINK_EXT_OFF_IMG + (uint32_t)i * 16u, rgb_row, 16u),
+                "ext flash row write");
+    }
+    REQUIRE(hal_ext_flash_read(LINK_EXT_OFF_IMG, read_back, 16u) &&
+            memcmp(read_back, rgb_row, 16u) == 0, "ext flash read verify");
+
+    ui_core_init();
+    ui_draw_begin();
+    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, 255);
+    ui_ext_image_draw(10, 12, 8, 8, LINK_EXT_OFF_IMG, UI_EXT_FMT_RGB565, 0, 255);
+    ui_draw_flush();
+    REQUIRE(hal_host_pixel(10, 14) == UI_COL_AMBER &&
+            hal_host_pixel(11, 14) == UI_COL_MINT &&
+            hal_host_pixel(17, 19) == UI_COL_MINT,
+            "streaming RGB565 from 32KB ext flash across bands");
+    ui_init();
+    printf("External 32KB Flash & streaming image PASS\n");
+    return 0;
+}
+
 int host_render_test(const char *shots) {
     int result;
     output_dir = shots;
@@ -858,6 +912,7 @@ int host_render_test(const char *shots) {
     if (!result) result = test_full_frame_fps();
     if (!result) result = test_async_and_preempt();
     if (!result) result = test_face_snapshot_and_keys();
+    if (!result) result = test_ext_flash_and_stream();
     ui_set_service(NULL);
     hal_host_set_keys(0);
     hal_host_shutdown();

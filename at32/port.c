@@ -15,6 +15,7 @@
 #include "mpu6050.h"
 #include "qmc5883l.h"
 #include "bmp580.h"
+#include "ext_flash.h"
 #include "adc_bat.h"
 #include "beep.h"
 #include "led_bl.h"
@@ -682,12 +683,15 @@ void board_init(void) {
         int mpu_ok = mpu6050_init();
         int mag_ok = qmc5883l_init();
         int baro_ok = bmp580_init();
+        int ext_ok = ext_flash_init();
         g_sensor_ok = (uint8_t)((mpu_ok ? 1u : 0u) |
                                 (mag_ok ? 2u : 0u) |
-                                (baro_ok ? 4u : 0u));
+                                (baro_ok ? 4u : 0u) |
+                                (ext_ok ? 8u : 0u));
         uart_puts(mpu_ok ? "mpu OK\r\n" : "mpu FAIL\r\n");
         uart_puts(mag_ok ? "qmc OK\r\n" : "qmc FAIL\r\n");
         uart_puts(baro_ok ? "bmp OK\r\n" : "bmp FAIL\r\n");
+        uart_puts(ext_ok ? "ext OK\r\n" : "ext --\r\n");
     }
     adc_init();
     beep_init();
@@ -813,10 +817,18 @@ void hal_ram_get(uint32_t *used, uint32_t *total) {
     uint32_t end = (uint32_t)&_ebss;
     uint32_t top = (uint32_t)&_estack;
     uint32_t static_used = end - base;
+    uint32_t ui_used = 0;
+    uint32_t ui_total = 0;
+    uint32_t ui_free;
     uint32_t msp;
     uint32_t stack_used;
     uint32_t all = top - base;
 
+    ui_mem_get(&ui_used, &ui_total);
+    ui_free = ui_total > ui_used ? (ui_total - ui_used) : 0u;
+    if(static_used > ui_free) {
+        static_used -= ui_free;
+    }
     __asm volatile("mrs %0, msp" : "=r"(msp));
     if(msp > top) {
         msp = top;
@@ -829,6 +841,22 @@ void hal_ram_get(uint32_t *used, uint32_t *total) {
     if(total) {
         *total = all;
     }
+}
+
+int hal_ext_flash_present(void) {
+    return ext_flash_present();
+}
+
+int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
+    return ext_flash_read(offset, dst, len);
+}
+
+int hal_ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
+    return ext_flash_write(offset, src, len);
+}
+
+int hal_ext_flash_erase(uint32_t offset, uint32_t len) {
+    return ext_flash_erase(offset, len);
 }
 
 const char *hal_fw_version(void) {

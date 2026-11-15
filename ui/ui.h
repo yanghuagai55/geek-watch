@@ -29,7 +29,7 @@
 #define UI_W HAL_LCD_W
 #define UI_H HAL_LCD_H
 #define UI_BAND_H 4
-#define UI_RAM_BUDGET (4864u + 4u * UI_W * UI_BAND_H)
+#define UI_RAM_BUDGET (7424u + 4u * UI_W * UI_BAND_H)
 
 /* ---- lifecycle & cooperative service ---- */
 /* ui_core_init omits the demo app; follow with begin/draw/flush for custom pages. */
@@ -175,6 +175,15 @@ void ui_mask1_draw(int16_t x, int16_t y, int16_t w, int16_t h,
 void ui_mask1_draw_clip(int16_t x, int16_t y, int16_t w, int16_t h,
                         int16_t src_w, const uint8_t *bits,
                         uint16_t color, uint8_t opacity);
+/* 外部 32KB Flash 流式贴图：按 4 行分带直接从 hal_ext_flash_read 逐行流式读取渲染，无需全屏 RAM 缓冲。 */
+enum {
+    UI_EXT_FMT_1BPP = 1,
+    UI_EXT_FMT_4BPP = 2,
+    UI_EXT_FMT_RGB565 = 3
+};
+void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                       uint32_t ext_offset, uint8_t fmt,
+                       uint16_t color, uint8_t opacity);
 void ui_text_draw(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale);
 int16_t ui_text_width(const char *utf8, uint8_t scale);
@@ -199,7 +208,10 @@ int16_t ui_song_height(int face);
 void ui_settings_set_debug(int enabled);
 int ui_settings_get_debug(void);
 
-/* ---- memory arena ---- */
+/* ---- dynamic memory pool (arena) ---- */
+void *ui_mem_alloc(uint32_t size, uint32_t align);
+void ui_mem_free(void *ptr);
+uint32_t ui_mem_avail(void);
 void ui_mem_get(uint32_t *used_bytes, uint32_t *total_bytes);
 
 /* ---- trace hook ---- */
@@ -226,11 +238,25 @@ const uint8_t *link_msg_detail_mask(void);
 void link_request_messages(void);
 void link_request_message_detail(int index);
 void link_leave_messages(void);
+void link_enter_music(void);
+void link_leave_music(void);
+/* 外部 32KB Flash 区域偏移与图片预览接口（0x28 元信息 + 0x29 分块数据）。 */
+enum {
+    LINK_EXT_OFF_MEDIA      = 0x0100u, /*   512B: 128x32 1bpp 媒体点阵缓存 */
+    LINK_EXT_OFF_MSG_LIST   = 0x0300u, /*  1792B: 128x112 1bpp 消息列表缓存 */
+    LINK_EXT_OFF_MSG_DETAIL = 0x0A00u, /* 12800B: 5 槽 x 2560B 消息详情缓存 */
+    LINK_EXT_OFF_IMG        = 0x3C00u, /* 17408B: 图片预览区（最高至 0x7FFF） */
+    LINK_EXT_IMG_MAX        = 0x4400u
+};
+int link_img_preview_ready(void);
+void link_img_preview_info(int16_t *w, int16_t *h, uint8_t *fmt, uint32_t *ext_offset);
+void link_img_preview_clear(void);
 void link_notify_settings(void);
 void ui_settings_apply(int key, int value);
 void ui_app_set_message_count(int count);
-/* 消息应用打开时，忽略媒体点阵，避免覆盖消息缓冲/抢走界面。 */
+/* 消息/音乐应用打开状态查询，用于按需管理动态 RAM 缓冲。 */
 int ui_app_message_active(void);
+int ui_app_music_active(void);
 /* 最近 4 秒内收到过合法帧即认为 PC/手机在线。 */
 int link_connected(void);
 /* 调试模式打开后，07 命令里按住的键会并进按键电平。 */

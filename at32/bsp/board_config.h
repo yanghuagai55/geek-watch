@@ -9,12 +9,17 @@
 
 #include "at32f421.h"
 
-/* ---- I2C 传感器总线（软件 I2C，PA9=SCL / PA10=SDA，外部 10k 上拉）----
-   挂 MPU6050(0x68) / QMC5883L(0x0D) / BMP580(0x46)。 */
+/* ---- I2C 传感器与存储总线（软件 I2C，PA9=SCL / PA10=SDA，外部 10k 上拉）----
+   挂 MPU6050(0x68) / QMC5883L(0x0D) / BMP580(0x46) / 32KB I2C Flash(0x50)。 */
 #define I2C_PORT        GPIOA
 #define I2C_SCL_PIN     GPIO_PINS_9
 #define I2C_SDA_PIN     GPIO_PINS_10
 #define I2C_CRM_CLK     CRM_GPIOA_PERIPH_CLOCK
+
+/* 外部 32KB I2C Flash / EEPROM / FRAM（24C256 / FM24C256，16 位地址 0x0000..0x7FFF） */
+#define EXT_FLASH_ADDR      0x50u
+#define EXT_FLASH_SIZE      (32u * 1024u)
+#define EXT_FLASH_PAGE_SIZE 64u
 
 /* ---- 显示屏 SPI1（已在 port.c 实现，这里仅登记）----
    SCK PA5 / MOSI PA7 / DC PA6 / RES PA4 / BLK PB0。 */

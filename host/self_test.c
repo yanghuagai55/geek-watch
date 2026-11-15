@@ -583,6 +583,13 @@ int host_self_test(const char *output_dir) {
         }
         frames(8);
         {
+            uint32_t list_ram = 0;
+            ui_mem_get(&list_ram, NULL);
+            if (list_ram <= used) {
+                return fail("msg list did not allocate dynamic RAM");
+            }
+        }
+        {
             int bx, by, ch;
             int cw = UI_MX(860);
             list_card_at(0, 5, 0, &bx, &by, 0, 0, &ch);
@@ -635,10 +642,21 @@ int host_self_test(const char *output_dir) {
             return fail("msg detail did not open");
         }
         save_shot("shot_msg_detail.bmp");
+        {
+            uint32_t detail_ram = 0;
+            ui_mem_get(&detail_ram, NULL);
+            if (detail_ram < used + 2560u) {
+                return fail("msg detail did not allocate 2560B dynamic RAM");
+            }
+        }
         hal_host_set_keys(HAL_KEY2);
         frames(32);
         hal_host_set_keys(0);
         frames(40);
+        /* 从详情退回列表：外置 32KB Flash 应立即恢复列表点阵缓存。 */
+        if (!link_msg_list_ready()) {
+            return fail("ext flash did not restore msg list on back");
+        }
         hal_host_set_keys(HAL_KEY2);
         frames(32);
         hal_host_set_keys(0);

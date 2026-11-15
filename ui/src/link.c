@@ -57,6 +57,8 @@ enum {
     LINK_MSG_COUNT = 0x25,
     LINK_MASK_RLE = 0x26,
     LINK_SPORT = 0x27,
+    LINK_EXT_IMG_META = 0x28,
+    LINK_EXT_IMG_DATA = 0x29,
     LINK_STATS = 0x12,
     LINK_SENSOR = 0x13,
     LINK_CTRL = 0x10,
@@ -73,7 +75,13 @@ enum {
     LINK_MSG_DETAIL_H = 160,
     LINK_MSG_LIST_CHUNKS = 14,
     LINK_MSG_DETAIL_CHUNKS = 20,
+    LINK_MEDIA_BYTES = LINK_BMP_W * LINK_BMP_H / 2,
+    LINK_LIST_BYTES = LINK_BMP_W * LINK_MSG_LIST_H / 8,
     LINK_MASK_BYTES = LINK_BMP_W * LINK_MSG_DETAIL_H / 8,
+    DYN_NONE = 0,
+    DYN_MEDIA = 1,
+    DYN_MSG_LIST = 2,
+    DYN_MSG_DETAIL = 3,
     ST_MARK = 0,
     ST_CMD = 1,
     ST_LEN = 2,
@@ -87,11 +95,20 @@ enum {
 
 static char msgs[LINK_MSG_N][LINK_MSG_LEN];
 static char lyric[LINK_LYRIC_LEN];
-/* 媒体标题、消息列表、消息详情共用同一块位图缓冲：
-   4bpp 128x32=2048B，1bpp 128x112=1792B，1bpp 128x160=2560B。
-   同一时刻只会显示其中一种，手机在消息页期间会暂停媒体推送。 */
-static uint8_t mask_buf[LINK_MASK_BYTES];
-#define media_mask mask_buf
+/* 动态位图缓冲：不再常驻占用 2560B .bss，按当前打开的页面向 ui_mem 动态申请与释放；
+   同时将收到的媒体点阵、消息列表、5 条消息详情及预览图片持久化缓存在外置 32KB I2C Flash 中。 */
+static uint8_t *dyn_buf;
+static uint16_t dyn_cap;
+static uint8_t dyn_kind;
+static uint8_t detail_slot;
+static uint8_t ext_media_valid;
+static uint8_t ext_list_valid;
+static uint8_t ext_detail_mask;
+static uint8_t img_ready;
+static uint8_t img_fmt;
+static int16_t img_w;
+static int16_t img_h;
+static uint16_t img_total_bytes;
 static int media_mask_ready;
 static int msg_list_ready;
 static int msg_list_loading;
@@ -238,12 +255,99 @@ static void send_sport_state(void) {
     hal_link_write(frame, sizeof frame);
 }
 
+static void free_dyn_buf(void) {
+    if (dyn_buf) {
+        ui_mem_free(dyn_buf);
+        dyn_buf = 0;
+    }
+    dyn_cap = 0;
+    dyn_kind = DYN_NONE;
+}
+
+static uint8_t *ensure_dyn_buf(uint8_t kind, uint16_t size) {
+    if (dyn_buf && dyn_kind == kind && dyn_cap == size) {
+        return dyn_buf;
+    }
+    free_dyn_buf();
+    dyn_buf = (uint8_t *)ui_mem_alloc(size, 4);
+    if (dyn_buf) {
+        dyn_cap = size;
+        dyn_kind = kind;
+    }
+    return dyn_buf;
+}
+
+static void expand_media_row_chunk(uint8_t *media_dst, uint8_t chunk, const uint8_t *src) {
+    const int rows = LINK_BMP_H / LINK_BMP_CHUNKS;
+    int r, c;
+
+    for (r = 0; r < rows; r++) {
+        uint8_t *dst = media_dst + (chunk * rows + r) * (LINK_BMP_W / 2);
+        const uint8_t *line = src + r * (LINK_BMP_W / 8);
+        for (c = 0; c < LINK_BMP_W; c++) {
+            uint8_t v = ((line[c >> 3] >> (7 - (c & 7))) & 1) ? 0x0F : 0x00;
+            if (c & 1) {
+                dst[c >> 1] = (uint8_t)((dst[c >> 1] & 0xF0) | v);
+            } else {
+                dst[c >> 1] = (uint8_t)((dst[c >> 1] & 0x0F) | (uint8_t)(v << 4));
+            }
+        }
+    }
+}
+
+void link_enter_music(void) {
+    if (media_mask_ready && dyn_buf && dyn_kind == DYN_MEDIA) {
+        return;
+    }
+    if (ext_media_valid && hal_ext_flash_present()) {
+        uint8_t *buf = ensure_dyn_buf(DYN_MEDIA, LINK_MEDIA_BYTES);
+        uint8_t raw[LINK_BMP_CHUNK];
+        uint8_t ch;
+        if (buf) {
+            int ok = 1;
+            for (ch = 0; ch < LINK_BMP_CHUNKS; ch++) {
+                if (!hal_ext_flash_read(LINK_EXT_OFF_MEDIA + (uint32_t)ch * LINK_BMP_CHUNK,
+                                        raw, LINK_BMP_CHUNK)) {
+                    ok = 0;
+                    break;
+                }
+                expand_media_row_chunk(buf, ch, raw);
+            }
+            if (ok) {
+                media_mask_ready = 1;
+                return;
+            }
+            free_dyn_buf();
+        }
+    }
+}
+
+void link_leave_music(void) {
+    media_mask_ready = 0;
+    if (dyn_kind == DYN_MEDIA) {
+        free_dyn_buf();
+    }
+}
+
 void link_request_messages(void) {
+    msg_detail_ready = 0;
+    msg_detail_loading = 0;
+    media_mask_ready = 0;
+    if (ext_list_valid && !msg_list_empty && hal_ext_flash_present()) {
+        uint8_t *buf = ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
+        if (buf && hal_ext_flash_read(LINK_EXT_OFF_MSG_LIST, buf, LINK_LIST_BYTES)) {
+            msg_list_ready = 1;
+            msg_list_loading = 0;
+            send_empty(LINK_MSG_LIST_REQ);
+            return;
+        }
+    }
+    if (dyn_kind != DYN_MSG_LIST) {
+        free_dyn_buf();
+    }
     msg_list_ready = 0;
     msg_list_loading = 1;
     msg_list_empty = 0;
-    msg_detail_ready = 0;
-    msg_detail_loading = 0;
     send_empty(LINK_MSG_LIST_REQ);
 }
 
@@ -251,6 +355,31 @@ void link_request_message_detail(int index) {
     uint8_t frame[5];
     if (index < 0) {
         index = 0;
+    }
+    if (index > 4) {
+        index = 4;
+    }
+    detail_slot = (uint8_t)index;
+    msg_list_ready = 0;
+    msg_list_loading = 0;
+    media_mask_ready = 0;
+    if ((ext_detail_mask & (uint8_t)(1u << detail_slot)) && hal_ext_flash_present()) {
+        uint8_t *buf = ensure_dyn_buf(DYN_MSG_DETAIL, LINK_MASK_BYTES);
+        uint32_t off = LINK_EXT_OFF_MSG_DETAIL + (uint32_t)detail_slot * LINK_MASK_BYTES;
+        if (buf && hal_ext_flash_read(off, buf, LINK_MASK_BYTES)) {
+            msg_detail_ready = 1;
+            msg_detail_loading = 0;
+            frame[0] = LINK_MARK;
+            frame[1] = LINK_MSG_DETAIL_REQ;
+            frame[2] = 1;
+            frame[3] = (uint8_t)index;
+            frame[4] = (uint8_t)(frame[0] ^ frame[1] ^ frame[2] ^ frame[3]);
+            hal_link_write(frame, 5);
+            return;
+        }
+    }
+    if (dyn_kind != DYN_MSG_DETAIL) {
+        free_dyn_buf();
     }
     msg_detail_ready = 0;
     msg_detail_loading = 1;
@@ -268,15 +397,16 @@ void link_leave_messages(void) {
     msg_list_empty = 0;
     msg_detail_ready = 0;
     msg_detail_loading = 0;
+    if (dyn_kind == DYN_MSG_LIST || dyn_kind == DYN_MSG_DETAIL) {
+        free_dyn_buf();
+    }
     send_empty(LINK_MSG_LEAVE);
 }
 
-/* 块号 0..3，每块 128 字节 = 8 行 1bpp；展开成 4bpp 覆盖位图。 */
+/* 块号 0..3，每块 128 字节 = 8 行 1bpp；持久写入外置 Flash 并按需展开成 4bpp 覆盖位图。 */
 static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
-    const int rows = LINK_BMP_H / LINK_BMP_CHUNKS;
-    int r, c;
+    uint8_t *buf;
 
-    /* 用户正在看消息时，媒体点阵只会破坏消息缓冲，直接丢掉。 */
     if (ui_app_message_active()) {
         return;
     }
@@ -285,39 +415,49 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
     }
     if (chunk == 0) {
         media_mask_ready = 0;
-        /* 同一块缓冲被媒体占用，消息页回退到“无消息”。 */
+        ext_media_valid = 0;
         msg_list_ready = 0;
         msg_list_loading = 0;
         msg_list_empty = 0;
         msg_detail_ready = 0;
         msg_detail_loading = 0;
-        memset(media_mask, 0, sizeof media_mask);
         /* 新的媒体行到达时自动切到音乐页，让标题/歌词常驻可见。 */
         ui_app_open_music();
     }
-    for (r = 0; r < rows; r++) {
-        uint8_t *dst = media_mask + (chunk * rows + r) * (LINK_BMP_W / 2);
-        const uint8_t *line = src + r * (LINK_BMP_W / 8);
-        for (c = 0; c < LINK_BMP_W; c++) {
-            uint8_t v = ((line[c >> 3] >> (7 - (c & 7))) & 1) ? 0x0F : 0x00;
-            if (c & 1) {
-                dst[c >> 1] = (uint8_t)((dst[c >> 1] & 0xF0) | v);
-            } else {
-                dst[c >> 1] = (uint8_t)((dst[c >> 1] & 0x0F) | (uint8_t)(v << 4));
-            }
-        }
+    (void)hal_ext_flash_write(LINK_EXT_OFF_MEDIA + (uint32_t)chunk * LINK_BMP_CHUNK,
+                              src, LINK_BMP_CHUNK);
+    if (chunk == LINK_BMP_CHUNKS - 1) {
+        ext_media_valid = 1;
     }
+    if (!ui_app_music_active()) {
+        return;
+    }
+    buf = ensure_dyn_buf(DYN_MEDIA, LINK_MEDIA_BYTES);
+    if (!buf) {
+        return;
+    }
+    expand_media_row_chunk(buf, chunk, src);
     if (chunk == LINK_BMP_CHUNKS - 1) {
         media_mask_ready = 1;
     }
 }
 
-/* 128x112 列表图，1bpp，14 块；块 0 清空并让页面先显示“无消息”。 */
+/* 128x112 列表图，1bpp，14 块；同步缓存到外置 32KB Flash 的 0x0300 区。 */
 static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
-    if (!ui_app_message_active()) {
+    uint8_t *buf;
+
+    if (chunk >= LINK_MSG_LIST_CHUNKS || n < LINK_BMP_CHUNK) {
         return;
     }
-    if (chunk >= LINK_MSG_LIST_CHUNKS || n < LINK_BMP_CHUNK) {
+    if (chunk == 0) {
+        ext_list_valid = 0;
+    }
+    (void)hal_ext_flash_write(LINK_EXT_OFF_MSG_LIST + (uint32_t)chunk * LINK_BMP_CHUNK,
+                              src, LINK_BMP_CHUNK);
+    if (chunk == LINK_MSG_LIST_CHUNKS - 1) {
+        ext_list_valid = 1;
+    }
+    if (!ui_app_message_active()) {
         return;
     }
     if (chunk == 0) {
@@ -327,21 +467,36 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
         msg_detail_ready = 0;
         msg_detail_loading = 0;
         media_mask_ready = 0;
-        memset(mask_buf, 0, LINK_BMP_W * LINK_MSG_LIST_H / 8);
     }
-    memcpy(mask_buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
+    buf = ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
+    if (!buf) {
+        return;
+    }
+    memcpy(buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
     if (chunk == LINK_MSG_LIST_CHUNKS - 1) {
         msg_list_ready = 1;
         msg_list_loading = 0;
     }
 }
 
-/* 128x160 详情图，1bpp，20 块；会覆盖列表缓冲。 */
-static void msg_detail_chunk(uint8_t chunk, const uint8_t *src, int n) {
-    if (!ui_app_message_active()) {
+/* 128x160 详情图，1bpp，20 块；按槽位 0..4 分别持久化到外置 Flash 的 0x0A00..0x3BFF。 */
+static void msg_detail_slot_chunk(uint8_t slot, uint8_t chunk, const uint8_t *src, int n) {
+    uint8_t *buf;
+    uint32_t ext_off;
+
+    if (slot >= 5 || chunk >= LINK_MSG_DETAIL_CHUNKS || n < LINK_BMP_CHUNK) {
         return;
     }
-    if (chunk >= LINK_MSG_DETAIL_CHUNKS || n < LINK_BMP_CHUNK) {
+    if (chunk == 0) {
+        ext_detail_mask = (uint8_t)(ext_detail_mask & ~(1u << slot));
+    }
+    ext_off = LINK_EXT_OFF_MSG_DETAIL + (uint32_t)slot * LINK_MASK_BYTES +
+              (uint32_t)chunk * LINK_BMP_CHUNK;
+    (void)hal_ext_flash_write(ext_off, src, LINK_BMP_CHUNK);
+    if (chunk == LINK_MSG_DETAIL_CHUNKS - 1) {
+        ext_detail_mask = (uint8_t)(ext_detail_mask | (1u << slot));
+    }
+    if (!ui_app_message_active() || slot != detail_slot) {
         return;
     }
     if (chunk == 0) {
@@ -351,12 +506,44 @@ static void msg_detail_chunk(uint8_t chunk, const uint8_t *src, int n) {
         msg_list_loading = 0;
         msg_list_empty = 0;
         media_mask_ready = 0;
-        memset(mask_buf, 0, sizeof mask_buf);
     }
-    memcpy(mask_buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
+    buf = ensure_dyn_buf(DYN_MSG_DETAIL, LINK_MASK_BYTES);
+    if (!buf) {
+        return;
+    }
+    memcpy(buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
     if (chunk == LINK_MSG_DETAIL_CHUNKS - 1) {
         msg_detail_ready = 1;
         msg_detail_loading = 0;
+    }
+}
+
+static void msg_detail_chunk(uint8_t chunk, const uint8_t *src, int n) {
+    msg_detail_slot_chunk(detail_slot, chunk, src, n);
+}
+
+/* 0x29：外置 Flash 图片预览分块写入（每块最高 128 字节）。 */
+static void ext_img_chunk(uint8_t chunk, const uint8_t *src, int n) {
+    uint32_t off;
+    uint32_t write_n;
+
+    if (img_total_bytes == 0 || n <= 0) {
+        return;
+    }
+    off = (uint32_t)chunk * LINK_BMP_CHUNK;
+    if (off >= img_total_bytes) {
+        return;
+    }
+    write_n = (uint32_t)n;
+    if (off + write_n > img_total_bytes) {
+        write_n = img_total_bytes - off;
+    }
+    if (!hal_ext_flash_write(LINK_EXT_OFF_IMG + off, src, write_n)) {
+        return;
+    }
+    if (off + write_n >= img_total_bytes) {
+        img_ready = 1;
+        ui_draw_invalidate();
     }
 }
 
@@ -388,6 +575,8 @@ static void mask_rle(uint8_t type, uint8_t chunk, const uint8_t *src, int n) {
         msg_list_chunk(chunk, block, LINK_BMP_CHUNK);
     } else if (type == 3) {
         msg_detail_chunk(chunk, block, LINK_BMP_CHUNK);
+    } else if (type == 4) {
+        ext_img_chunk(chunk, block, LINK_BMP_CHUNK);
     }
 }
 
@@ -429,8 +618,40 @@ static void apply_frame(void) {
         msg_detail_chunk(pay[0], pay + 1, len - 1);
         return;
     }
+    if (cmd == LINK_MSG_DETAIL_BMP && len == 2 + LINK_BMP_CHUNK) {
+        msg_detail_slot_chunk(pay[0], pay[1], pay + 2, len - 2);
+        return;
+    }
     if (cmd == LINK_MASK_RLE && len >= 3) {
         mask_rle(pay[0], pay[1], pay + 2, len - 2);
+        return;
+    }
+    if (cmd == LINK_EXT_IMG_META && len == 5) {
+        uint16_t w = (uint16_t)(pay[0] | ((uint16_t)pay[1] << 8));
+        uint16_t h = (uint16_t)(pay[2] | ((uint16_t)pay[3] << 8));
+        uint8_t fmt = pay[4];
+        uint32_t row_bytes = 0;
+        uint32_t total = 0;
+        if (fmt == UI_EXT_FMT_1BPP) {
+            row_bytes = ((uint32_t)w + 7u) >> 3;
+        } else if (fmt == UI_EXT_FMT_4BPP) {
+            row_bytes = ((uint32_t)w + 1u) >> 1;
+        } else if (fmt == UI_EXT_FMT_RGB565) {
+            row_bytes = (uint32_t)w * 2u;
+        }
+        total = row_bytes * (uint32_t)h;
+        if (w > 0 && w <= 240 && h > 0 && h <= 240 &&
+            row_bytes > 0 && total <= LINK_EXT_IMG_MAX) {
+            img_w = (int16_t)w;
+            img_h = (int16_t)h;
+            img_fmt = fmt;
+            img_total_bytes = (uint16_t)total;
+            img_ready = 0;
+        }
+        return;
+    }
+    if (cmd == LINK_EXT_IMG_DATA && len >= 2) {
+        ext_img_chunk(pay[0], pay + 1, len - 1);
         return;
     }
     if (cmd == LINK_MSG_CLEAR && len == 0) {
@@ -439,6 +660,12 @@ static void apply_frame(void) {
         msg_list_empty = 1;
         msg_detail_ready = 0;
         msg_detail_loading = 0;
+        ext_list_valid = 0;
+        ext_detail_mask = 0;
+        img_ready = 0;
+        if (dyn_kind == DYN_MSG_LIST || dyn_kind == DYN_MSG_DETAIL) {
+            free_dyn_buf();
+        }
         ui_app_set_message_count(0);
         return;
     }
@@ -455,6 +682,11 @@ static void apply_frame(void) {
             msg_list_ready = 0;
             msg_list_loading = 0;
             msg_list_empty = 1;
+            ext_list_valid = 0;
+            ext_detail_mask = 0;
+            if (dyn_kind == DYN_MSG_LIST || dyn_kind == DYN_MSG_DETAIL) {
+                free_dyn_buf();
+            }
         } else {
             msg_list_loading = 1;
             msg_list_empty = 0;
@@ -464,6 +696,10 @@ static void apply_frame(void) {
     if (cmd == LINK_LYRIC) {
         copy_text(lyric, LINK_LYRIC_LEN, pay, len);
         media_mask_ready = 0;
+        ext_media_valid = 0;
+        if (dyn_kind == DYN_MEDIA) {
+            free_dyn_buf();
+        }
         return;
     }
     if (cmd == LINK_STATE && len == 1) {
@@ -642,13 +878,23 @@ void link_init(void) {
     copy_cstr(msgs[1], LINK_MSG_LEN, "消息2");
     copy_cstr(msgs[2], LINK_MSG_LEN, "消息3");
     lyric[0] = 0;
+    dyn_buf = 0;
+    dyn_cap = 0;
+    dyn_kind = DYN_NONE;
+    detail_slot = 0;
+    ext_media_valid = 0;
+    ext_list_valid = 0;
+    ext_detail_mask = 0;
+    img_ready = 0;
+    img_fmt = 0;
+    img_w = img_h = 0;
+    img_total_bytes = 0;
     media_mask_ready = 0;
     msg_list_ready = 0;
     msg_list_loading = 0;
     msg_list_empty = 0;
     msg_detail_ready = 0;
     msg_detail_loading = 0;
-    memset(mask_buf, 0, sizeof mask_buf);
     last_rx_ms = 0;
     playing = 0;
     bright = 1;
@@ -686,15 +932,15 @@ const char *link_media_lyric(void) {
 }
 
 int link_media_mask_ready(void) {
-    return media_mask_ready;
+    return media_mask_ready && dyn_buf && dyn_kind == DYN_MEDIA;
 }
 
 const uint8_t *link_media_mask(void) {
-    return media_mask;
+    return (dyn_buf && dyn_kind == DYN_MEDIA) ? dyn_buf : 0;
 }
 
 int link_msg_list_ready(void) {
-    return msg_list_ready;
+    return msg_list_ready && dyn_buf && dyn_kind == DYN_MSG_LIST;
 }
 
 int link_msg_list_empty(void) {
@@ -702,15 +948,31 @@ int link_msg_list_empty(void) {
 }
 
 const uint8_t *link_msg_list_mask(void) {
-    return mask_buf;
+    return (dyn_buf && dyn_kind == DYN_MSG_LIST) ? dyn_buf : 0;
 }
 
 int link_msg_detail_ready(void) {
-    return msg_detail_ready;
+    return msg_detail_ready && dyn_buf && dyn_kind == DYN_MSG_DETAIL;
 }
 
 const uint8_t *link_msg_detail_mask(void) {
-    return mask_buf;
+    return (dyn_buf && dyn_kind == DYN_MSG_DETAIL) ? dyn_buf : 0;
+}
+
+int link_img_preview_ready(void) {
+    return img_ready && img_w > 0 && img_h > 0 && hal_ext_flash_present();
+}
+
+void link_img_preview_info(int16_t *w, int16_t *h, uint8_t *fmt, uint32_t *ext_offset) {
+    if (w) *w = img_w;
+    if (h) *h = img_h;
+    if (fmt) *fmt = img_fmt;
+    if (ext_offset) *ext_offset = LINK_EXT_OFF_IMG;
+}
+
+void link_img_preview_clear(void) {
+    img_ready = 0;
+    img_total_bytes = 0;
 }
 
 int link_connected(void) {
