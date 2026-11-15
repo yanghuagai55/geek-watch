@@ -58,7 +58,7 @@ int16_t ui_song_width(int face, const char *utf8) {
             width += g->advance;
         } else {
             const ui_glyph_t *f = ui_font_find(cp);
-            width += (f ? f->advance : 8) * song_fallback_scale(face);
+            width += (f ? f->w : 8) * song_fallback_scale(face);
         }
     }
     return (int16_t)width;
@@ -105,7 +105,7 @@ void ui_song_draw(int face, int16_t x, int16_t y, const char *utf8,
             ch[n] = 0;
             ui_text_draw((int16_t)pen, y, ch, color, opacity,
                          (uint8_t)song_fallback_scale(face));
-            pen += (f ? f->advance : 8) * song_fallback_scale(face);
+            pen += (f ? f->w : 8) * song_fallback_scale(face);
         }
     }
 }

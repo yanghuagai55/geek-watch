@@ -83,14 +83,24 @@ void main() {
     expect(find.byType(NavigationBar), findsNothing);
     expect(find.text('手表工作台'), findsNothing);
 
-    await tester.tap(find.text('音乐'));
+    await tester.tap(find.text('媒体'));
     await tester.pumpAndSettle();
-    expect(find.text('播放与歌词'), findsOneWidget);
-    expect(find.text('晚风手记'), findsOneWidget);
+    expect(find.text('同步到手表'), findsOneWidget);
+    expect(find.text('歌词演示 · 晚风手记'), findsOneWidget);
+    expect(find.text('手动发送测试消息'), findsOneWidget);
 
-    await tester.tap(find.text('消息'));
+    await tester.tap(find.text('表盘'));
     await tester.pumpAndSettle();
-    expect(find.text('设备消息'), findsOneWidget);
+    expect(find.text('表盘方案预览库'), findsOneWidget);
+    expect(find.text('32KB 外置 I2C Flash 分区规划 (0x50)'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('墨竹极简指针'));
+    await tester.tap(find.text('墨竹极简指针'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('下发到手表（待接入 32KB）'));
+    await tester.tap(find.text('下发到手表（待接入 32KB）'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('32KB 外挂 Flash'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

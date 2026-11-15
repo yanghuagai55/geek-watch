@@ -1,5 +1,6 @@
 #include "hal.h"
 #include "hal_host.h"
+#include "imu9.h"
 #include "ui.h"
 
 #include <stdio.h>
@@ -501,6 +502,27 @@ int host_self_test(const char *output_dir) {
         }
     }
     tap(HAL_KEY1);   /* 退出运动二级菜单回到一级柱状图 */
+    frames(24);
+    tap(HAL_KEY3);   /* 一级柱状图按 KEY3 切到指南针，KEY2 触发校准 */
+    frames(24);
+    {
+        imu9_state_t s9;
+        tap(HAL_KEY2);
+        frames(8);
+        imu9_get(&s9);
+        if (s9.mag_cal != 1) {
+            return fail("sport compass cal start");
+        }
+        save_shot("shot_sport_compass_cal.bmp");
+        tap(HAL_KEY2);
+        frames(8);
+        imu9_get(&s9);
+        if (s9.mag_cal == 1) {
+            return fail("sport compass cal stop");
+        }
+        save_shot("shot_sport_compass.bmp");
+    }
+    tap(HAL_KEY1);   /* 指南针按 KEY1 退回一级柱状图 */
     frames(24);
 
     {

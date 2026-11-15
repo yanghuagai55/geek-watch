@@ -7,13 +7,13 @@
 
 typedef struct ui_glyph {
     uint16_t cp;
-    uint8_t w;
-    uint8_t h;
-    uint8_t advance;
     uint16_t offset;
+    uint8_t w;
+    uint8_t h; /* 等宽点阵：advance == w */
 } ui_glyph_t;
 
 const ui_glyph_t *ui_font_find(uint32_t cp);
 const uint8_t *ui_font_bits(void);
+int ui_font_is_rle(void);
 
 #endif

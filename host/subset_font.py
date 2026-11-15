@@ -40,10 +40,10 @@ FULL_PATH = os.path.join(UI_SRC, "font_data_full.c")
 SUBSET_PATH = os.path.join(UI_SRC, "font_data.c")
 
 # Static-UI CJK that must survive subsetting (sanity check only).
-REQUIRED_CJK = "运动消息设置调试模式亮度关于版本表盘低中高开关状态灯闪烁传感器数值"
+REQUIRED_CJK = "运动消息设置调试模式亮度关于版本表盘低中高开关状态灯闪烁传感器数值指南针东南西北"
 
 HEX = "0123456789abcdefABCDEF"
-GLYPH_STRUCT_SIZE = 8  # uint16 + 3*uint8 + pad + uint16, aligned to 2
+GLYPH_STRUCT_SIZE = 6  # uint16 cp + uint16 offset + uint8 w + uint8 h
 
 
 def fail(msg):
@@ -53,7 +53,87 @@ def fail(msg):
 
 # ---------------------------------------------------------------- parsing
 
-def parse_font(text):
+def rle_encode_1bpp(raw):
+    """PackBits RLE for 1bpp glyph bytes (ctrl>=0x80: repeat next byte (ctrl&0x7f)+2; else lit ctrl+1)."""
+    out = bytearray()
+    i, n = 0, len(raw)
+    while i < n:
+        # Check run >= 2 identical bytes
+        run = 1
+        while i + run < n and raw[i + run] == raw[i] and run < 129:
+            run += 1
+        if run >= 2:
+            out.append(0x80 | (run - 2))
+            out.append(raw[i])
+            i += run
+        else:
+            lit_start = i
+            lit_len = 1
+            i += 1
+            while i < n and lit_len < 128:
+                if i + 1 < n and raw[i] == raw[i + 1]:
+                    break
+                lit_len += 1
+                i += 1
+            out.append(lit_len - 1)
+            out.extend(raw[lit_start:lit_start + lit_len])
+    return bytes(out)
+
+
+def rle_decode_1bpp(comp, expected_len):
+    out = bytearray()
+    p = 0
+    while len(out) < expected_len:
+        ctrl = comp[p]
+        p += 1
+        if ctrl & 0x80:
+            cnt = (ctrl & 0x7F) + 2
+            v = comp[p]
+            p += 1
+            out.extend([v] * cnt)
+        else:
+            cnt = ctrl + 1
+            out.extend(comp[p:p + cnt])
+            p += cnt
+    return bytes(out[:expected_len])
+
+
+def trim_rle_encode_1bpp(raw, bpr):
+    """Trim empty top/bottom rows + hybrid PackBits RLE matching unpack_font_rle."""
+    h = len(raw) // bpr
+    y0 = 0
+    while y0 < h and all(b == 0 for b in raw[y0 * bpr:(y0 + 1) * bpr]):
+        y0 += 1
+    y1 = h
+    while y1 > y0 and all(b == 0 for b in raw[(y1 - 1) * bpr:y1 * bpr]):
+        y1 -= 1
+    if y0 >= y1:
+        return b"\xFF"
+    bh = y1 - y0
+    mid = raw[y0 * bpr:y1 * bpr]
+    comp = rle_encode_1bpp(mid)
+    if len(comp) < len(mid):
+        return bytes([y0, (bh - 1) | 0x80]) + comp
+    return bytes([y0, bh - 1]) + mid
+
+
+def trim_rle_decode_1bpp(comp, expected_len, bpr):
+    out = bytearray(expected_len)
+    if comp[0] == 0xFF:
+        return bytes(out)
+    y0 = comp[0]
+    h1 = comp[1]
+    bh = (h1 & 0x0F) + 1
+    start = y0 * bpr
+    count = min(bh * bpr, expected_len - start)
+    if h1 & 0x80:
+        out[start:start + count] = rle_decode_1bpp(comp[2:], count)
+    else:
+        out[start:start + count] = comp[2:2 + count]
+    return bytes(out)
+
+
+def parse_font(text, compressed=False):
     """Return (header, bits_bytes, glyphs, tail) from a font_data.c text."""
     mb = re.search(r"static\s+const\s+uint8_t\s+bits\s*\[\s*\]\s*=\s*\{", text)
     if not mb:
@@ -78,34 +158,42 @@ def parse_font(text):
         fail("unexpected tokens in bits[] body")
     bits = bytes(int(h, 16) for h in re.findall(r"0[xX]([0-9a-fA-F]{2})", stripped))
 
-    # glyphs: {0x0020u, 8, 16, 8, 0},
+    # glyphs: {0x0020u, 0, 8, 16},
     entry_re = re.compile(
-        r"\{\s*0[xX]([0-9a-fA-F]+)u?\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}")
+        r"\{\s*0[xX]([0-9a-fA-F]+)u?\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}")
     glyphs = []
     for m in entry_re.finditer(glyphs_body):
-        cp, w, h, adv, off = (int(x, 16) if i == 0 else int(x)
-                              for i, x in enumerate(m.groups()))
-        glyphs.append({"cp": cp, "w": w, "h": h, "advance": adv,
+        cp, off, w, h = (int(x, 16) if i == 0 else int(x)
+                         for i, x in enumerate(m.groups()))
+        glyphs.append({"cp": cp, "w": w, "h": h, "advance": w,
                        "offset": off, "size": ((w + 7) // 8) * h})
     if not glyphs:
         fail("no glyph entries parsed")
     if re.sub(r"\{[^{}]*\}|[,\s]", "", glyphs_body):
         fail("unexpected tokens in glyphs[] body")
 
-    # Validate the full table: sorted cps, contiguous offsets, exact size.
-    pos = 0
     prev_cp = -1
-    for g in glyphs:
-        if g["cp"] <= prev_cp:
-            fail("glyphs[] not strictly sorted at U+%04X" % g["cp"])
-        prev_cp = g["cp"]
-        if g["offset"] != pos:
-            fail("offset mismatch at U+%04X: %d != %d" % (g["cp"], g["offset"], pos))
-        if g["offset"] + g["size"] > len(bits):
-            fail("bits[] too short for U+%04X" % g["cp"])
-        pos += g["size"]
-    if pos != len(bits):
-        fail("bits[] length %d != sum of glyph sizes %d" % (len(bits), pos))
+    if compressed:
+        for idx, g in enumerate(glyphs):
+            if g["cp"] <= prev_cp:
+                fail("glyphs[] not strictly sorted at U+%04X" % g["cp"])
+            prev_cp = g["cp"]
+            end_off = glyphs[idx + 1]["offset"] if idx + 1 < len(glyphs) else len(bits)
+            if g["offset"] >= end_off or end_off > len(bits):
+                fail("compressed span invalid at U+%04X" % g["cp"])
+    else:
+        pos = 0
+        for g in glyphs:
+            if g["cp"] <= prev_cp:
+                fail("glyphs[] not strictly sorted at U+%04X" % g["cp"])
+            prev_cp = g["cp"]
+            if g["offset"] != pos:
+                fail("offset mismatch at U+%04X: %d != %d" % (g["cp"], g["offset"], pos))
+            if g["offset"] + g["size"] > len(bits):
+                fail("bits[] too short for U+%04X" % g["cp"])
+            pos += g["size"]
+        if pos != len(bits):
+            fail("bits[] length %d != sum of glyph sizes %d" % (len(bits), pos))
     return header, bits, glyphs, tail
 
 
@@ -201,34 +289,47 @@ def emit_subset(header, bits, glyphs, tail, whitelist):
 
     new_bits = bytearray()
     entries = []
+    raw_by_cp = {}
     off = 0
     for g in selected:
-        new_bits += bits[g["offset"]:g["offset"] + g["size"]]
-        entries.append((g["cp"], g["w"], g["h"], g["advance"], off, g["size"]))
-        off += g["size"]
+        raw = bits[g["offset"]:g["offset"] + g["size"]]
+        bpr = (g["w"] + 7) // 8
+        comp = trim_rle_encode_1bpp(raw, bpr)
+        raw_by_cp[g["cp"]] = raw
+        new_bits += comp
+        entries.append((g["cp"], g["w"], g["h"], off, len(comp)))
+        off += len(comp)
 
-    note = ("/* SUBSET table generated by host/subset_font.py -- do not edit by hand.\n"
+    note = ("/* SUBSET + Trim-RLE table generated by host/subset_font.py -- do not edit by hand.\n"
             "   Keeps ASCII 0x20..0x7E plus the non-ASCII codepoints used in string\n"
-            "   literals of ui/src/ and host tests. The complete table lives in\n"
-            "   font_data_full.c; link it with the \"full\" build flag. */\n\n")
+            "   literals of ui/src/ and host tests. The complete uncompressed table\n"
+            "   lives in font_data_full.c; link it with the \"full\" build flag. */\n\n")
 
     lines = [header.rstrip("\n"), "", note.rstrip("\n"), "",
              "static const uint8_t bits[] = {"]
-    pos = 0
-    for cp, w, h, adv, o, size in entries:
-        lines.append("    /* U+%04X */" % cp)
-        for k in range(0, size, 12):
-            row = new_bits[pos + k:pos + min(k + 12, size)]
+    for cp, w, h, o, comp_len in entries:
+        lines.append("    /* U+%04X (rle %d B) */" % (cp, comp_len))
+        for k in range(0, comp_len, 12):
+            row = new_bits[o + k:o + min(k + 12, comp_len)]
             lines.append("    " + ",".join("0x%02X" % b for b in row) + ",")
-        pos += size
     lines.append("};")
     lines.append("")
     lines.append("static const ui_glyph_t glyphs[] = {")
-    for cp, w, h, adv, o, size in entries:
-        lines.append("    {0x%04Xu, %d, %d, %d, %d}," % (cp, w, h, adv, o))
+    for cp, w, h, o, comp_len in entries:
+        lines.append("    {0x%04Xu, %d, %d, %d}," % (cp, o, w, h))
     lines.append("};")
-    text = "\n".join(lines) + tail
-    return text, selected, bytes(new_bits)
+
+    if re.search(r"int\s+ui_font_is_rle\s*\(\s*void\s*\)", tail):
+        out_tail = re.sub(
+            r"(int\s+ui_font_is_rle\s*\(\s*void\s*\)\s*\{\s*return\s+)0(\s*;\s*\})",
+            r"\g<1>1\g<2>",
+            tail,
+        )
+    else:
+        out_tail = tail.rstrip("\n") + "\n\nint ui_font_is_rle(void) {\n    return 1;\n}\n"
+
+    text = "\n".join(lines) + out_tail
+    return text, selected, bytes(new_bits), out_tail, raw_by_cp
 
 
 def main():
@@ -244,14 +345,21 @@ def main():
 
     header, bits, glyphs, tail = parse_font(original)
     whitelist, scanned = build_whitelist()
-    subset_text, selected, new_bits = emit_subset(header, bits, glyphs, tail, whitelist)
+    subset_text, selected, new_bits, out_tail, raw_by_cp = emit_subset(
+        header, bits, glyphs, tail, whitelist)
 
-    # Self-check the emitted subset: re-parse and verify offsets/sizes.
-    h2, b2, g2, t2 = parse_font(subset_text)
-    if t2 != tail:
-        fail("trailing ui_font_find/ui_font_bits code changed")
+    # Self-check the emitted RLE subset: re-parse and verify lossless decode.
+    h2, b2, g2, t2 = parse_font(subset_text, compressed=True)
+    if t2 != out_tail:
+        fail("trailing ui_font_find/ui_font_bits code changed unexpectedly")
     if [g["cp"] for g in g2] != [g["cp"] for g in selected]:
         fail("subset glyph list mismatch after re-parse")
+    for idx, g in enumerate(g2):
+        end_off = g2[idx + 1]["offset"] if idx + 1 < len(g2) else len(b2)
+        chunk = b2[g["offset"]:end_off]
+        decoded = trim_rle_decode_1bpp(chunk, g["size"], (g["w"] + 7) // 8)
+        if decoded != raw_by_cp[g["cp"]]:
+            fail("RLE round-trip mismatch at U+%04X" % g["cp"])
 
     have = {g["cp"] for g in selected}
     missing_required = [c for c in REQUIRED_CJK if ord(c) not in have]
@@ -267,6 +375,7 @@ def main():
     with open(SUBSET_PATH, "w", encoding="utf-8", newline="\n") as f:
         f.write(subset_text)
 
+    raw_sub_bytes = sum(g["size"] for g in selected)
     full_total = len(bits) + len(glyphs) * GLYPH_STRUCT_SIZE
     sub_total = len(new_bits) + len(selected) * GLYPH_STRUCT_SIZE
     print("scanned %d C files for string literals" % len(scanned))
@@ -274,16 +383,17 @@ def main():
           (0x7F - 0x20, len(whitelist) - (0x7F - 0x20)))
     print("full   : %4d glyphs | bits %6d B | glyphs[] %5d B | total %6d B" %
           (len(glyphs), len(bits), len(glyphs) * GLYPH_STRUCT_SIZE, full_total))
-    print("subset : %4d glyphs | bits %6d B | glyphs[] %5d B | total %6d B" %
-          (len(selected), len(new_bits), len(selected) * GLYPH_STRUCT_SIZE, sub_total))
-    print("saved  : %d glyphs, %d Flash bytes (~%.1f KB)" %
+    print("subset : %4d glyphs | raw  %6d B | rle %5d B | glyphs[] %5d B | total %6d B" %
+          (len(selected), raw_sub_bytes, len(new_bits),
+           len(selected) * GLYPH_STRUCT_SIZE, sub_total))
+    print("saved  : %d glyphs, %d Flash bytes vs full (~%.1f KB), RLE saved %d B" %
           (len(glyphs) - len(selected), full_total - sub_total,
-           (full_total - sub_total) / 1024.0))
+           (full_total - sub_total) / 1024.0, raw_sub_bytes - len(new_bits)))
     if absent:
         print("note: %d whitelisted codepoints absent from the font "
               "(rendered as hollow boxes), e.g. %s" %
               (len(absent), " ".join("U+%04X" % cp for cp in absent[:12])))
-    print("static UI CJK check: OK (%d chars present)" % len(REQUIRED_CJK))
+    print("static UI CJK + RLE round-trip check: OK (%d chars present)" % len(REQUIRED_CJK))
     print("wrote %s" % FULL_PATH)
     print("wrote %s" % SUBSET_PATH)
     return 0

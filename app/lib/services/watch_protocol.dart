@@ -354,3 +354,173 @@ class WatchSnapshot {
     return WatchSnapshot(width: width, height: height, rgba: rgba);
   }
 }
+
+/// 手表物理按键掩码（与 `ui/hal.h` 中 `HAL_KEY1/2/3` 一致）。
+abstract final class WatchKeyMask {
+  static const int key1 = 0x01; // 返回 / 退出传感器界面
+  static const int key2 = 0x02; // 确认 / KEY2 磁强计 360° 校准启停
+  static const int key3 = 0x04; // 上移 / KEY3 零偏姿态复位
+}
+
+/// 9 轴姿态与传感器调试快照（对应固件 `0x13` 下发后的 `DBG ...` 文本行）。
+class WatchSensorData {
+  const WatchSensorData({
+    required this.rawLine,
+    required this.mpuOk,
+    required this.magOk,
+    required this.magChip,
+    required this.ax,
+    required this.ay,
+    required this.az,
+    required this.mx,
+    required this.my,
+    required this.mz,
+    required this.fusedAxes,
+    required this.rollDeg,
+    required this.pitchDeg,
+    required this.headingDeg,
+    required this.batteryMv,
+    required this.timestamp,
+    this.magCalState,
+    this.gyroCalState,
+  });
+
+  final String rawLine;
+  final bool mpuOk;
+  final bool magOk;
+  final String magChip;
+  final int ax;
+  final int ay;
+  final int az;
+  final int mx;
+  final int my;
+  final int mz;
+  final int fusedAxes;
+  final double rollDeg;
+  final double pitchDeg;
+  final double headingDeg;
+  final int batteryMv;
+  final DateTime timestamp;
+  final int? magCalState;
+  final int? gyroCalState;
+
+  String get dofLabel => switch (fusedAxes) {
+    9 => '9-DOF',
+    6 => '6-DOF',
+    3 => '3-DOF',
+    _ => '--',
+  };
+
+  /// 从串口/蓝牙返回文本行解析 9 轴快照。非 `DBG` 行或无效行返回 null。
+  static WatchSensorData? tryParseDebugLine(
+    String line, {
+    DateTime? timestamp,
+  }) {
+    final trimmed = line.trim();
+    if (!trimmed.toUpperCase().startsWith('DBG ')) return null;
+    final body = trimmed.substring(4).trim();
+    if (body.isEmpty) return null;
+
+    var hasTelemetry = false;
+    var mpuOk = false;
+    var magOk = false;
+    var magChip = '';
+    var ax = 0;
+    var ay = 0;
+    var az = 1000;
+    var mx = 0;
+    var my = 0;
+    var mz = 0;
+    var hasMagVec = false;
+    var fusedAxes = 0;
+    var rollDeg = 0.0;
+    var pitchDeg = 0.0;
+    var headingDeg = 0.0;
+    var batteryMv = 0;
+    int? magCalState;
+    int? gyroCalState;
+
+    List<int>? parseTriplet(String raw) {
+      final parts = raw.split(',');
+      if (parts.length != 3) return null;
+      final v0 = int.tryParse(parts[0].trim());
+      final v1 = int.tryParse(parts[1].trim());
+      final v2 = int.tryParse(parts[2].trim());
+      if (v0 == null || v1 == null || v2 == null) return null;
+      return <int>[v0, v1, v2];
+    }
+
+    for (final rawToken in body.split(';')) {
+      final token = rawToken.trim();
+      if (token.isEmpty) continue;
+      if (token.startsWith('MPU=')) {
+        mpuOk = token.substring(4) == '1';
+        hasTelemetry = true;
+      } else if (token.startsWith('QMC') || token.startsWith('MAG')) {
+        magChip = token;
+        if (token.contains('@')) magOk = true;
+      } else if (token.startsWith('A=')) {
+        final v = parseTriplet(token.substring(2));
+        if (v != null) {
+          ax = v[0];
+          ay = v[1];
+          az = v[2];
+          hasTelemetry = true;
+        }
+      } else if (token.startsWith('M=')) {
+        final v = parseTriplet(token.substring(2));
+        if (v != null) {
+          mx = v[0];
+          my = v[1];
+          mz = v[2];
+          hasMagVec = true;
+          hasTelemetry = true;
+        }
+      } else if (token.startsWith('9AX=')) {
+        final parsed = int.tryParse(token.substring(4).trim());
+        if (parsed != null) {
+          fusedAxes = parsed;
+          hasTelemetry = true;
+        }
+      } else if (token.startsWith('RPY=')) {
+        final v = parseTriplet(token.substring(4));
+        if (v != null) {
+          rollDeg = v[0].toDouble();
+          pitchDeg = v[1].toDouble();
+          headingDeg = ((v[2] % 360) + 360) % 360.0;
+          hasTelemetry = true;
+        }
+      } else if (token.startsWith('BAT=')) {
+        final mv = int.tryParse(token.substring(4).trim());
+        if (mv != null) batteryMv = mv;
+      } else if (token.startsWith('CAL=')) {
+        final parts = token.substring(4).split(',');
+        if (parts.isNotEmpty) magCalState = int.tryParse(parts[0].trim());
+        if (parts.length > 1) gyroCalState = int.tryParse(parts[1].trim());
+      }
+    }
+
+    if (!hasTelemetry) return null;
+    if (fusedAxes == 9 || hasMagVec) magOk = true;
+    return WatchSensorData(
+      rawLine: trimmed,
+      mpuOk: mpuOk || fusedAxes >= 6,
+      magOk: magOk,
+      magChip: magChip,
+      ax: ax,
+      ay: ay,
+      az: az,
+      mx: mx,
+      my: my,
+      mz: mz,
+      fusedAxes: fusedAxes,
+      rollDeg: rollDeg,
+      pitchDeg: pitchDeg,
+      headingDeg: headingDeg,
+      batteryMv: batteryMv,
+      timestamp: timestamp ?? DateTime.now(),
+      magCalState: magCalState,
+      gyroCalState: gyroCalState,
+    );
+  }
+}

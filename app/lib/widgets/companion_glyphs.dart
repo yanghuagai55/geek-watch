@@ -53,6 +53,40 @@ abstract final class CompanionGlyphs {
     ], role: GlyphRole.detail),
   ]);
 
+  static const media = Glyph([
+    GlyphBox(3.5, 4.5, 20.5, 19.5, 4),
+    GlyphPolyline([
+      GlyphVertex(8.5, 10.5),
+      GlyphVertex(8.5, 13.5),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(12, 8),
+      GlyphVertex(12, 16),
+    ], role: GlyphRole.detail),
+    GlyphPolyline([
+      GlyphVertex(15.5, 9.5),
+      GlyphVertex(15.5, 14.5),
+    ], role: GlyphRole.line),
+  ]);
+
+  static const watchFace = Glyph([
+    GlyphBox(5, 5.5, 19, 18.5, 4),
+    GlyphPolyline([
+      GlyphVertex(9, 2.5),
+      GlyphVertex(15, 2.5),
+    ], role: GlyphRole.detail),
+    GlyphPolyline([
+      GlyphVertex(9, 21.5),
+      GlyphVertex(15, 21.5),
+    ], role: GlyphRole.detail),
+    GlyphPolyline([
+      GlyphVertex(12, 9),
+      GlyphVertex(12, 12),
+      GlyphVertex(15, 13.5),
+    ], role: GlyphRole.line),
+    GlyphCircle(12, 12, 1.1, role: GlyphRole.detail, solid: true),
+  ]);
+
   static const settings = Glyph([
     GlyphPolyline([
       GlyphVertex(9.87, 5.44, 0.6),

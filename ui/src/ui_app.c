@@ -81,6 +81,8 @@ typedef struct app {
     uint8_t msg_was_open;
     uint8_t msg_prev_level;
     uint8_t music_was_open;
+    uint8_t sport_tab;
+    ui_obj_t sport_scroll;
 } app_t;
 
 static app_t *st;
@@ -795,7 +797,83 @@ static int run_frame(void) {
     return (int)((hal_tick_ms() / 60u) % 5u);
 }
 
-static void draw_sport_app(uint8_t a) {
+static void poll_imu9_now(imu9_state_t *out, uint32_t now) {
+    static uint32_t poll_ms;
+
+    if ((now - poll_ms) >= 100u || poll_ms == 0u) {
+        poll_ms = now;
+        if (imu9_is_stale(now, 150u)) {
+            hal_imu_t imu;
+            hal_mag_t mag;
+            int io = hal_imu_read(&imu);
+            int mo = hal_mag_read(&mag);
+            if (io || mo) {
+                imu9_feed(io ? &imu : NULL, mo ? &mag : NULL, now);
+            }
+        }
+    }
+    imu9_get(out);
+}
+
+/* Quarter-wave sin(0..90deg) * 255 in 5-degree steps for compact ROM trig. */
+static const uint8_t compass_sin5[19] = {
+    0, 22, 44, 66, 87, 108, 128, 146, 164, 180,
+    195, 209, 221, 231, 240, 246, 251, 254, 255
+};
+
+static int compass_sin_q8(int deg) {
+    int q, a, i, r, v;
+
+    deg = wrap_mod(deg, 360);
+    q = deg / 90;
+    a = deg % 90;
+    if (q == 1 || q == 3) {
+        a = 90 - a;
+    }
+    i = a / 5;
+    r = a % 5;
+    v = compass_sin5[i] + (compass_sin5[i + 1] - compass_sin5[i]) * r / 5;
+    return (q >= 2) ? -v : v;
+}
+
+static void compass_vec(int deg_cw, int *dx_q8, int *dy_q8) {
+    /* Clockwise from 12 o'clock on screen: x = +sin, y = -cos. */
+    *dx_q8 = compass_sin_q8(deg_cw);
+    *dy_q8 = -compass_sin_q8(deg_cw + 90);
+}
+
+static const char *compass_dir_zh(uint16_t heading) {
+    static const char *const dirs[8] = {
+        "北", "东北", "东", "东南", "南", "西南", "西", "西北"
+    };
+    return dirs[((heading + 22u) % 360u) / 45u];
+}
+
+static void draw_sport_pager(int tab, uint8_t a) {
+    int y = UI_MY(24);
+    int w_on = UI_MX(85);
+    int w_off = UI_MX(32);
+    int h = UI_MY(24);
+    int gap = UI_MX(30);
+    int tot, x0, x1;
+
+    if (w_on < 8) w_on = 8;
+    if (w_off < 3) w_off = 3;
+    if (h < 3) h = 3;
+    if (gap < 3) gap = 3;
+    if (y < 2) y = 2;
+    tot = w_on + gap + w_off;
+    x0 = (UI_W - tot) / 2;
+    x1 = tab ? (x0 + w_off + gap) : (x0 + w_on + gap);
+    ui_draw_round((int16_t)x0, (int16_t)y,
+                  (int16_t)(tab ? w_off : w_on), (int16_t)h,
+                  (int16_t)(h / 2), tab ? col_line : col_ring, a);
+    ui_draw_round((int16_t)x1, (int16_t)y,
+                  (int16_t)(tab ? w_on : w_off), (int16_t)h,
+                  (int16_t)(h / 2), tab ? col_ring : col_line, a);
+}
+
+static void draw_sport_steps(uint8_t a, int clear_bg) {
     sport_stats_t ss;
     uint32_t bars[SPORT_BARS];
     hal_clock_t clk;
@@ -832,7 +910,7 @@ static void draw_sport_app(uint8_t a) {
     percent = ss.goal ? (int)(ss.steps * 100u / ss.goal) : 0;
     if (percent > 100) percent = 100;
 
-    if (a == 255) {
+    if (clear_bg && a == 255) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     }
     /* 运动一级页去掉顶部大标题，顶部直接让位给步数字号并避开右上角电池图标。 */
@@ -878,6 +956,145 @@ static void draw_sport_app(uint8_t a) {
              (unsigned long)ss.distance_m, (unsigned long)ss.calories);
     ui_text_fit(goal, sizeof goal, line, (int16_t)(UI_W - margin * 2), 1);
     ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)footer_y, goal, col_dim, a, 1);
+}
+
+static void compass_disc(int cx, int cy, int r, uint16_t col, uint8_t a) {
+    ui_draw_round((int16_t)(cx - r), (int16_t)(cy - r),
+                  (int16_t)(r * 2), (int16_t)(r * 2),
+                  (int16_t)r, col, a);
+}
+
+static void compass_needle(int cx, int cy, int dx, int dy, int len,
+                           int pw, uint16_t col, uint8_t a) {
+    int tx = cx + ((dx * len) >> 8);
+    int ty = cy + ((dy * len) >> 8);
+    int k;
+
+    for (k = -pw; k <= pw; k++) {
+        ui_draw_line((int16_t)(cx + ((-dy * k) >> 8)),
+                     (int16_t)(cy + ((dx * k) >> 8)),
+                     (int16_t)tx, (int16_t)ty, col, a);
+    }
+}
+
+/* 运动一级第二屏：本地 ROM 九轴指南针，全分辨率自适应并压缩点阵显示。 */
+static void draw_sport_compass(uint8_t a, int clear_bg) {
+    imu9_state_t s9;
+    int sc = UI_W >= 200 ? 2 : 1;
+    int margin = UI_MX(M_MARGIN);
+    int title_y = UI_MY(55);
+    int title_h = ui_text_height("指", 1);
+    int hdg_h = title_h * sc;
+    int sub_y = UI_H - UI_MY(45) - title_h;
+    int hdg_y = sub_y - UI_MY(24) - hdg_h;
+    int dial_top = title_y + title_h + UI_MY(32);
+    int dial_bot = hdg_y - UI_MY(24);
+    int max_r = (dial_bot - dial_top) >> 1;
+    int w_r = UI_W * 22 / 100;
+    int r = (max_r < w_r) ? max_r : w_r;
+    int ring_w = r >= 40 ? 3 : 2;
+    int cx = UI_W >> 1;
+    int cy = dial_top + ((dial_bot - dial_top) >> 1);
+    int needle_deg, dx, dy, r_in, pw, hub_r, n_dot, k;
+    char line[24];
+
+    if (r < 18) r = 18;
+    r_in = r - ring_w;
+    pw = r >= 40 ? 4 : 2;
+    hub_r = r >= 40 ? 5 : 3;
+    n_dot = r >= 40 ? 4 : 2;
+
+    poll_imu9_now(&s9, hal_tick_ms());
+    needle_deg = wrap_mod(s9.fused_axes ? -(int)s9.heading_deg : 0, 360);
+
+    if (clear_bg && a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
+
+    ui_draw_round((int16_t)margin, (int16_t)(title_y + 1),
+                  (int16_t)(sc + 2), (int16_t)(title_h - 2),
+                  1, (s9.mag_cal == 1) ? col_accent : col_ring, a);
+    ui_draw_text((int16_t)(margin + sc + 5), (int16_t)title_y,
+                 "指南针", col_text, a, 1);
+
+    compass_disc(cx, cy, r, col_line, a);
+    compass_disc(cx, cy, r_in, col_bg, a);
+    ui_draw_fill((int16_t)(cx - sc), (int16_t)(cy - r - sc * 2 - 1),
+                 (int16_t)(sc * 2), (int16_t)(sc * 2 + 2), col_ring, a);
+
+    for (k = 0; k < 8; k++) {
+        int vx, vy, r_tick0, r_tick1 = r_in - 1;
+        compass_vec(needle_deg + k * 45, &vx, &vy);
+        r_tick0 = r_in - ((k & 1) ? (sc + 2) : (sc * 2 + 3));
+        ui_draw_line((int16_t)(cx + ((vx * r_tick0) >> 8)),
+                     (int16_t)(cy + ((vy * r_tick0) >> 8)),
+                     (int16_t)(cx + ((vx * r_tick1) >> 8)),
+                     (int16_t)(cy + ((vy * r_tick1) >> 8)),
+                     k == 0 ? col_accent : ((k & 1) ? col_dim : col_text), a);
+    }
+
+    compass_vec(needle_deg, &dx, &dy);
+    compass_disc(cx + ((dx * (r - 1)) >> 8),
+                 cy + ((dy * (r - 1)) >> 8), n_dot, col_accent, a);
+
+    compass_needle(cx, cy, -dx, -dy, r_in * 55 / 100, pw, col_dim, a);
+    compass_needle(cx, cy, dx, dy, r_in * 78 / 100, pw, col_accent, a);
+    compass_disc(cx, cy, hub_r, col_bg, a);
+    compass_disc(cx, cy, hub_r - 1, col_ring, a);
+
+    if (s9.fused_axes) {
+        snprintf(line, sizeof line, "%03u度 %s",
+                 (unsigned)s9.heading_deg, compass_dir_zh(s9.heading_deg));
+    } else {
+        snprintf(line, sizeof line, "---度 --");
+    }
+    ui_text_draw_center((int16_t)cx, (int16_t)hdg_y, line, col_text, a, (uint8_t)sc);
+
+    if (s9.mag_cal == 1) {
+        snprintf(line, sizeof line, "校准中 360度 K2");
+    } else {
+        const char *b = s9.fused_axes == 9 ? (s9.mag_cal == 2 ? "9DOF*" : "9DOF")
+                      : (s9.fused_axes == 6 ? "6DOF"
+                      : (s9.fused_axes ? "3DOF" : "--"));
+        snprintf(line, sizeof line, "%s K2校准", b);
+    }
+    ui_text_draw_center((int16_t)cx, (int16_t)sub_y, line,
+                        s9.mag_cal == 1 ? col_accent : col_dim, a, 1);
+}
+
+static void draw_sport_app(uint8_t a) {
+    int sx = st->sport_scroll.x;
+    int os, ox, oy;
+    int dx0, dx1;
+
+    if (sx < 0) sx = 0;
+    if (sx > 256) sx = 256;
+    if (sx == 0) {
+        draw_sport_steps(a, 1);
+        draw_sport_pager(0, a);
+        return;
+    }
+    if (sx == 256) {
+        draw_sport_compass(a, 1);
+        draw_sport_pager(1, a);
+        return;
+    }
+    ui_draw_get_xform(&os, &ox, &oy);
+    dx0 = -(sx * UI_W / 256);
+    dx1 = UI_W + dx0;
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
+    if (dx0 + UI_W > 0) {
+        ui_draw_xform(os, ox + dx0 * os / 256, oy);
+        draw_sport_steps(a, 0);
+    }
+    if (dx1 < UI_W) {
+        ui_draw_xform(os, ox + dx1 * os / 256, oy);
+        draw_sport_compass(a, 0);
+    }
+    ui_draw_xform(os, ox, oy);
+    draw_sport_pager(sx >= 128 ? 1 : 0, a);
 }
 
 static void draw_home_art(int page, uint8_t a) {
@@ -945,7 +1162,7 @@ static const char *compass_dir(uint16_t heading) {
    显示单位：A=0.1g，G=1dps，M=10mG，R/P/H=度；KEY2 启停磁校准，KEY3 归零。 */
 static void draw_sensor_page(uint8_t a) {
     static imu9_state_t s9;
-    static uint32_t poll_ms, scan_ms;
+    static uint32_t scan_ms;
     static char scan[20] = "I2C --";
     uint32_t now = hal_tick_ms();
     char line[28], rbuf[8], pbuf[8];
@@ -961,19 +1178,7 @@ static void draw_sensor_page(uint8_t a) {
         step = max_step;
     }
 
-    if ((now - poll_ms) >= 100u) {
-        poll_ms = now;
-        if (imu9_is_stale(now, 150u)) {
-            hal_imu_t imu;
-            hal_mag_t mag;
-            int io = hal_imu_read(&imu);
-            int mo = hal_mag_read(&mag);
-            if (io || mo) {
-                imu9_feed(io ? &imu : NULL, mo ? &mag : NULL, now);
-            }
-        }
-        imu9_get(&s9);
-    }
+    poll_imu9_now(&s9, now);
     /* 插拔模块后不用重启，1 秒重扫一次总线。 */
     if ((now - scan_ms) >= 1000u) {
         uint8_t addrs[4];
@@ -1396,6 +1601,10 @@ static void on_confirm(ui_menu_t *menu) {
         } else if (menu == &st->music) {
             /* 打开音乐页时按需分配动态缓冲并从外置 Flash 恢复曲名点阵。 */
             link_enter_music();
+        } else if (menu == &st->sport) {
+            st->sport_tab = 0;
+            ui_anim_stop(&st->sport_scroll, 0);
+            st->sport_scroll.x = 0;
         }
     }
     if (result != UI_MENU_ROW) {
@@ -1509,15 +1718,38 @@ static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
     }
     if (menu && ui_menu_level(menu) > UI_MENU_ICON) {
         int cur_lvl, old_scroll, n, old_focus, new_focus;
+        if (menu == &st->sport && menu->level == UI_MENU_LIST) {
+            if (pressed & HAL_KEY3) {
+                st->sport_tab = st->sport_tab ? 0 : 1;
+                ui_anim_play_range(UI_ANIM_STACK, &st->sport_scroll,
+                                   st->sport_scroll.x,
+                                   (int16_t)(st->sport_tab * 256));
+            } else if (pressed & HAL_KEY1) {
+                if (st->sport_tab != 0) {
+                    st->sport_tab = 0;
+                    ui_anim_play_range(UI_ANIM_STACK, &st->sport_scroll,
+                                       st->sport_scroll.x, 0);
+                } else {
+                    st->rip_mode = RIP_NONE;
+                    ui_anim_stop(&st->sport_scroll, 0);
+                    st->sport_scroll.x = 0;
+                    ui_menu_back(menu);
+                }
+            } else if (pressed & HAL_KEY2) {
+                if (st->sport_tab == 1) {
+                    imu9_cal_start();
+                } else {
+                    on_confirm(menu);
+                }
+            }
+            return;
+        }
         if ((menu == &st->messages && menu->level == UI_MENU_LIST &&
              (!link_msg_list_ready() || menu->count <= 0)) ||
-            (menu == &st->messages && menu->level == UI_MENU_CHILD) ||
-            (menu == &st->sport && menu->level == UI_MENU_LIST)) {
+            (menu == &st->messages && menu->level == UI_MENU_CHILD)) {
             if (pressed & HAL_KEY1) {
                 st->rip_mode = RIP_NONE;
                 ui_menu_back(menu);
-            } else if ((pressed & HAL_KEY2) && menu == &st->sport) {
-                on_confirm(menu);
             }
             return;
         }
@@ -2117,6 +2349,9 @@ void ui_app_go_home(void) {
     st->msg_prev_level = UI_MENU_ICON;
     st->music_was_open = 0;
     st->sensor_open = 0;
+    st->sport_tab = 0;
+    ui_anim_stop(&st->sport_scroll, 0);
+    st->sport_scroll.x = 0;
     st->nav_key = 0;
     st->nav_repeat = 0;
     st->rip_mode = RIP_NONE;

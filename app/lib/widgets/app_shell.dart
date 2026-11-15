@@ -4,9 +4,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:prism_ui/icons/glyph.dart';
 import 'package:prism_ui/prism_ui.dart' as prism;
 
+import '../pages/dials_page.dart';
 import '../pages/home_page.dart';
-import '../pages/messages_page.dart';
-import '../pages/music_page.dart';
+import '../pages/media_page.dart';
 import '../pages/settings_page.dart';
 import '../pages/sport_page.dart';
 import '../state/watch_controller.dart';
@@ -54,16 +54,16 @@ class _AppShellState extends State<AppShell>
       CompanionGlyphs.sport,
     ),
     _NavItem(
-      Icons.chat_bubble_outline_rounded,
-      Icons.chat_bubble_rounded,
-      '消息',
-      CompanionGlyphs.messages,
+      Icons.perm_media_outlined,
+      Icons.perm_media_rounded,
+      '媒体',
+      CompanionGlyphs.media,
     ),
     _NavItem(
-      Icons.music_note_outlined,
-      Icons.music_note_rounded,
-      '音乐',
-      CompanionGlyphs.music,
+      Icons.watch_outlined,
+      Icons.watch_rounded,
+      '表盘',
+      CompanionGlyphs.watchFace,
     ),
     _NavItem(
       Icons.settings_outlined,
@@ -289,8 +289,8 @@ class _AppShellState extends State<AppShell>
         final pages = [
           HomePage(controller: widget.controller, onNavigate: _select),
           SportPage(controller: widget.controller),
-          MessagesPage(controller: widget.controller),
-          MusicPage(controller: widget.controller),
+          MediaPage(controller: widget.controller),
+          DialsPage(controller: widget.controller),
           SettingsPage(controller: widget.controller),
         ];
         return AnimatedSwitcher(

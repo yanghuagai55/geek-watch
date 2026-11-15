@@ -26,13 +26,18 @@ class NotificationApp {
   final String label;
 }
 
+/// KEY2 磁强计 360° 硬铁校准阶段（与手表 `传感器数值` 页面同步）。
+enum MagCalPhase { idle, calibrating, readyToFinish, done }
+
 class WatchController extends ChangeNotifier {
-  WatchController({bool startTicker = true, this.session}) {
+  WatchController({bool startTicker = true, this.session})
+    : _autoTick = startTicker {
     _stateSub = session?.states.listen(_onLinkState);
     _statsSub = session?.stats.listen(_applyStats);
     _controlsSub = session?.controls.listen(_applyControl);
     _settingsSub = session?.watchSettings.listen(_applyWatchSettings);
     _sportSub = session?.sport.listen(_applySport);
+    _sensorSub = session?.sensors.listen(_applySensor);
     if (startTicker) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
     }
@@ -40,14 +45,21 @@ class WatchController extends ChangeNotifier {
 
   /// 为空时保持纯界面预览（测试与无硬件环境）。
   final WatchSession? session;
+  final bool _autoTick;
+
+  /// 当由单元测试以 `startTicker: false` 构造时为 false，关闭后台空闲循环动画。
+  bool get ambientTickEnabled => _autoTick;
 
   Timer? _ticker;
+  Timer? _sensorTimer;
+  int _sensorBoostRefs = 0;
   int _ticks = 0;
   StreamSubscription<LinkState>? _stateSub;
   StreamSubscription<WatchStats>? _statsSub;
   StreamSubscription<int>? _controlsSub;
   StreamSubscription<WatchSettings>? _settingsSub;
   StreamSubscription<WatchSport>? _sportSub;
+  StreamSubscription<WatchSensorData>? _sensorSub;
 
   DateTime now = DateTime.now();
   ThemeMode themeMode = ThemeMode.dark;
@@ -118,6 +130,57 @@ class WatchController extends ChangeNotifier {
   /// 主页预览用的真机画面（连接后自动抓一帧，点击可刷新）。
   ui.Image? deviceScreen;
   bool capturingPreview = false;
+
+  /// 9 轴姿态融合实时遥测与 KEY2 硬铁校准状态。
+  static const int magSpanTarget = 120;
+  WatchSensorData? sensor;
+  bool liveSensor = false;
+  bool mpuOk = false;
+  bool magOk = false;
+  double rollDeg = 0;
+  double pitchDeg = 0;
+  double headingDeg = 0;
+  int ax = 0;
+  int ay = 0;
+  int az = 1000;
+  int mx = 0;
+  int my = 0;
+  int mz = 0;
+  int fusedAxes = 0;
+  int batteryMv = 0;
+  bool sensorStreaming = true;
+  MagCalPhase magCalPhase = MagCalPhase.idle;
+  bool _magBoundsInit = false;
+  int magMinX = 0;
+  int magMaxX = 0;
+  int magMinY = 0;
+  int magMaxY = 0;
+  int magMinZ = 0;
+  int magMaxZ = 0;
+  DateTime? magCalCompletedAt;
+  String? calStatusNote;
+  bool keyBusy = false;
+
+  int get magSpanX => _magBoundsInit ? (magMaxX - magMinX) : 0;
+  int get magSpanY => _magBoundsInit ? (magMaxY - magMinY) : 0;
+  int get magSpanZ => _magBoundsInit ? (magMaxZ - magMinZ) : 0;
+  bool get magCalCoverageReady =>
+      _magBoundsInit &&
+      magSpanX >= magSpanTarget &&
+      magSpanY >= magSpanTarget &&
+      magSpanZ >= magSpanTarget;
+  int get magOffsetX => _magBoundsInit ? ((magMinX + magMaxX) ~/ 2) : 0;
+  int get magOffsetY => _magBoundsInit ? ((magMinY + magMaxY) ~/ 2) : 0;
+  int get magOffsetZ => _magBoundsInit ? ((magMinZ + magMaxZ) ~/ 2) : 0;
+
+  String get dofBadge {
+    if (liveSensor) {
+      return sensor?.dofLabel ?? '--';
+    }
+    if (!connected && demoStreaming) return '3D 预览';
+    if (connected && hasHardware) return '9-DOF 待测';
+    return '9-DOF 演示';
+  }
 
   /// 设置变更回调（main 里做防抖落盘）。
   VoidCallback? onSettingsChanged;
@@ -325,6 +388,11 @@ class WatchController extends ChangeNotifier {
     linkState = state;
     if (state != LinkState.connected) {
       _liveTelemetry = false;
+      liveSensor = false;
+      sensor = null;
+      fusedAxes = 0;
+      mpuOk = false;
+      magOk = false;
       ramUsed = 0;
       cpu = 0;
       fps = 0;
@@ -338,6 +406,7 @@ class WatchController extends ChangeNotifier {
       unawaited(_syncAndroidIntegration());
     }
     _syncMediaPolling();
+    _syncSensorPolling();
     notifyListeners();
   }
 
@@ -409,6 +478,195 @@ class WatchController extends ChangeNotifier {
     final active = session;
     if (active == null || !connected) return Future<bool>.value(false);
     return active.requestSport();
+  }
+
+  /// 视图挂载 3D 大屏展示或校准面板时提高 9 轴采样率，退出时自动恢复。
+  void acquireSensorBoost() {
+    _sensorBoostRefs++;
+    _syncSensorPolling();
+  }
+
+  void releaseSensorBoost() {
+    if (_sensorBoostRefs > 0) _sensorBoostRefs--;
+    _syncSensorPolling();
+  }
+
+  void setSensorStreaming(bool enabled) {
+    if (sensorStreaming == enabled) return;
+    sensorStreaming = enabled;
+    _syncSensorPolling();
+    notifyListeners();
+  }
+
+  void _syncSensorPolling() {
+    _sensorTimer?.cancel();
+    _sensorTimer = null;
+    final active = session;
+    if (!_autoTick ||
+        !sensorStreaming ||
+        !connected ||
+        active == null) {
+      return;
+    }
+    final intervalMs = _sensorBoostRefs > 0 ? 115 : 220;
+    _sensorTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
+      if (!connected || active.isCapturing || capturingPreview) return;
+      unawaited(active.requestSensor().catchError((Object _) => null));
+    });
+  }
+
+  Future<bool> refreshSensor() async {
+    final active = session;
+    if (active == null || !connected) return false;
+    final data = await active.requestSensor();
+    if (data != null) _applySensor(data);
+    return data != null;
+  }
+
+  void _applySensor(WatchSensorData data) {
+    sensor = data;
+    liveSensor = true;
+    mpuOk = data.mpuOk;
+    magOk = data.magOk;
+    ax = data.ax;
+    ay = data.ay;
+    az = data.az;
+    mx = data.mx;
+    my = data.my;
+    mz = data.mz;
+    fusedAxes = data.fusedAxes;
+    rollDeg = data.rollDeg;
+    pitchDeg = data.pitchDeg;
+    headingDeg = data.headingDeg;
+    if (data.batteryMv > 0) batteryMv = data.batteryMv;
+
+    final fwCal = data.magCalState;
+    if (fwCal == 1 &&
+        magCalPhase != MagCalPhase.calibrating &&
+        magCalPhase != MagCalPhase.readyToFinish) {
+      beginMagCalTracking(note: '手表正在采集 360° 磁场样本，请多方向旋转手表');
+    } else if (fwCal == 2 && magCalPhase != MagCalPhase.done) {
+      magCalPhase = MagCalPhase.done;
+      magCalCompletedAt = DateTime.now();
+      calStatusNote = '固件已完成硬铁校准（9-DOF 磁力计偏置已锁存）';
+    } else if (fwCal == 0 && magCalPhase == MagCalPhase.calibrating) {
+      magCalPhase = MagCalPhase.idle;
+      calStatusNote = null;
+    }
+
+    if (magCalPhase == MagCalPhase.calibrating ||
+        magCalPhase == MagCalPhase.readyToFinish) {
+      _updateMagCalibrationBounds(mx, my, mz);
+    }
+    notifyListeners();
+  }
+
+  void _updateMagCalibrationBounds(int x, int y, int z) {
+    if (!_magBoundsInit) {
+      _magBoundsInit = true;
+      magMinX = magMaxX = x;
+      magMinY = magMaxY = y;
+      magMinZ = magMaxZ = z;
+    } else {
+      if (x < magMinX) magMinX = x;
+      if (x > magMaxX) magMaxX = x;
+      if (y < magMinY) magMinY = y;
+      if (y > magMaxY) magMaxY = y;
+      if (z < magMinZ) magMinZ = z;
+      if (z > magMaxZ) magMaxZ = z;
+    }
+    if (magCalCoverageReady && magCalPhase == MagCalPhase.calibrating) {
+      magCalPhase = MagCalPhase.readyToFinish;
+      calStatusNote = '三轴跨度均已达到 ≥ 120 mG，请再次按下手表 KEY2 保存完成';
+    }
+  }
+
+  void beginMagCalTracking({String? note}) {
+    magCalPhase = MagCalPhase.calibrating;
+    _magBoundsInit = false;
+    magMinX = magMaxX = mx;
+    magMinY = magMaxY = my;
+    magMinZ = magMaxZ = mz;
+    if (liveSensor) _magBoundsInit = true;
+    calStatusNote = note ?? '请绕 Pitch / Roll / Yaw 三轴做 360° 旋转，使三轴跨度均 ≥ 120 mG';
+    notifyListeners();
+  }
+
+  void completeMagCalTracking({String? note}) {
+    magCalPhase = MagCalPhase.done;
+    magCalCompletedAt = DateTime.now();
+    calStatusNote = note ?? '已完成 KEY2 硬铁偏置校准，现在可查看精确朝向角';
+    notifyListeners();
+  }
+
+  void cancelMagCalTracking() {
+    magCalPhase = MagCalPhase.idle;
+    _magBoundsInit = false;
+    calStatusNote = null;
+    notifyListeners();
+  }
+
+  /// 协同或远程触发手表 KEY2（启动/结束 360° 磁力计硬铁校准）。
+  Future<bool> triggerKey2Calibration() async {
+    if (keyBusy) return false;
+    final active = session;
+    if (active == null || !connected) {
+      if (magCalPhase == MagCalPhase.idle || magCalPhase == MagCalPhase.done) {
+        beginMagCalTracking(note: '预览模式：模拟 360° 采集中，再点一次完成校准（实机连接后将发送真机 KEY2）');
+        _updateMagCalibrationBounds(-45, -30, -480);
+        _updateMagCalibrationBounds(45, 55, -420);
+      } else {
+        completeMagCalTracking(note: '预览模式：已完成模拟 KEY2 校准');
+      }
+      return true;
+    }
+
+    keyBusy = true;
+    notifyListeners();
+    try {
+      final ok = await active.sendKeyTap(WatchKeyMask.key2);
+      if (!ok) {
+        calStatusNote = '未能向手表发送 KEY2，请直接在手表按键操作';
+        return false;
+      }
+      if (magCalPhase == MagCalPhase.idle || magCalPhase == MagCalPhase.done) {
+        beginMagCalTracking(note: '已远程按下 KEY2，请保证手表处于「传感器数值」页并旋转 360°');
+      } else {
+        completeMagCalTracking(note: '已远程按下 KEY2 完成硬铁校准保存');
+      }
+      return true;
+    } finally {
+      keyBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 远程触发手表 KEY3（复位姿态角与陀螺仪零偏）。
+  Future<bool> triggerKey3Reset() async {
+    if (keyBusy) return false;
+    final active = session;
+    if (active == null || !connected) {
+      rollDeg = 0;
+      pitchDeg = 0;
+      headingDeg = 0;
+      calStatusNote = '预览模式：已将姿态归零（实机下对应 KEY3 zero/reset）';
+      notifyListeners();
+      return true;
+    }
+
+    keyBusy = true;
+    notifyListeners();
+    try {
+      final ok = await active.sendKeyTap(WatchKeyMask.key3);
+      calStatusNote = ok
+          ? '已发送 KEY3 姿态与陀螺仪零偏复位脉冲'
+          : '发送 KEY3 失败，请在手表「传感器数值」页直接按 KEY3';
+      if (ok) unawaited(refreshSensor());
+      return ok;
+    } finally {
+      keyBusy = false;
+      notifyListeners();
+    }
   }
 
   void _sendSetting(int key, int value) {
@@ -940,6 +1198,7 @@ class WatchController extends ChangeNotifier {
   @override
   void dispose() {
     _ticker?.cancel();
+    _sensorTimer?.cancel();
     _mediaTimer?.cancel();
     _mediaPageTimer?.cancel();
     _stateSub?.cancel();
@@ -947,6 +1206,7 @@ class WatchController extends ChangeNotifier {
     _controlsSub?.cancel();
     _settingsSub?.cancel();
     _sportSub?.cancel();
+    _sensorSub?.cancel();
     deviceScreen?.dispose();
     unawaited(session?.dispose());
     super.dispose();

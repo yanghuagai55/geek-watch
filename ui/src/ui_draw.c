@@ -444,7 +444,7 @@ int16_t ui_text_width(const char *utf8, uint8_t scale) {
     while (*s) {
         uint32_t cp = utf8_next(&s);
         const ui_glyph_t *g = ui_font_find(cp);
-        int adv = g ? g->advance : 8;
+        int adv = g ? g->w : 8;
         width += adv * scale;
     }
     return (int16_t)width;
@@ -1134,21 +1134,73 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     }
 }
 
+static void unpack_font_rle(const uint8_t *src, uint8_t *dst, int dst_len, int bpr) {
+    uint8_t h0 = *src++;
+    uint8_t h1;
+    int pos, end;
+
+    memset(dst, 0, (size_t)dst_len);
+    if (h0 == 0xFFu) {
+        return;
+    }
+    h1 = *src++;
+    pos = (int)h0 * bpr;
+    end = pos + ((int)(h1 & 0x0Fu) + 1) * bpr;
+    if (end > dst_len) {
+        end = dst_len;
+    }
+    if (!(h1 & 0x80u)) {
+        while (pos < end) {
+            dst[pos++] = *src++;
+        }
+        return;
+    }
+    while (pos < end) {
+        uint8_t ctrl = *src++;
+        if (ctrl & 0x80u) {
+            int cnt = (int)(ctrl & 0x7Fu) + 2;
+            uint8_t v = *src++;
+            while (cnt-- > 0 && pos < end) {
+                dst[pos++] = v;
+            }
+        } else {
+            int cnt = (int)ctrl + 1;
+            while (cnt-- > 0 && pos < end) {
+                dst[pos++] = *src++;
+            }
+        }
+    }
+}
+
 static void raster_text(const draw_item_t *it, int band_y) {
     use_item_xform(it);
     const char *s = strs + it->str_off;
     int pen = it->x;
     int scale = it->scale ? it->scale : 1;
+    int rle = ui_font_is_rle();
 
     while (*s) {
         uint32_t cp = utf8_next(&s);
         const ui_glyph_t *g = ui_font_find(cp);
         int gw = g ? g->w : 8;
         int gh = g ? g->h : 16;
-        int adv = g ? g->advance : 8;
-        bitmap(it, band_y, pen, it->y, gw, gh, scale,
-               g ? ui_font_bits() + g->offset : 0, KIND_TEXT);
-        pen += adv * scale;
+        uint8_t raw[32];
+        const void *bmp_data = 0;
+
+        if (g) {
+            bmp_data = ui_font_bits() + g->offset;
+            if (rle) {
+                int bpr = (gw + 7) >> 3;
+                int need = bpr * gh;
+                if (need > (int)sizeof raw) {
+                    need = (int)sizeof raw;
+                }
+                unpack_font_rle((const uint8_t *)bmp_data, raw, need, bpr);
+                bmp_data = raw;
+            }
+        }
+        bitmap(it, band_y, pen, it->y, gw, gh, scale, bmp_data, KIND_TEXT);
+        pen += gw * scale;
     }
 }
 
@@ -1190,7 +1242,7 @@ static history_t describe(const draw_item_t *it) {
             int height = g ? g->h : 16;
             extend(&x0, &x1, pen, pen + w * it->scale);
             extend(&y0, &y1, it->y, it->y + height * it->scale);
-            pen += (g ? g->advance : 8) * it->scale;
+            pen += w * it->scale;
         }
     } else if (it->kind == KIND_LINE) {
         extend(&x0, &x1, it->w, it->w);

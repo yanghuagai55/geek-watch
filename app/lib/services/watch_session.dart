@@ -39,6 +39,8 @@ class WatchSession {
       StreamController<WatchSettings>.broadcast();
   final StreamController<WatchSport> _sport =
       StreamController<WatchSport>.broadcast();
+  final StreamController<WatchSensorData> _sensors =
+      StreamController<WatchSensorData>.broadcast();
   final StreamController<String> _logs = StreamController<String>.broadcast();
 
   late final WatchFrameParser _parser = WatchFrameParser(
@@ -52,11 +54,13 @@ class WatchSession {
   Timer? _telemetry;
   Completer<bool>? _ack;
   Completer<WatchSnapshot?>? _snapshot;
+  Completer<WatchSensorData?>? _sensorWaiter;
   Future<void> _tail = Future<void>.value();
   LinkState _state = LinkState.idle;
   bool _quiet = false;
   bool _commandBusy = false;
   bool _snapshotBusy = false;
+  bool _sensorBusy = false;
   bool _disposed = false;
 
   LinkState get state => _state;
@@ -80,6 +84,9 @@ class WatchSession {
 
   /// 手表今日运动数据（步数、距离、卡路里、活跃分钟、12 个时段桶）。
   Stream<WatchSport> get sport => _sport.stream;
+
+  /// 手表 9 轴姿态与传感器调试流（由 0x13 触发后从 `DBG ...` 解析）。
+  Stream<WatchSensorData> get sensors => _sensors.stream;
 
   /// 链路日志（已连接、握手无回应、断开原因等）。
   Stream<String> get logs => _logs.stream;
@@ -159,6 +166,12 @@ class WatchSession {
     final snapshot = _snapshot;
     _snapshot = null;
     if (snapshot != null && !snapshot.isCompleted) snapshot.complete(null);
+    final sensorWaiter = _sensorWaiter;
+    _sensorWaiter = null;
+    if (sensorWaiter != null && !sensorWaiter.isCompleted) {
+      sensorWaiter.complete(null);
+    }
+    _sensorBusy = false;
     if (_state != LinkState.idle) _setState(LinkState.idle);
   }
 
@@ -246,6 +259,50 @@ class WatchSession {
     return _command(WatchCmd.sport);
   }
 
+  /// 请求一帧 9 轴姿态与传感器调试快照；固件回复 `DBG ...`（no_ack=1）。
+  Future<WatchSensorData?> requestSensor({
+    Duration timeout = const Duration(milliseconds: 550),
+  }) async {
+    if (_sensorBusy || _snapshotBusy || _commandBusy || _quiet) return null;
+    final transport = _transport;
+    if (transport == null || !transport.isConnected) return null;
+
+    _sensorBusy = true;
+    final completer = Completer<WatchSensorData?>();
+    _sensorWaiter = completer;
+    try {
+      await transport.send(buildWatchFrame(WatchCmd.sensor));
+      return await completer.future.timeout(timeout);
+    } on TimeoutException {
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      if (identical(_sensorWaiter, completer)) _sensorWaiter = null;
+      _sensorBusy = false;
+    }
+  }
+
+  /// 开启/关闭手表链路按键调试权限（0x08，固件发送 0x07 按键注入前需开启）。
+  Future<bool> setDebug(bool enabled) {
+    return _command(WatchCmd.debug, <int>[enabled ? 1 : 0]);
+  }
+
+  /// 发送一次模拟物理按键脉冲（按下 -> 保持约 95ms -> 松开，匹配手表去抖边缘）。
+  Future<bool> sendKeyTap(
+    int keyMask, {
+    Duration hold = const Duration(milliseconds: 95),
+    bool ensureDebug = true,
+  }) async {
+    if (ensureDebug) {
+      await setDebug(true);
+    }
+    final pressed = await _command(WatchCmd.key, <int>[keyMask & 0x07]);
+    if (!pressed) return false;
+    await Future<void>.delayed(hold);
+    return _command(WatchCmd.key, const <int>[0]);
+  }
+
   /// 请求一帧 128×160 画面；超时或链路断开返回 null。
   Future<WatchSnapshot?> requestSnapshot({
     Duration timeout = const Duration(seconds: 60),
@@ -283,6 +340,7 @@ class WatchSession {
     await _controls.close();
     await _watchSettings.close();
     await _sport.close();
+    await _sensors.close();
     await _logs.close();
   }
 
@@ -359,6 +417,13 @@ class WatchSession {
     if (text == 'ok' || text == 'bad') {
       final ack = _ack;
       if (ack != null && !ack.isCompleted) ack.complete(text == 'ok');
+      return;
+    }
+    final sensor = WatchSensorData.tryParseDebugLine(line);
+    if (sensor != null) {
+      if (!_disposed && !_sensors.isClosed) _sensors.add(sensor);
+      final waiter = _sensorWaiter;
+      if (waiter != null && !waiter.isCompleted) waiter.complete(sensor);
       return;
     }
     _log(line);

@@ -5,6 +5,7 @@ import '../state/watch_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
 import '../widgets/metric_card.dart';
+import '../widgets/watch_3d_view.dart';
 import '../widgets/watch_preview.dart';
 
 class HomePage extends StatelessWidget {
@@ -73,7 +74,7 @@ class HomePage extends StatelessWidget {
             const SizedBox(height: 12),
             _Metrics(controller: controller),
             const SizedBox(height: 26),
-            const SectionHeader(title: '快捷功能', subtitle: '消息、运动、画面与播放控制'),
+            const SectionHeader(title: '快捷功能', subtitle: '媒体、表盘、运动与画面镜像'),
             const SizedBox(height: 12),
             _QuickActions(controller: controller, onNavigate: onNavigate),
             const SizedBox(height: 18),
@@ -133,6 +134,8 @@ class _HeroCard extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final stacked = constraints.maxWidth < 650;
+          final showDualInline = constraints.maxWidth >= 720;
+          final showDualStacked = stacked && constraints.maxWidth >= 420;
           final intro = SizedBox(
             width: double.infinity,
             child: Column(
@@ -172,7 +175,7 @@ class _HeroCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  '把表盘、消息和音乐带到大屏。\n保留手表的安静，也保留每一处细节。',
+                  '把表盘、运动姿态与媒体带到大屏。\n保留手表的安静，也保留每一处细节。',
                   textAlign: stacked ? TextAlign.center : TextAlign.start,
                   style: TextStyle(
                     color: isDark ? AppPalette.muted : scheme.onSurfaceVariant,
@@ -200,28 +203,72 @@ class _HeroCard extends StatelessWidget {
                       label: Text(controller.connected ? '断开设备' : '连接设备'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: () => onNavigate(2),
+                      onPressed: () => onNavigate(1),
                       icon: const Icon(
-                        Icons.chat_bubble_outline_rounded,
+                        Icons.view_in_ar_rounded,
                         size: 17,
                       ),
-                      label: const Text('消息预览'),
+                      label: const Text('3D 大视图 & 校准'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => onNavigate(2),
+                      icon: const Icon(
+                        Icons.perm_media_outlined,
+                        size: 17,
+                      ),
+                      label: const Text('媒体与通知'),
                     ),
                   ],
                 ),
               ],
             ),
           );
-          final watch = WatchPreview(
+          if (showDualInline) {
+            final compactDual = constraints.maxWidth < 860;
+            return Row(
+              children: [
+                Expanded(child: intro),
+                const SizedBox(width: 24),
+                _DualWatchShowcase(
+                  controller: controller,
+                  onNavigate: onNavigate,
+                  previewWidth: compactDual ? 132 : 154,
+                  threeDWidth: compactDual ? 186 : 220,
+                  stageHeight: compactDual ? 196 : 220,
+                ),
+              ],
+            );
+          }
+          if (showDualStacked) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                intro,
+                const SizedBox(height: 22),
+                Center(
+                  child: _DualWatchShowcase(
+                    controller: controller,
+                    onNavigate: onNavigate,
+                    previewWidth: 144,
+                    threeDWidth: 204,
+                    stageHeight: 206,
+                  ),
+                ),
+              ],
+            );
+          }
+          final watch = _WatchStageSlot(
             controller: controller,
-            width: stacked ? 148 : 174,
+            onNavigate: onNavigate,
+            width: stacked ? 216 : 248,
+            stageHeight: stacked ? 196 : 226,
           );
           if (stacked) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 intro,
-                const SizedBox(height: 24),
+                const SizedBox(height: 22),
                 Center(child: watch),
               ],
             );
@@ -229,7 +276,7 @@ class _HeroCard extends StatelessWidget {
           return Row(
             children: [
               Expanded(child: intro),
-              const SizedBox(width: 32),
+              const SizedBox(width: 28),
               watch,
             ],
           );
@@ -255,7 +302,7 @@ class _PortraitHome extends StatelessWidget {
         children: [
           _PortraitHeader(controller: controller),
           const SizedBox(height: 16),
-          _PortraitWatchCard(controller: controller),
+          _PortraitWatchCard(controller: controller, onNavigate: onNavigate),
           const SizedBox(height: 20),
           SectionHeader(
             title: '实时性能',
@@ -341,20 +388,283 @@ class _PortraitHeader extends StatelessWidget {
   }
 }
 
-class _PortraitWatchCard extends StatelessWidget {
-  const _PortraitWatchCard({required this.controller});
+class _DualWatchShowcase extends StatelessWidget {
+  const _DualWatchShowcase({
+    required this.controller,
+    required this.onNavigate,
+    required this.previewWidth,
+    required this.threeDWidth,
+    required this.stageHeight,
+  });
 
   final WatchController controller;
+  final ValueChanged<int> onNavigate;
+  final double previewWidth;
+  final double threeDWidth;
+  final double stageHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = scheme.brightness == Brightness.dark;
+    final frameBg = (dark ? const Color(0xFF0E1615) : const Color(0xFFF6F8F1))
+        .withValues(alpha: 0.78);
+    final accent = dark ? AppPalette.mint : AppPalette.mintDeep;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: previewWidth + 24,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          decoration: BoxDecoration(
+            color: frameBg,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: scheme.outlineVariant),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                height: stageHeight,
+                child: Center(
+                  child: WatchPreview(
+                    controller: controller,
+                    width: previewWidth,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.screenshot_monitor_rounded,
+                    size: 13,
+                    color: accent,
+                  ),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      controller.deviceScreen != null
+                          ? '实时截屏 · 点击刷新'
+                          : '实时截屏 / 表盘',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 14),
+        Container(
+          width: threeDWidth + 20,
+          padding: const EdgeInsets.fromLTRB(10, 12, 10, 10),
+          decoration: BoxDecoration(
+            color: frameBg,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: scheme.outlineVariant),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Watch3DView(
+                key: const Key('home-watch-3d'),
+                controller: controller,
+                mode: Watch3DMode.heroCompact,
+                width: threeDWidth,
+                height: stageHeight,
+                onTapExpand: () => onNavigate(1),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.view_in_ar_rounded, size: 13, color: accent),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      '3D 实时姿态 · 点击大视图',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WatchStageSlot extends StatefulWidget {
+  const _WatchStageSlot({
+    required this.controller,
+    required this.onNavigate,
+    required this.width,
+    required this.stageHeight,
+  });
+
+  final WatchController controller;
+  final ValueChanged<int> onNavigate;
+  final double width;
+  final double stageHeight;
+
+  @override
+  State<_WatchStageSlot> createState() => _WatchStageSlotState();
+}
+
+class _WatchStageSlotState extends State<_WatchStageSlot> {
+  bool _showSnapshot = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final accent = dark ? AppPalette.mint : AppPalette.mintDeep;
+    final muted = dark
+        ? AppPalette.muted
+        : Theme.of(context).colorScheme.onSurfaceVariant;
+    final pillBg = (dark ? const Color(0xFF0E1615) : const Color(0xFFF3F5EA))
+        .withValues(alpha: 0.9);
+
+    return SizedBox(
+      width: widget.width,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: widget.width,
+            height: widget.stageHeight,
+            child: _showSnapshot
+                ? Center(
+                    child: WatchPreview(
+                      controller: widget.controller,
+                      width: (widget.width * 0.78).clamp(96.0, 160.0),
+                    ),
+                  )
+                : Watch3DView(
+                    key: const Key('home-watch-3d'),
+                    controller: widget.controller,
+                    mode: Watch3DMode.heroCompact,
+                    width: widget.width,
+                    height: widget.stageHeight,
+                    onTapExpand: () => widget.onNavigate(1),
+                  ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              color: pillBg,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ModeChip(
+                  label: '3D 姿态',
+                  selected: !_showSnapshot,
+                  accent: accent,
+                  muted: muted,
+                  onTap: () => setState(() => _showSnapshot = false),
+                ),
+                _ModeChip(
+                  label: '截屏',
+                  selected: _showSnapshot,
+                  accent: accent,
+                  muted: muted,
+                  onTap: () => setState(() => _showSnapshot = true),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModeChip extends StatelessWidget {
+  const _ModeChip({
+    required this.label,
+    required this.selected,
+    required this.accent,
+    required this.muted,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final Color accent;
+  final Color muted;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: selected ? accent.withValues(alpha: 0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 9.5,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? accent : muted,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PortraitWatchCard extends StatelessWidget {
+  const _PortraitWatchCard({
+    required this.controller,
+    required this.onNavigate,
+  });
+
+  final WatchController controller;
+  final ValueChanged<int> onNavigate;
 
   @override
   Widget build(BuildContext context) {
     const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+    final calActive = controller.magCalPhase == MagCalPhase.calibrating ||
+        controller.magCalPhase == MagCalPhase.readyToFinish;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final watchWidth = constraints.maxWidth < 330 ? 116.0 : 136.0;
+        final narrow = constraints.maxWidth < 330;
+        final watchWidth = narrow ? 124.0 : 148.0;
+        final stageHeight = narrow ? 148.0 : 170.0;
         return AppCard(
           radius: 22,
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.all(15),
           gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -366,13 +676,20 @@ class _PortraitWatchCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const StatusPill(label: '屏幕预览', color: AppPalette.mint),
-                    const SizedBox(height: 12),
+                    StatusPill(
+                      label: calActive
+                          ? 'KEY2 校准中'
+                          : (controller.liveSensor ? '9 轴实时' : '3D 实时姿态'),
+                      color: calActive
+                          ? const Color(0xFFF5B759)
+                          : AppPalette.mint,
+                    ),
+                    const SizedBox(height: 10),
                     const Text(
-                      '实时表盘',
+                      '实时姿态',
                       style: TextStyle(
                         color: AppPalette.warmWhite,
-                        fontSize: 20,
+                        fontSize: 19,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -381,51 +698,83 @@ class _PortraitWatchCard extends StatelessWidget {
                       '${controller.now.month}月${controller.now.day}日 · 周${weekdays[controller.now.weekday - 1]}',
                       style: const TextStyle(
                         color: AppPalette.muted,
-                        fontSize: 11,
+                        fontSize: 10.5,
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 6),
                     Text(
-                      '${controller.transportLabel} · ${controller.connectionLabel}',
+                      controller.liveSensor
+                          ? 'R ${controller.rollDeg.round()}° · P ${controller.pitchDeg.round()}° · H ${controller.headingDeg.round()}°'
+                          : '${controller.transportLabel} · ${controller.connectionLabel}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: controller.connected
+                        color: controller.connected || controller.liveSensor
                             ? AppPalette.mint
                             : AppPalette.muted,
-                        fontSize: 10.5,
+                        fontSize: 10,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    FilledButton.icon(
-                      onPressed: () =>
-                          toggleWatchConnection(context, controller),
-                      icon: Icon(
-                        controller.connected
-                            ? Icons.link_off_rounded
-                            : Icons.bluetooth_rounded,
-                        size: 16,
-                      ),
-                      label: Text(controller.connected ? '断开设备' : '连接设备'),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 36),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        FilledButton.icon(
+                          onPressed: () =>
+                              toggleWatchConnection(context, controller),
+                          icon: Icon(
+                            controller.connected
+                                ? Icons.link_off_rounded
+                                : Icons.bluetooth_rounded,
+                            size: 15,
+                          ),
+                          label: Text(controller.connected ? '断开' : '连接'),
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size(0, 34),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 11,
+                              vertical: 6,
+                            ),
+                            visualDensity: VisualDensity.compact,
+                            textStyle: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
-                        visualDensity: VisualDensity.compact,
-                        textStyle: const TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
+                        OutlinedButton(
+                          onPressed: () => onNavigate(1),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(0, 34),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            visualDensity: VisualDensity.compact,
+                            foregroundColor: AppPalette.mintSoft,
+                            side: BorderSide(
+                              color: AppPalette.mint.withValues(alpha: 0.45),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          child: const Text('大视图'),
                         ),
-                      ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              SizedBox(
+              const SizedBox(width: 10),
+              _WatchStageSlot(
+                controller: controller,
+                onNavigate: onNavigate,
                 width: watchWidth,
-                child: WatchPreview(controller: controller, width: watchWidth),
+                stageHeight: stageHeight,
               ),
             ],
           ),
@@ -662,28 +1011,28 @@ class _QuickActions extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final items = [
       (
-        Icons.chat_bubble_outline_rounded,
-        '设备消息',
-        '通知路由 · 手动发送',
+        Icons.perm_media_outlined,
+        '媒体与通知',
+        '音乐同步 · 通知消息',
         () => onNavigate(2),
       ),
       (
         Icons.directions_run_rounded,
-        '运动数据',
-        '今日步数 · 活动分布',
+        '运动与姿态',
+        '步数统计 · 3D & KEY2',
         () => onNavigate(1),
+      ),
+      (
+        Icons.watch_outlined,
+        '表盘工作台',
+        '32KB Flash · 样式预览',
+        () => onNavigate(3),
       ),
       (
         Icons.screenshot_monitor_outlined,
         '屏幕镜像',
         '128 × 160 · RGB565',
         () => _showSnapshot(context, controller),
-      ),
-      (
-        Icons.play_circle_outline_rounded,
-        '播放控制',
-        '播放暂停 · 上下一首',
-        () => onNavigate(3),
       ),
     ];
     return LayoutBuilder(
