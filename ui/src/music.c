@@ -54,8 +54,11 @@ void music_page_draw(uint8_t a) {
 
     /* 没有 PC/手机在线时只显示未连接，画面/歌词由对端下发。 */
     if (!link_connected()) {
-        ui_text_draw_center((int16_t)cx, (int16_t)UI_MY(360), "无连接",
-                            UI_COL_MUTED, a, 2);
+        int16_t tw = ui_song_width(UI_SONG_TITLE, "无连接");
+        int16_t th = ui_song_height(UI_SONG_TITLE);
+        ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2),
+                     (int16_t)((UI_H - th) / 2 - UI_MY(25)),
+                     "无连接", UI_COL_MUTED_LIGHT, a);
         return;
     }
 

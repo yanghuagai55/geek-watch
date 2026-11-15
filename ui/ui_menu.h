@@ -38,6 +38,7 @@ int ui_menu_level(const ui_menu_t *menu);
 void ui_menu_tick(ui_menu_t *menu);
 
 int ui_menu_prev(ui_menu_t *menu);
+int ui_menu_prev_no_back(ui_menu_t *menu);
 int ui_menu_next(ui_menu_t *menu);
 int ui_menu_confirm(ui_menu_t *menu);
 void ui_menu_back(ui_menu_t *menu);

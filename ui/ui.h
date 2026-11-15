@@ -55,7 +55,7 @@ typedef struct ui_render_stats {
 void ui_render_get_stats(ui_render_stats_t *out);
 void ui_draw_invalidate(void);
 
-/* 每秒从屏幕顶部到底部完整传输完成的画面数（每秒刷新一次）。 */
+/* 贴近肉眼观感的屏幕刷新帧率（fps，约每 250ms 平滑更新；含局部脏区刷新与全屏传输，静止时回落至 0）。 */
 uint8_t ui_app_get_fps(void);
 /* 强制回到表盘主页（关闭子页/菜单） */
 void ui_app_go_home(void);
@@ -72,11 +72,13 @@ void ui_app_open_music(void);
    Compile-time RGB565 keeps the theme out of RAM and avoids per-page drift. */
 #define UI_RGB565(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | \
                                       (((g) & 0xFC) << 3) | ((b) >> 3)))
-#define UI_COL_BG       UI_RGB565(10, 15, 16)
+#define UI_COL_BG       UI_RGB565(0, 0, 0)
 #define UI_COL_SURFACE  UI_RGB565(24, 33, 32)
 #define UI_COL_LINE     UI_RGB565(49, 65, 60)
 #define UI_COL_TEXT     UI_RGB565(240, 241, 228)
 #define UI_COL_MUTED    UI_RGB565(135, 151, 143)
+#define UI_COL_MUTED_LIGHT UI_RGB565(176, 186, 180)
+#define UI_COL_RIPPLE   UI_RGB565(172, 178, 176)
 #define UI_COL_MINT     UI_RGB565(115, 212, 174)
 #define UI_COL_AMBER    UI_RGB565(255, 177, 94)
 
@@ -126,8 +128,12 @@ uint8_t ui_anim_pulse(uint32_t now_ms, uint32_t period_ms);
 /* ---- drawing primitives (record into the current frame) ---- */
 void ui_draw_begin(void);
 void ui_draw_xform(int scale256, int ox, int oy);
+void ui_draw_get_xform(int *scale256, int *ox, int *oy);
 void ui_draw_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t opacity);
 void ui_draw_round(int16_t x, int16_t y, int16_t w, int16_t h, int16_t radius, uint16_t color, uint8_t opacity);
+void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
+                    int16_t radius, int16_t cy, int16_t rip_r,
+                    uint16_t color, uint8_t opacity);
 void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color, uint8_t opacity);
 void ui_draw_flush(void);
 
@@ -166,6 +172,9 @@ void ui_mask_draw(int16_t x, int16_t y, int16_t w, int16_t h,
 /* 1bpp 位图：每行 (w+7)/8 字节，MSB 在左，用于手机下发的消息列表/详情。 */
 void ui_mask1_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                    const uint8_t *bits, uint16_t color, uint8_t opacity);
+void ui_mask1_draw_clip(int16_t x, int16_t y, int16_t w, int16_t h,
+                        int16_t src_w, const uint8_t *bits,
+                        uint16_t color, uint8_t opacity);
 void ui_text_draw(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale);
 int16_t ui_text_width(const char *utf8, uint8_t scale);

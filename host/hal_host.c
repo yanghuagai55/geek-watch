@@ -53,7 +53,7 @@ static void (*painter)(void *hdc, int x, int panel_w, int height);
 static int clock_override;
 static hal_clock_t clock_base;
 static uint32_t clock_base_ms;
-enum { HOST_LINK_N = 128 };
+enum { HOST_LINK_N = 512 };
 static uint8_t link_rx[HOST_LINK_N];
 static int link_rx_r;
 static int link_rx_n;

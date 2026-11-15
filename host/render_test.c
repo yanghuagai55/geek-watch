@@ -93,6 +93,8 @@ static void scene(int variant) {
     ui_draw_line(12, 48, 12, 48, 0xF81F, 127);
     ui_svg_draw(48, 43, 2, svg, 3, variant == 8 ? 0xF800 : 0xAFE5, 176);
     ui_draw_round(-4, 55, 31, 18, 5, 0xF81F, 110);
+    ui_draw_ripple(12, 16, 44, 24, 6, (int16_t)(28 + (variant % 3)),
+                   (int16_t)(8 + variant * 2), 0xCE79, 150);
     ui_draw_text(-3, 76, variant == 10 ? "changed" : "12:34", 0xFFFF, 210, 1);
     ui_mask_draw(15, 63, 4, 4, mask, 0xFFE0, 220);
     ui_draw_xform(256, 0, 0);
@@ -119,12 +121,13 @@ static int test_core_drawing(void) {
         ui_draw_fill(2, 3, 12, 9, 0xF800, 255);
         ui_draw_round(20, 21, 24, 20, 6, 0x07E0, 255);
         ui_draw_line(4, 50, 30, 50, 0xFFFF, 255);
+        ui_draw_ripple(60, 20, 40, 24, 6, 32, 30, 0xCE79, 255);
         hal_host_display_get_stats(&display);
         REQUIRE(display.calls == 0, "public primitives submitted before flush");
         ui_draw_flush();
         ui_render_get_stats(&render);
         hal_host_display_get_stats(&display);
-        REQUIRE(render.items == 4 && render.dropped == 0,
+        REQUIRE(render.items == 5 && render.dropped == 0,
                 "core-only drawing lost commands or added demo commands");
         REQUIRE(render.pixels == (uint32_t)UI_W * UI_H &&
                 render.bands == (UI_H + UI_BAND_H - 1) / UI_BAND_H,
@@ -142,6 +145,8 @@ static int test_core_drawing(void) {
                 "core-only rounded rectangle missing or square");
         REQUIRE(hal_host_pixel(4, 50) == 0xFFFF && hal_host_pixel(17, 50) == 0xFFFF &&
                 hal_host_pixel(30, 50) == 0xFFFF, "core-only line endpoints");
+        REQUIRE(hal_host_pixel(80, 32) == 0xCE79 && hal_host_pixel(60, 20) == 0x0863 &&
+                hal_host_pixel(60, 19) == 0x0863, "core-only clipped ripple bounds");
         hal_host_display_reset_stats();
         ui_draw_flush();
         hal_host_display_get_stats(&display);
@@ -593,24 +598,106 @@ static int test_dirty(void) {
     return 0;
 }
 
-/* FPS 现在只计从上到下完成的一整幅画面，局部刷新和静止主循环不计。 */
+/* FPS 贴近肉眼观感：统计局部脏区刷新与全屏传输，静止后自然衰减至 0 且不受调试角标自激。 */
 static int test_full_frame_fps(void) {
-    int i;
+    ui_render_stats_t render;
+    int i, saw_partial;
+
+    /* 1) Continuous full-screen redraw at 16ms (~62 fps). */
     hal_host_set_async_delay_us(0);
     hal_host_set_frame_step_us(16000);
     ui_init();
-    for (i = 0; i < 70; i++) {
+    for (i = 0; i < 20; i++) {
         ui_draw_invalidate();
         ui_frame();
     }
     REQUIRE(ui_app_get_fps() >= 58 && ui_app_get_fps() <= 64,
-            "complete top-to-bottom frames were not counted as FPS");
-    for (i = 0; i < 70; i++) {
+            "fast lock-on full-frame FPS outside 58..64");
+    for (i = 0; i < 50; i++) {
+        ui_draw_invalidate();
         ui_frame();
     }
-    REQUIRE(ui_app_get_fps() < 30,
-            "idle UI loops or partial dirty bands were counted as full frames");
-    printf("Full-frame FPS PASS\n");
+    REQUIRE(ui_app_get_fps() >= 58 && ui_app_get_fps() <= 64,
+            "steady full-frame FPS outside 58..64");
+
+    /* 2) Slow full-screen DMA (32ms frame step -> ~31 fps). */
+    hal_host_set_frame_step_us(32000);
+    for (i = 0; i < 60; i++) {
+        ui_draw_invalidate();
+        ui_frame();
+    }
+    REQUIRE(ui_app_get_fps() >= 28 && ui_app_get_fps() <= 35,
+            "slow 32ms full-frame FPS did not converge near 31 fps");
+
+    /* 3) Active partial dirty-band animation (Settings -> Brightness detail @ 16ms). */
+    hal_host_set_frame_step_us(16000);
+    ui_init();
+    ui_nav_goto(UI_PAGE_SETTINGS);
+    ui_frame();
+    key_tap(HAL_KEY2);
+    step(24); /* Finish zoom-in so Settings list is settled at top level. */
+    key_tap(HAL_KEY3);
+    step(2);
+    key_tap(HAL_KEY3);
+    step(2);
+    key_tap(HAL_KEY3);
+    step(24);
+    key_tap(HAL_KEY2);
+    step(24); /* Settle on Settings -> Brightness detail (3 items, bottom margin clean). */
+    step(95); /* Let FPS decay completely to 0 before starting animation burst. */
+    REQUIRE(ui_app_get_fps() == 0,
+            "settled static Settings menu did not decay to 0 fps");
+
+    saw_partial = 0;
+    key_tap(HAL_KEY3);
+    for (i = 0; i < 24; i++) {
+        if (i == 8) {
+            key_tap(HAL_KEY1);
+        } else if (i == 17) {
+            key_tap(HAL_KEY3);
+        } else {
+            ui_frame();
+        }
+        ui_render_get_stats(&render);
+        if (render.pixels > 0 && render.pixels < (uint32_t)UI_W * UI_H) {
+            saw_partial++;
+        }
+    }
+    REQUIRE(saw_partial >= 16,
+            "Settings scroll did not exercise partial dirty-band updates");
+    REQUIRE(ui_app_get_fps() >= 50 && ui_app_get_fps() <= 64,
+            "active partial dirty-band scroll FPS outside 50..64");
+
+    /* 4) Truly static settled UI (1.5s after scroll finishes -> 0 fps). */
+    step(95);
+    ui_render_get_stats(&render);
+    REQUIRE(render.pixels == 0, "settled Settings still transmitted pixels");
+    REQUIRE(ui_app_get_fps() <= 5 && ui_app_get_fps() == 0,
+            "idle CPU loop inflated static Settings FPS");
+
+    /* 5) Debug badge enabled while static -> decays cleanly to 0 without self-feedback. */
+    ui_settings_set_debug(1);
+    step(16); /* Finish badge fade-in animation. */
+    key_tap(HAL_KEY1);
+    for (i = 0; i < 20; i++) {
+        if (i == 8) {
+            key_tap(HAL_KEY3);
+        } else if (i == 16) {
+            key_tap(HAL_KEY1);
+        } else {
+            ui_frame();
+        }
+    }
+    REQUIRE(ui_app_get_fps() >= 50 && ui_app_get_fps() <= 64,
+            "partial scroll with debug badge enabled outside 50..64");
+    step(100); /* 1.6s static with debug badge visible */
+    ui_render_get_stats(&render);
+    REQUIRE(render.pixels == 0,
+            "static UI with debug badge kept redrawing");
+    REQUIRE(ui_app_get_fps() == 0,
+            "debug badge self-feedback loop prevented decay to 0 fps");
+
+    printf("Perceptual partial + full-frame FPS PASS\n");
     return 0;
 }
 

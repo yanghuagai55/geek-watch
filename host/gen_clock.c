@@ -309,6 +309,10 @@ static int write_song(const char *path,
     int toffs[64];
     int doffs[16];
 
+    if (title_n > (int)(sizeof toffs / sizeof toffs[0])) {
+        fprintf(stderr, "too many title glyphs: %d\n", title_n);
+        return 0;
+    }
     fp = fopen(path, "wb");
     if (!fp) {
         return 0;
@@ -482,9 +486,10 @@ int main(int argc, char **argv) {
     {
         static const uint32_t title_cp[] = {
             0x8FD0, 0x52A8, 0x6D88, 0x606F, 0x8BBE, 0x7F6E,
-            0x97F3, 0x4E50, 0x5173, 0x4E8E, 0x4EAE, 0x5EA6
+            0x97F3, 0x4E50, 0x5173, 0x4E8E, 0x4EAE, 0x5EA6,
+            0x65E0, 0x8FDE, 0x63A5
         };
-        enum { TITLE_N = 12, TITLE_EM = 40 };
+        enum { TITLE_N = (int)(sizeof(title_cp) / sizeof(title_cp[0])), TITLE_EM = 40 };
         digit_t titles[TITLE_N];
         int tx[TITLE_N];
         int ty[TITLE_N];
@@ -508,6 +513,11 @@ int main(int argc, char **argv) {
             if (!capture_digit(hdc, (wchar_t)title_cp[n], &titles[n])) {
                 return 1;
             }
+            if (titles[n].w > 64) {
+                fprintf(stderr, "title U+%04X width %d exceeds row[64] limit\n",
+                        title_cp[n], titles[n].w);
+                return 1;
+            }
             down = titles[n].h - titles[n].oy;
             if (titles[n].oy > max_up) {
                 max_up = titles[n].oy;
@@ -515,8 +525,8 @@ int main(int argc, char **argv) {
             if (down > max_down) {
                 max_down = down;
             }
-            printf("title U+%04X box %dx%d advance %d\n",
-                   title_cp[n], titles[n].w, titles[n].h, titles[n].advance);
+            printf("title U+%04X box %dx%d origin %d,%d advance %d\n",
+                   title_cp[n], titles[n].w, titles[n].h, titles[n].ox, titles[n].oy, titles[n].advance);
         }
         title_h = max_up + max_down;
         for (n = 0; n < TITLE_N; n++) {

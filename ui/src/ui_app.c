@@ -26,8 +26,18 @@ enum {
     M_MARGIN = UI_LAYOUT_MARGIN_M,
     M_HEADER = 200,
     M_CARD_W = 860,
-    M_CARD_H = 200,
-    M_PITCH = 230
+    M_CARD_H = 175,
+    M_PITCH = 195,
+    NAV_HOLD_DELAY_MS = 320,
+    NAV_REPEAT_MS = 115,
+    RIP_DOT_MS = 100,
+    RIP_EXPAND_MS = 260
+};
+
+enum {
+    RIP_NONE = 0,
+    RIP_HOLD = 1,
+    RIP_EXPAND = 2
 };
 
 typedef struct app {
@@ -49,8 +59,24 @@ typedef struct app {
     int dot_page;
     uint32_t reveal_ms;
     uint32_t fps_window;
+    uint32_t badge_sig;
     uint16_t fps_frames;
     uint8_t fps;
+    uint8_t badge_op;
+    uint8_t badge_heal;
+    uint32_t nav_down_ms;
+    uint32_t nav_step_ms;
+    const ui_menu_t *rip_menu;
+    uint32_t rip_t0;
+    uint32_t rip_dot_t0;
+    int16_t rip_dot_from_y;
+    int16_t rip_dot_last_y;
+    uint8_t nav_key;
+    uint8_t nav_repeat;
+    uint8_t rip_mode;
+    uint8_t rip_level;
+    int8_t rip_idx;
+    uint8_t rip_from_dot;
 } app_t;
 
 static app_t *st;
@@ -96,16 +122,48 @@ static int dots_y(void) {
     return base - gap - dot_h();
 }
 
-static int title_header_h(void) {
-    return ui_song_height(UI_SONG_TITLE) + UI_MY(60);
+static void header_metrics(int scroll, int *band, int *scale, int *title_y) {
+    int title_h = ui_song_height(UI_SONG_TITLE);
+    int max_band = title_h + UI_MY(50);
+    int min_scale = 136;
+    int min_title_h = title_h * min_scale / 256;
+    int min_band = min_title_h + UI_MY(45);
+    int collapse = scroll <= 0 ? 0 : (scroll >= 256 ? 256 : scroll);
+    int max_y = UI_MY(25);
+    int min_y = (min_band - 1 - min_title_h) / 2;
+
+    if (min_y < 1) {
+        min_y = 1;
+    }
+    *band = max_band - (max_band - min_band) * collapse / 256;
+    *scale = 256 - (256 - min_scale) * collapse / 256;
+    *title_y = max_y - (max_y - min_y) * collapse / 256;
 }
 
-static void list_place(int header, int *y0, int *pitch) {
-    *pitch = UI_MY(M_PITCH);
-    if (*pitch < 24) {
-        *pitch = 24;
+static int header_band_h(int collapse) {
+    int band, scale, title_y;
+    header_metrics(collapse, &band, &scale, &title_y);
+    return band;
+}
+
+static int list_pitch(void) {
+    int pitch = UI_MY(M_PITCH);
+    return pitch < 24 ? 24 : pitch;
+}
+
+static int list_cam(int scroll, int n) {
+    int cam;
+    int max_cam;
+
+    if (n <= 4 || scroll <= 256) {
+        return 0;
     }
-    *y0 = header + (UI_H - header) / 2;
+    cam = scroll - 256;
+    max_cam = (n - 4) * 256;
+    if (cam > max_cam) {
+        cam = max_cam;
+    }
+    return cam;
 }
 
 static void home_icon_rect(int *x, int *y, int *w, int *h) {
@@ -169,7 +227,11 @@ static int wrap_mod(int v, int m) {
 }
 
 static int vis_index(int scroll, int n) {
-    int idx = wrap_mod(scroll, n * 256);
+    int idx;
+    if (n <= 0) {
+        return 0;
+    }
+    idx = wrap_mod(scroll, n * 256);
     return ((idx + 128) / 256) % n;
 }
 
@@ -195,7 +257,7 @@ static void slide_to(ui_obj_t *obj, int *focus, int dir, int n) {
     *focus = next;
 }
 
-static void blue_card(int x, int y, int w, int h, int hot, int radius, uint8_t a) {
+static void blue_card_bg(int x, int y, int w, int h, int hot, int radius, uint8_t a) {
     if (w < 8 || h < 8 || a == 0) {
         return;
     }
@@ -204,11 +266,15 @@ static void blue_card(int x, int y, int w, int h, int hot, int radius, uint8_t a
     ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
                   (int16_t)(w - 2), (int16_t)(h - 2),
                   (int16_t)(radius - 1), col_blue_dim, a);
-    if (hot) {
-        ui_draw_round((int16_t)(x + UI_MX(35)),
-                      (int16_t)(y + h / 4), (int16_t)UI_MX(20),
-                      (int16_t)(h / 2), 1, col_ring, a);
+}
+
+static void blue_card_fg(int x, int y, int w, int h, int hot, uint8_t a) {
+    if (w < 8 || h < 8 || a == 0 || !hot) {
+        return;
     }
+    ui_draw_round((int16_t)(x + UI_MX(35)),
+                  (int16_t)(y + h / 4), (int16_t)UI_MX(20),
+                  (int16_t)(h / 2), 1, col_ring, a);
 }
 
 static int run_frame(void);
@@ -352,33 +418,156 @@ static void draw_battery_badge(void) {
     }
 }
 
-static void stack_box(int scroll, int index, int y0, int pitch,
-                      int *x, int *y, int *w, int *h) {
-    int delta = index * 256 - scroll;
-    int ad = delta < 0 ? -delta : delta;
-    int inset = ad / 40;
+static void list_card_rect(int scroll, int n, int index,
+                           int *x, int *y, int *w, int *h) {
+    int collapse = scroll <= 0 ? 0 : (scroll >= 256 ? 256 : scroll);
+    int band = header_band_h(collapse);
+    int top0 = band + UI_MY(25);
+    int cam = list_cam(scroll, n);
+    int pitch = list_pitch();
 
-    *w = UI_MX(M_CARD_W) - inset;
-    *h = UI_MY(M_CARD_H) - inset / 3;
-    if (*h < UI_MY(150)) {
-        *h = UI_MY(150);
-    }
-    if (*w < UI_MX(600)) {
-        *w = UI_MX(600);
+    *w = UI_MX(M_CARD_W);
+    *h = UI_MY(M_CARD_H);
+    if (*h < 20) {
+        *h = 20;
     }
     *x = (UI_W - *w) / 2;
-    *y = y0 + (delta * pitch) / 256 - *h / 2;
+    *y = top0 + (index * 256 - cam) * pitch / 256;
 }
 
-static void draw_labeled_card(int x, int y, int w, int h, int hot,
-                              const char *name, const char *side, uint8_t a) {
+static int list_card_cy(int scroll, int n, int idx) {
+    int x, y, w, h;
+    list_card_rect(scroll, n, idx, &x, &y, &w, &h);
+    return y + h / 2;
+}
+
+static void rip_trigger_move(const ui_menu_t *menu, int level, int old_idx,
+                             int new_idx, int old_scroll, int n) {
+    uint32_t now = hal_tick_ms();
+    int was_same_hold = (st->rip_mode == RIP_HOLD &&
+                         st->rip_menu == menu &&
+                         (int)st->rip_level == level);
+
+    if (was_same_hold && st->rip_idx == new_idx) {
+        return;
+    }
+    if (was_same_hold) {
+        st->rip_dot_from_y = st->rip_dot_last_y;
+    } else {
+        st->rip_dot_from_y = (int16_t)list_card_cy(old_scroll, n, old_idx);
+        st->rip_dot_last_y = st->rip_dot_from_y;
+    }
+    st->rip_menu = menu;
+    st->rip_level = (uint8_t)level;
+    st->rip_idx = (int8_t)new_idx;
+    st->rip_mode = RIP_HOLD;
+    st->rip_dot_t0 = now;
+    st->rip_from_dot = 1;
+}
+
+static void rip_trigger_expand(const ui_menu_t *menu, int level, int idx, int from_dot) {
+    st->rip_menu = menu;
+    st->rip_level = (uint8_t)level;
+    st->rip_idx = (int8_t)idx;
+    st->rip_mode = RIP_EXPAND;
+    st->rip_t0 = hal_tick_ms();
+    st->rip_from_dot = (uint8_t)(from_dot ? 1 : 0);
+}
+
+static void draw_list_ripple(const ui_menu_t *menu, int level, int scroll,
+                             int n, uint8_t a) {
+    int collapse;
+    int band;
+    int x, y, w, h;
+    uint32_t now;
+    uint8_t alpha;
+
+    if (!st || st->rip_mode == RIP_NONE || st->rip_menu != menu ||
+        (int)st->rip_level != level || n <= 0 ||
+        st->rip_idx < 0 || st->rip_idx >= n || a == 0) {
+        return;
+    }
+    collapse = scroll <= 0 ? 0 : (scroll >= 256 ? 256 : scroll);
+    band = header_band_h(collapse);
+    list_card_rect(scroll, n, st->rip_idx, &x, &y, &w, &h);
+    now = hal_tick_ms();
+
+    if (st->rip_mode == RIP_HOLD) {
+        int dot_r = h * 34 / 100;
+        int target_cy = y + h / 2;
+        uint32_t el = now - st->rip_dot_t0;
+        int u = el >= (uint32_t)RIP_DOT_MS ? 255 :
+                ui_ease_in_out(el * 256u / (uint32_t)RIP_DOT_MS);
+        int cy = (int)st->rip_dot_from_y +
+                 (target_cy - (int)st->rip_dot_from_y) * u / 255;
+        int clip_y0;
+        int clip_y1;
+        if (dot_r < 5) {
+            dot_r = 5;
+        }
+        st->rip_dot_last_y = (int16_t)cy;
+        clip_y0 = cy - dot_r;
+        clip_y1 = cy + dot_r + 1;
+        if (clip_y0 < band) {
+            clip_y0 = band;
+        }
+        if (clip_y1 > UI_H) {
+            clip_y1 = UI_H;
+        }
+        if (clip_y1 <= clip_y0) {
+            return;
+        }
+        alpha = (uint8_t)(160 * (int)a / 255);
+        ui_draw_ripple((int16_t)(x + 1), (int16_t)clip_y0,
+                       (int16_t)(w - 2), (int16_t)(clip_y1 - clip_y0),
+                       0, (int16_t)cy, (int16_t)dot_r, UI_COL_RIPPLE, alpha);
+        return;
+    }
+
+    if (y + h <= band || y >= UI_H) {
+        return;
+    }
+    {
+        uint32_t el = now - st->rip_t0;
+        uint32_t t;
+        int e, r0, max_r, rip_r, fade;
+        if (el >= (uint32_t)RIP_EXPAND_MS) {
+            st->rip_mode = RIP_NONE;
+            return;
+        }
+        t = el * 256u / (uint32_t)RIP_EXPAND_MS;
+        e = (int)((t * 3u + (t * (512u - t)) / 256u) / 4u);
+        if (e > 256) {
+            e = 256;
+        }
+        r0 = st->rip_from_dot ? (h * 34 / 100) : 3;
+        if (st->rip_from_dot && r0 < 5) {
+            r0 = 5;
+        }
+        max_r = w / 2 + h / 6 + 2;
+        rip_r = r0 + (max_r - r0) * e / 256;
+        fade = 256 - (int)(t * t / 256u);
+        if (fade < 0) {
+            fade = 0;
+        }
+        alpha = (uint8_t)((170 * fade / 256) * (int)a / 255);
+        ui_draw_ripple((int16_t)(x + 1), (int16_t)(y + 1),
+                       (int16_t)(w - 2), (int16_t)(h - 2),
+                       (int16_t)(h / 4 > 1 ? h / 4 - 1 : 0),
+                       (int16_t)(y + h / 2), (int16_t)rip_r,
+                       UI_COL_RIPPLE, alpha);
+    }
+}
+
+static void draw_labeled_card_fg(int x, int y, int w, int h, int hot,
+                                 const char *name, const char *side, uint8_t a) {
     char label[40];
     int pad = UI_MX(55);
     int right = x + w - pad;
     int ty = y + (h - ui_text_height(name, 1)) / 2;
     int max_w;
 
-    blue_card(x, y, w, h, hot, (int)(h / 3), a);
+    blue_card_fg(x, y, w, h, hot, a);
     if (side && side[0]) {
         ui_text_draw_right((int16_t)right, (int16_t)ty, side,
                            hot ? col_ring : col_dim, a, 1);
@@ -393,44 +582,110 @@ static void draw_labeled_card(int x, int y, int w, int h, int hot,
                  hot ? col_text : col_dim, a, 1);
 }
 
-static void draw_stack(int scroll, int n, int focus_vis, int y0, int pitch,
-                       const char *const *names, const char *side0, uint8_t a) {
-    int top = title_header_h();
+typedef void (*list_side_fn)(int idx, char *buf, int cap, const void *ctx);
+
+static void draw_stack_ex(const ui_menu_t *menu, int level, int scroll, int n,
+                          int focus_vis, const char *const *names,
+                          list_side_fn side_fn, const void *ctx, uint8_t a) {
+    int collapse = scroll <= 0 ? 0 : (scroll >= 256 ? 256 : scroll);
+    int band = header_band_h(collapse);
+    int pass;
     int i;
     int x, y, w, h;
+    char side[16];
 
-    for (i = 0; i < n; i++) {
-        if (i == focus_vis) {
-            continue;
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < n; i++) {
+            if (i == focus_vis) {
+                continue;
+            }
+            list_card_rect(scroll, n, i, &x, &y, &w, &h);
+            if (y + h <= band || y >= UI_H) {
+                continue;
+            }
+            if (pass == 0) {
+                blue_card_bg(x, y, w, h, 0, h / 4, a);
+            } else {
+                side[0] = 0;
+                if (side_fn) {
+                    side_fn(i, side, sizeof side, ctx);
+                }
+                draw_labeled_card_fg(x, y, w, h, 0, names[i], side[0] ? side : 0, a);
+            }
         }
-        stack_box(scroll, i, y0, pitch, &x, &y, &w, &h);
-        if (y + h <= top || y >= UI_H) {
-            continue;
+        list_card_rect(scroll, n, focus_vis, &x, &y, &w, &h);
+        if (y + h > band && y < UI_H) {
+            if (pass == 0) {
+                blue_card_bg(x, y, w, h, 1, h / 4, a);
+            } else {
+                side[0] = 0;
+                if (side_fn) {
+                    side_fn(focus_vis, side, sizeof side, ctx);
+                }
+                draw_labeled_card_fg(x, y, w, h, 1, names[focus_vis],
+                                     side[0] ? side : 0, a);
+            }
         }
-        draw_labeled_card(x, y, w, h, 0, names[i], i == 0 ? side0 : 0, a);
+        if (pass == 0) {
+            draw_list_ripple(menu, level, scroll, n, a);
+        }
     }
-    stack_box(scroll, focus_vis, y0, pitch, &x, &y, &w, &h);
-    draw_labeled_card(x, y, w, h, 1, names[focus_vis],
-                      focus_vis == 0 ? side0 : 0, a);
 }
 
-static void draw_header(const char *title, uint8_t a, int song) {
-    int band = title_header_h();
-    int x = UI_MX(M_MARGIN);
-    int y = UI_MY(25);
-    int title_h = ui_song_height(UI_SONG_TITLE);
-    (void)song;
-
-    if (a == 255) {
-        ui_draw_fill(0, 0, UI_W, (int16_t)band, col_bg, a);
+static void side0_cb(int idx, char *buf, int cap, const void *ctx) {
+    const char *s = (const char *)ctx;
+    if (idx == 0 && s && s[0]) {
+        snprintf(buf, (size_t)cap, "%s", s);
+    } else {
+        buf[0] = 0;
     }
-    ui_draw_round((int16_t)x, (int16_t)(y + UI_MY(10)),
-                  (int16_t)UI_MX(24), (int16_t)(title_h - UI_MY(60)),
+}
+
+static void draw_stack(const ui_menu_t *menu, int level, int scroll, int n,
+                       int focus_vis, const char *const *names,
+                       const char *side0, uint8_t a) {
+    draw_stack_ex(menu, level, scroll, n, focus_vis, names,
+                  side0 ? side0_cb : 0, side0, a);
+}
+
+static void draw_header_anim(const char *title, int scroll, uint8_t a) {
+    int band, scale, title_y;
+    int x = UI_MX(M_MARGIN);
+    int tx = x + UI_MX(70);
+    int title_h = ui_song_height(UI_SONG_TITLE);
+    int scaled_h;
+    int bar_h;
+    int bar_y;
+    int outer_s, outer_ox, outer_oy;
+    int comp_s, comp_ox, comp_oy;
+
+    if (a == 0) {
+        return;
+    }
+    header_metrics(scroll, &band, &scale, &title_y);
+    scaled_h = title_h * scale / 256;
+    bar_h = scaled_h * 3 / 4;
+    if (bar_h < 8) {
+        bar_h = 8;
+    }
+    bar_y = title_y + (scaled_h - bar_h) / 2;
+
+    ui_draw_fill(0, 0, UI_W, (int16_t)band, col_bg, a);
+    ui_draw_line((int16_t)x, (int16_t)(band - 1),
+                 (int16_t)(UI_W - x), (int16_t)(band - 1), col_line, a);
+    ui_draw_round((int16_t)x, (int16_t)bar_y, (int16_t)UI_MX(24), (int16_t)bar_h,
                   1, col_accent, a);
-    ui_song_draw(UI_SONG_TITLE, (int16_t)(x + UI_MX(70)), (int16_t)y,
-                 title, col_text, a);
-    ui_draw_line((int16_t)x, (int16_t)(band - UI_MY(12)),
-                 (int16_t)(UI_W - x), (int16_t)(band - UI_MY(12)), col_line, a);
+
+    ui_draw_get_xform(&outer_s, &outer_ox, &outer_oy);
+    comp_s = outer_s * scale / 256;
+    if (comp_s < 1) {
+        comp_s = 1;
+    }
+    comp_ox = outer_ox + tx * outer_s / 256;
+    comp_oy = outer_oy + title_y * outer_s / 256;
+    ui_draw_xform(comp_s, comp_ox, comp_oy);
+    ui_song_draw(UI_SONG_TITLE, 0, 0, title, col_text, a);
+    ui_draw_xform(outer_s, outer_ox, outer_oy);
 }
 
 static void draw_face_pair(int x, int y, int value, uint16_t color, uint8_t a) {
@@ -543,14 +798,18 @@ static void draw_sport_app(uint8_t a) {
     char line[40];
     char goal[32];
     int margin = UI_MX(M_MARGIN);
-    int header = title_header_h();
-    int number_y = header + UI_MY(20);
-    int label_y = number_y + ui_song_height(UI_SONG_CLOCK) + UI_MY(10);
-    int footer_y = UI_H - ui_text_height("0 m   0 kcal", 1) - UI_MY(20);
-    int chart_bot = footer_y - UI_MY(60);
-    int chart_h = chart_bot - (label_y + ui_text_height("今日步数", 1) + UI_MY(35));
+    int clock_h = ui_song_height(UI_SONG_CLOCK);
+    int number_y = UI_MY(75);
+    int label_y = number_y + clock_h + UI_MY(15);
+    int label_h = ui_text_height("今日步数", 1);
+    int footer_h = ui_text_height("0 m   0 kcal", 1);
+    int footer_y = UI_H - footer_h - UI_MY(30);
+    int chart_bot = footer_y - UI_MY(50);
+    int chart_top = label_y + label_h + UI_MY(35);
+    int chart_h = chart_bot - chart_top;
     int pitch = (UI_W - margin * 2) / SPORT_BARS;
     int bw = pitch - UI_MX(24);
+    int bar_x0;
     int percent;
     uint32_t max = 1;
     uint32_t elapsed = hal_tick_ms() - st->reveal_ms;
@@ -565,15 +824,16 @@ static void draw_sport_app(uint8_t a) {
     }
     if (chart_h < 8) chart_h = 8;
     if (bw < 2) bw = 2;
+    bar_x0 = (UI_W - ((SPORT_BARS - 1) * pitch + bw)) / 2;
     percent = ss.goal ? (int)(ss.steps * 100u / ss.goal) : 0;
     if (percent > 100) percent = 100;
 
     if (a == 255) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     }
-    draw_header("运动", a, 0);
+    /* 运动一级页去掉顶部大标题，顶部直接让位给步数字号并避开右上角电池图标。 */
     snprintf(line, sizeof line, "%lu", (unsigned long)ss.steps);
-    if (ss.steps < 1000u) {
+    if (ui_song_width(UI_SONG_CLOCK, line) <= UI_W - margin * 2) {
         int16_t nw = ui_song_width(UI_SONG_CLOCK, line);
         ui_song_draw(UI_SONG_CLOCK, (int16_t)((UI_W - nw) / 2),
                      (int16_t)number_y, line, col_text, a);
@@ -583,7 +843,7 @@ static void draw_sport_app(uint8_t a) {
                     (int16_t)(UI_W - margin * 2), 2);
         th = ui_text_height(goal, 2);
         ui_text_draw_center((int16_t)(UI_W / 2),
-                            (int16_t)(number_y + (ui_song_height(UI_SONG_CLOCK) - th) / 2),
+                            (int16_t)(number_y + (clock_h - th) / 2),
                             goal, col_text, a, 2);
     }
     ui_draw_text((int16_t)margin, (int16_t)label_y, "今日步数", col_dim, a, 1);
@@ -594,7 +854,7 @@ static void draw_sport_app(uint8_t a) {
         uint32_t local = elapsed > (uint32_t)i * 28u ? elapsed - (uint32_t)i * 28u : 0;
         int grow = ui_ease_in_out(local * 256u / 420u);
         int bh = (int)(bars[i] * (uint32_t)chart_h / max);
-        int bx = margin + i * pitch;
+        int bx = bar_x0 + i * pitch;
         uint8_t bar_a = (uint8_t)((int)a * (i == cur ? 255 : 155) / 255);
         bh = bh * grow / 255;
         if (bars[i] > 0 && grow > 160 && bh < 2) bh = 2;
@@ -648,17 +908,15 @@ static void draw_sport_child(uint8_t a) {
     int n = st->sport.child_count;
     int scroll = st->sport.child_scroll.x;
     int vis = vis_index(scroll, n);
-    int y0, pitch;
 
     sport_get(&ss);
     snprintf(l0, sizeof l0, "%lu步", (unsigned long)ss.steps);
     names[0] = "重置步数";
     names[1] = "传感器数值";
     names[2] = "加1000步";
-    list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    draw_stack(scroll, n, vis, y0, pitch, names, l0, a);
-    draw_header("运动", a, 0);
+    draw_stack(&st->sport, UI_MENU_CHILD, scroll, n, vis, names, l0, a);
+    draw_header_anim("运动", scroll, a);
 }
 
 /* 运动 -> 传感器数值。MPU 加速度/陀螺/温度 + QMC 三轴磁场，10Hz 刷新。
@@ -755,36 +1013,70 @@ static void draw_sensor_page(uint8_t a) {
     ui_draw_text((int16_t)x, (int16_t)(y + step * 6), scan, col_dim, a, 1);
 }
 
-static void draw_msg_app(uint8_t a) {
-    int top = title_header_h();
-    int row_h = (UI_H - top) / MSG_N;
-    int vis = st->messages.focus;
+static void draw_msg_card(int scroll, int count, int i, int hot,
+                          int band, int pass, uint8_t a) {
+    int x, y, w, h;
+    int pad = UI_MX(35);
+    int right_pad = UI_MX(50);
+    int arrow_w = ui_text_width(">", 1) + UI_MX(25);
+    int clip_w;
 
-    if (row_h < 20) {
-        row_h = 20;
+    list_card_rect(scroll, count, i, &x, &y, &w, &h);
+    if (y + h <= band || y >= UI_H) {
+        return;
     }
-    if (vis >= st->messages.count) {
-        vis = st->messages.count > 0 ? st->messages.count - 1 : 0;
+    if (pass == 0) {
+        blue_card_bg(x, y, w, h, hot, h / 4, a);
+        return;
     }
+    blue_card_fg(x, y, w, h, hot, a);
+    ui_text_draw_right((int16_t)(x + w - right_pad),
+                       (int16_t)(y + (h - 8) / 2), ">", col_dim, a, 1);
+    clip_w = w - pad - right_pad - arrow_w;
+    if (clip_w > 8) {
+        ui_mask1_draw_clip((int16_t)(x + pad), (int16_t)(y + (h - 22) / 2),
+                           (int16_t)clip_w, 22, 128,
+                           link_msg_list_mask() + i * 22 * (128 / 8),
+                           hot ? col_text : col_dim, a);
+    }
+}
+
+static void draw_msg_app(uint8_t a) {
+    int ready = link_msg_list_ready() && st->messages.count > 0;
+    int scroll = ready ? st->messages.scroll.x : 0;
+    int collapse = scroll <= 0 ? 0 : (scroll >= 256 ? 256 : scroll);
+    int band = header_band_h(collapse);
+    int vis = vis_index(scroll, st->messages.count);
+    int pass;
+    int i;
+
     if (a == 255) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     }
-    if (link_msg_list_ready() && st->messages.count > 0) {
-        /* 高亮先画，点阵只画文字像素，背景保持透明。 */
-        ui_draw_round(2, (int16_t)(top + vis * row_h + 1),
-                      (int16_t)(UI_W - 4), (int16_t)(row_h - 2),
-                      5, col_blue_dim, a);
-        ui_draw_round(2, (int16_t)(top + vis * row_h + 1),
-                      3, (int16_t)(row_h - 2), 1, col_ring, a);
-        ui_mask1_draw(0, (int16_t)top, UI_W, 112,
-                      link_msg_list_mask(), col_text, a);
-    } else if (link_msg_list_empty() || st->messages.count == 0) {
-        ui_text_draw_center((int16_t)(UI_W / 2),
-                            (int16_t)(top + (UI_H - top) / 2 - 8),
-                            "无消息", col_dim, a, 2);
+    if (ready) {
+        for (pass = 0; pass < 2; pass++) {
+            for (i = 0; i < st->messages.count; i++) {
+                if (i == vis) {
+                    continue;
+                }
+                draw_msg_card(scroll, st->messages.count, i, 0, band, pass, a);
+            }
+            draw_msg_card(scroll, st->messages.count, vis, 1, band, pass, a);
+            if (pass == 0) {
+                draw_list_ripple(&st->messages, UI_MENU_LIST,
+                                 scroll, st->messages.count, a);
+            }
+        }
+    } else if (!link_connected() || link_msg_list_empty() || st->messages.count == 0 ||
+               (uint32_t)(hal_tick_ms() - st->reveal_ms) >= 1000u) {
+        int tw = ui_song_width(UI_SONG_TITLE, "无消息");
+        int th = ui_song_height(UI_SONG_TITLE);
+        ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2),
+                     (int16_t)(band + (UI_H - band - th) / 2),
+                     "无消息", UI_COL_MUTED_LIGHT, a);
     }
     /* 其余情况是列表正在加载：保持空白，避免“无消息”闪一下。 */
-    draw_header("消息", a, 1);
+    draw_header_anim("消息", scroll, a);
 }
 
 static void settings_side(int idx, char *buf, int cap) {
@@ -808,34 +1100,21 @@ static void settings_side(int idx, char *buf, int cap) {
     }
 }
 
-static void draw_settings_app(uint8_t a) {
-    int top = title_header_h();
-    int y0;
-    int pitch;
-    int vis = vis_index(st->settings.scroll.x, SET_N);
-    int i;
-    int x, y, w, h;
-    char side[8];
+static void settings_side_cb(int idx, char *buf, int cap, const void *ctx) {
+    (void)ctx;
+    settings_side(idx, buf, cap);
+}
 
-    list_place(top, &y0, &pitch);
+static void draw_settings_app(uint8_t a) {
+    int scroll = st->settings.scroll.x;
+    int vis = vis_index(scroll, SET_N);
+
     if (a == 255) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     }
-    for (i = 0; i < SET_N; i++) {
-        if (i == vis) {
-            continue;
-        }
-        stack_box(st->settings.scroll.x, i, y0, pitch, &x, &y, &w, &h);
-        if (y + h <= top || y >= UI_H) {
-            continue;
-        }
-        settings_side(i, side, sizeof side);
-        draw_labeled_card(x, y, w, h, 0, set_name[i], side[0] ? side : 0, a);
-    }
-    stack_box(st->settings.scroll.x, vis, y0, pitch, &x, &y, &w, &h);
-    settings_side(vis, side, sizeof side);
-    draw_labeled_card(x, y, w, h, 1, set_name[vis], side[0] ? side : 0, a);
-    draw_header("设置", a, 1);
+    draw_stack_ex(&st->settings, UI_MENU_LIST, scroll, SET_N, vis,
+                  set_name, settings_side_cb, 0, a);
+    draw_header_anim("设置", scroll, a);
 }
 
 static void draw_message_page(uint8_t a) {
@@ -854,8 +1133,6 @@ static void draw_about_page(uint8_t a) {
     const char *names[ABOUT_N];
     int scroll = st->settings.child_scroll.x;
     int vis = vis_index(scroll, ABOUT_N);
-    int y0;
-    int pitch;
     int i;
 
     about_fill(&info);
@@ -876,17 +1153,14 @@ static void draw_about_page(uint8_t a) {
         names[i] = lines[i];
     }
 
-    list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    draw_stack(scroll, ABOUT_N, vis, y0, pitch, names, 0, a);
-    draw_header("关于", a, 0);
+    draw_stack(&st->settings, UI_MENU_CHILD, scroll, ABOUT_N, vis, names, 0, a);
+    draw_header_anim("关于", scroll, a);
 }
 
 static void draw_detail(uint8_t a) {
     int kind = st->settings.level == UI_MENU_CHILD ? st->settings.child : -1;
     int scroll = st->settings.child_scroll.x;
-    int y0;
-    int pitch;
 
     if (a == 0) {
         return;
@@ -899,21 +1173,27 @@ static void draw_detail(uint8_t a) {
         draw_about_page(a);
         return;
     }
-    list_place(title_header_h(), &y0, &pitch);
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    draw_stack(scroll, DETAIL_N, vis_index(scroll, DETAIL_N), y0, pitch, bright_name, 0, a);
-    draw_header("亮度", a, 0);
+    draw_stack(&st->settings, UI_MENU_CHILD, scroll, DETAIL_N,
+               vis_index(scroll, DETAIL_N), bright_name, 0, a);
+    draw_header_anim("亮度", scroll, a);
 }
 
-static void draw_badge(void) {
+static int draw_badge(void) {
     uint32_t ram_used = 0;
     uint32_t ram_total = 0;
     uint16_t cpu;
     char ram[32];
     int16_t y;
+    uint32_t sig = 2166136261u;
+    int i;
+    int badge_tick;
 
     if (!st || st->overlay.opacity == 0) {
-        return;
+        if (st) {
+            st->badge_op = 0;
+        }
+        return 0;
     }
     hal_ram_get(&ram_used, &ram_total);
     cpu = hal_cpu_tenths();
@@ -924,6 +1204,14 @@ static void draw_badge(void) {
              (unsigned long)((ram_used + 512u) / 1024u),
              (unsigned long)((ram_total + 512u) / 1024u),
              (unsigned)cpu / 10u, (unsigned)st->fps);
+    for (i = 0; ram[i]; i++) {
+        sig = (sig ^ (uint8_t)ram[i]) * 16777619u;
+    }
+    badge_tick = (st->badge_op != 0 &&
+                  st->badge_op == st->overlay.opacity &&
+                  sig != st->badge_sig);
+    st->badge_sig = sig;
+    st->badge_op = st->overlay.opacity;
     y = (int16_t)badge_y();
     {
         int bx = UI_MX(16);
@@ -937,6 +1225,7 @@ static void draw_badge(void) {
         ui_draw_text((int16_t)(bx + 5), (int16_t)(y + 5), ram,
                      col_ring, st->overlay.opacity, 1);
     }
+    return badge_tick;
 }
 
 static ui_menu_t *live_menu(void) {
@@ -967,12 +1256,32 @@ static ui_menu_t *live_menu(void) {
     return 0;
 }
 
+static void menu_list_state(const ui_menu_t *menu, int *level, int *scroll,
+                            int *count, int *focus) {
+    if (!menu) {
+        *level = UI_MENU_ICON;
+        *scroll = *count = *focus = 0;
+        return;
+    }
+    *level = menu->level;
+    if (menu->level == UI_MENU_CHILD) {
+        *scroll = menu->child_scroll.x;
+        *count = menu->child_count;
+        *focus = menu->child_focus;
+    } else {
+        *scroll = menu->scroll.x;
+        *count = menu->count;
+        *focus = menu->focus;
+    }
+}
+
 static void on_confirm(ui_menu_t *menu) {
     settings_t *s = settings_get();
     int is_settings = menu == &st->settings;
     int result;
 
     if (is_settings && menu->level == UI_MENU_CHILD && menu->child == 3) {
+        rip_trigger_expand(menu, UI_MENU_CHILD, menu->child_focus, 0);
         s->brightness = (uint8_t)menu->child_focus;
         if (!st->screen_asleep) {
             hal_backlight_set(backlight_level());
@@ -982,6 +1291,7 @@ static void on_confirm(ui_menu_t *menu) {
         return;
     }
     if (menu == &st->sport && menu->level == UI_MENU_CHILD) {
+        rip_trigger_expand(menu, UI_MENU_CHILD, menu->child_focus, 0);
         if (menu->child_focus == 0) {
             sport_reset_today();
             ui_menu_back(menu);
@@ -990,6 +1300,10 @@ static void on_confirm(ui_menu_t *menu) {
         } else if (menu->child_focus == 2) {
             sport_debug_add_steps(1000);
         }
+        return;
+    }
+    if (is_settings && menu->level == UI_MENU_CHILD && menu->child == 7) {
+        rip_trigger_expand(menu, UI_MENU_CHILD, menu->child_focus, 0);
         return;
     }
     result = ui_menu_confirm(menu);
@@ -1004,6 +1318,7 @@ static void on_confirm(ui_menu_t *menu) {
         return;
     }
     if (is_settings) {
+        rip_trigger_expand(menu, UI_MENU_LIST, menu->focus, 0);
         switch (menu->focus) {
         case 0:
             ui_settings_set_debug(!ui_settings_get_debug());
@@ -1054,19 +1369,21 @@ static void on_confirm(ui_menu_t *menu) {
             menu->focus >= menu->count) {
             return;
         }
+        rip_trigger_expand(menu, UI_MENU_LIST, menu->focus, 0);
         link_request_message_detail(menu->focus);
     }
     ui_menu_enter_child(menu, 1);
     ui_trace_emit("ui_nav_goto(message)");
 }
 
-static void on_key(uint8_t pressed, int long_enter) {
+static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
     ui_menu_t *menu;
+    uint8_t step_keys = (uint8_t)(pressed | repeat_keys);
 
     if (!st) {
         return;
     }
-    if (pressed || long_enter) {
+    if (step_keys || long_enter) {
         st->active_ms = hal_tick_ms();
     }
     menu = live_menu();
@@ -1081,36 +1398,77 @@ static void on_key(uint8_t pressed, int long_enter) {
     }
     if (long_enter) {
         if (menu && ui_menu_level(menu) > UI_MENU_ICON) {
+            st->rip_mode = RIP_NONE;
             ui_menu_back(menu);
         }
         return;
     }
-    if (!pressed) {
+    if (!step_keys) {
         return;
     }
-    if (settings_get()->key_beep) {
+    if ((pressed != 0) && settings_get()->key_beep) {
         hal_beep(2000, 30);
     }
     if (menu == &st->music && ui_menu_level(menu) > UI_MENU_ICON) {
-        music_page_key(pressed);
+        if (pressed) {
+            music_page_key(pressed);
+        }
         return;
     }
     if (menu && ui_menu_level(menu) > UI_MENU_ICON) {
-        if (pressed & HAL_KEY1) {
-            ui_menu_prev(menu);
+        int cur_lvl, old_scroll, n, old_focus, new_focus;
+        if ((menu == &st->messages && menu->level == UI_MENU_LIST &&
+             (!link_msg_list_ready() || menu->count <= 0)) ||
+            (menu == &st->messages && menu->level == UI_MENU_CHILD) ||
+            (menu == &st->sport && menu->level == UI_MENU_LIST)) {
+            if (pressed & HAL_KEY1) {
+                st->rip_mode = RIP_NONE;
+                ui_menu_back(menu);
+            } else if ((pressed & HAL_KEY2) && menu == &st->sport) {
+                on_confirm(menu);
+            }
+            return;
         }
-        if (pressed & HAL_KEY3) {
+        menu_list_state(menu, &cur_lvl, &old_scroll, &n, &old_focus);
+        if (step_keys & HAL_KEY1) {
+            int busy_zoom = (cur_lvl == UI_MENU_LIST &&
+                             (menu->zoom.scale < 255 || ui_anim_busy(&menu->zoom)));
+            if ((pressed & HAL_KEY1) && old_focus == 0 && !busy_zoom) {
+                /* 已在第一项时再点一次后退才返回上一级；长按滑到第一项则停在第一项。 */
+                st->rip_mode = RIP_NONE;
+                ui_menu_prev(menu);
+            } else {
+                if (pressed & HAL_KEY1) {
+                    ui_menu_prev(menu);
+                } else {
+                    ui_menu_prev_no_back(menu);
+                }
+                if (busy_zoom) {
+                    st->rip_mode = RIP_NONE;
+                } else {
+                    new_focus = cur_lvl == UI_MENU_CHILD ? menu->child_focus : menu->focus;
+                    rip_trigger_move(menu, cur_lvl, old_focus, new_focus, old_scroll, n);
+                }
+            }
+        }
+        if (step_keys & HAL_KEY3) {
+            int busy_zoom = (cur_lvl == UI_MENU_LIST &&
+                             (menu->zoom.scale < 255 || ui_anim_busy(&menu->zoom)));
             ui_menu_next(menu);
+            if (!busy_zoom) {
+                new_focus = cur_lvl == UI_MENU_CHILD ? menu->child_focus : menu->focus;
+                rip_trigger_move(menu, cur_lvl, old_focus, new_focus, old_scroll, n);
+            }
         }
         if (pressed & HAL_KEY2) {
             on_confirm(menu);
         }
         return;
     }
-    if (pressed & HAL_KEY1) {
+    if (step_keys & HAL_KEY1) {
         slide_to(&st->scroll, &st->focus, -1, HOME_N);
     }
-    if (pressed & HAL_KEY3) {
+    if (step_keys & HAL_KEY3) {
         slide_to(&st->scroll, &st->focus, 1, HOME_N);
     }
     if ((pressed & HAL_KEY2) && !menu && st->focus == UI_PAGE_FACE) {
@@ -1195,6 +1553,8 @@ int ui_app_message_active(void) {
 
 /* 手机下发 0x25：列表实际条数，限制焦点停留在有效行。 */
 void ui_app_set_message_count(int count) {
+    int prev_focus;
+
     if (!st) {
         return;
     }
@@ -1204,9 +1564,15 @@ void ui_app_set_message_count(int count) {
     if (count > MSG_N) {
         count = MSG_N;
     }
+    prev_focus = st->messages.focus;
     st->messages.count = count;
     if (st->messages.focus >= count) {
         st->messages.focus = count > 0 ? count - 1 : 0;
+    }
+    if (count == 0 || prev_focus != st->messages.focus ||
+        st->messages.scroll.x > (count - 1) * 256) {
+        ui_anim_stop(&st->messages.scroll, 0);
+        st->messages.scroll.x = (int16_t)(st->messages.focus * 256);
     }
     if (st->messages.child_focus >= count) {
         st->messages.child_focus = 0;
@@ -1214,6 +1580,11 @@ void ui_app_set_message_count(int count) {
 }
 
 void ui_settings_set_debug(int enabled) {
+    if (!st) {
+        return;
+    }
+    st->debug = enabled ? 1 : 0;
+    settings_get()->debug = (uint8_t)(enabled ? 1 : 0);
     ui_anim_play(enabled ? UI_ANIM_FADE_IN : UI_ANIM_FADE_OUT, &st->overlay);
 }
 
@@ -1399,14 +1770,72 @@ static int dot_alpha(uint32_t now) {
     return (int)(255u - (idle - 1400u) * 255u / 400u);
 }
 
+static void fps_update(uint32_t pixels, int badge_tick) {
+    uint32_t now = hal_tick_ms();
+    uint32_t dt;
+    uint32_t badge_max = (uint32_t)UI_W * (uint32_t)(badge_h() + 2 * UI_BAND_H);
+    int counted = 0;
+
+    /* 计入真实完成的局部刷新与全屏传输；排除仅调试角标数字变化引起的重绘及其自愈帧。 */
+    if (pixels > 0) {
+        if (badge_tick && pixels <= badge_max) {
+            st->badge_heal = 1;
+        } else if (st->badge_heal && pixels == (uint32_t)UI_W * UI_H) {
+            st->badge_heal = 0;
+        } else {
+            st->badge_heal = 0;
+            if (now != st->fps_window || st->fps_frames > 0) {
+                if (st->fps_frames < 1000u) {
+                    st->fps_frames++;
+                }
+                counted = 1;
+            }
+        }
+    } else {
+        st->badge_heal = 0;
+    }
+
+    dt = now - st->fps_window;
+    if (dt >= 250u) {
+        uint32_t inst = (uint32_t)st->fps_frames * 1000u / dt;
+        uint32_t next;
+        if (inst > 99u) {
+            inst = 99u;
+        }
+        if (st->fps_frames == 0) {
+            next = ((uint32_t)st->fps * 3u) / 8u;
+        } else if (st->fps == 0) {
+            next = inst;
+        } else if (inst > st->fps) {
+            next = ((uint32_t)st->fps + inst * 3u + 2u) / 4u;
+        } else {
+            next = ((uint32_t)st->fps + inst) / 2u;
+        }
+        if (next <= 1u) {
+            next = 0;
+        }
+        if (next > 99u) {
+            next = 99u;
+        }
+        st->fps = (uint8_t)next;
+        st->fps_frames = 0;
+        st->fps_window = now;
+    } else if (!counted && st->fps == 0 && st->fps_frames == 0) {
+        /* 静止归零后将窗口起点对齐到最后一帧空闲时刻，避免短促滑屏首帧被前置空闲稀释。 */
+        st->fps_window = now;
+    }
+}
+
 void ui_frame(void) {
     uint8_t level;
     uint8_t pressed;
     uint8_t released;
+    uint8_t repeat_keys = 0;
     uint8_t extra_down = 0;
     uint8_t extra_up = 0;
     uint32_t now;
     int long_enter = 0;
+    int badge_tick;
     ui_menu_t *menu;
     ui_render_stats_t render;
 
@@ -1428,6 +1857,8 @@ void ui_frame(void) {
         st->prev_keys = level;
         st->key2_down = now;
         st->key2_long = 1;
+        st->nav_key = 0;
+        st->nav_repeat = 0;
         extra_down = extra_up = 0;   /* 蓝牙按键也不在唤醒帧触发动作 */
         hal_backlight_set(backlight_level());
     }
@@ -1447,7 +1878,40 @@ void ui_frame(void) {
     } else {
         pressed = (uint8_t)(pressed & (0xFFu ^ HAL_KEY2));
     }
-    on_key(pressed, long_enter);
+    {
+        uint8_t nav_held = (uint8_t)(level & (HAL_KEY1 | HAL_KEY3));
+        uint8_t nav_pressed = (uint8_t)(pressed & (HAL_KEY1 | HAL_KEY3));
+        if (nav_held == HAL_KEY1 || nav_held == HAL_KEY3) {
+            if ((nav_pressed & nav_held) || st->nav_key != nav_held) {
+                st->nav_key = nav_held;
+                st->nav_repeat = 0;
+                st->nav_down_ms = now;
+                st->nav_step_ms = now;
+            } else if (!st->nav_repeat) {
+                if ((uint32_t)(now - st->nav_down_ms) >= (uint32_t)NAV_HOLD_DELAY_MS) {
+                    st->nav_repeat = 1;
+                    st->nav_step_ms = now;
+                    repeat_keys = nav_held;
+                }
+            } else if ((uint32_t)(now - st->nav_step_ms) >= (uint32_t)NAV_REPEAT_MS) {
+                st->nav_step_ms += (uint32_t)NAV_REPEAT_MS;
+                if ((uint32_t)(now - st->nav_step_ms) >= (uint32_t)NAV_REPEAT_MS) {
+                    st->nav_step_ms = now;
+                }
+                repeat_keys = nav_held;
+            }
+        } else {
+            st->nav_key = 0;
+            st->nav_repeat = 0;
+        }
+    }
+    on_key(pressed, repeat_keys, long_enter);
+    if (st->rip_mode == RIP_HOLD && (level & (HAL_KEY1 | HAL_KEY3)) == 0) {
+        /* 短按松手或长按连跳松手：灰色圆形在最终停驻的选项上向外扩散。 */
+        st->rip_mode = RIP_EXPAND;
+        st->rip_t0 = now;
+        st->rip_from_dot = 1;
+    }
     {
         static int raise_prev;
         int rw = sport_raise_wrist();
@@ -1498,21 +1962,11 @@ void ui_frame(void) {
     }
     ui_draw_xform(256, 0, 0);
     draw_battery_badge();
-    draw_badge();
+    badge_tick = draw_badge();
     ui_draw_flush();
-    /* FPS 只计完整画面：所有行都发完且最后一条 DMA 已完成。
-       ui_draw_flush 内部的 wait_display 已经保证传输结束。 */
+    /* ui_draw_flush 内部的 wait_display 已经保证传输结束。 */
     ui_render_get_stats(&render);
-    if (render.pixels == (uint32_t)UI_W * UI_H) {
-        st->fps_frames++;
-    }
-    now = hal_tick_ms();
-    if (now - st->fps_window >= 1000u) {
-        uint32_t rate = (uint32_t)st->fps_frames * 1000u / (now - st->fps_window);
-        st->fps = (uint8_t)(rate > 99u ? 99u : rate);
-        st->fps_frames = 0;
-        st->fps_window = now;
-    }
+    fps_update(render.pixels, badge_tick);
     link_ack_flush();
     hal_meter_end();
     hal_frame_pace();
@@ -1548,6 +2002,9 @@ void ui_app_go_home(void) {
     reset_menu_home(&st->sport, 1);
     reset_menu_home(&st->music, 1);
     st->sensor_open = 0;
+    st->nav_key = 0;
+    st->nav_repeat = 0;
+    st->rip_mode = RIP_NONE;
     ui_nav_goto(UI_PAGE_FACE);
     ui_draw_invalidate();
 }
