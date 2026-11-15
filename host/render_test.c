@@ -1,5 +1,6 @@
 #include "ui_internal.h"
 #include "hal_host.h"
+#include "imu9.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -93,6 +94,8 @@ static void scene(int variant) {
     ui_draw_line(12, 48, 12, 48, 0xF81F, 127);
     ui_svg_draw(48, 43, 2, svg, 3, variant == 8 ? 0xF800 : 0xAFE5, 176);
     ui_draw_round(-4, 55, 31, 18, 5, 0xF81F, 110);
+    ui_draw_ripple(12, 16, 44, 24, 6, (int16_t)(28 + (variant % 3)),
+                   (int16_t)(8 + variant * 2), 0xCE79, 150);
     ui_draw_text(-3, 76, variant == 10 ? "changed" : "12:34", 0xFFFF, 210, 1);
     ui_mask_draw(15, 63, 4, 4, mask, 0xFFE0, 220);
     ui_draw_xform(256, 0, 0);
@@ -119,12 +122,13 @@ static int test_core_drawing(void) {
         ui_draw_fill(2, 3, 12, 9, 0xF800, 255);
         ui_draw_round(20, 21, 24, 20, 6, 0x07E0, 255);
         ui_draw_line(4, 50, 30, 50, 0xFFFF, 255);
+        ui_draw_ripple(60, 20, 40, 24, 6, 32, 30, 0xCE79, 255);
         hal_host_display_get_stats(&display);
         REQUIRE(display.calls == 0, "public primitives submitted before flush");
         ui_draw_flush();
         ui_render_get_stats(&render);
         hal_host_display_get_stats(&display);
-        REQUIRE(render.items == 4 && render.dropped == 0,
+        REQUIRE(render.items == 5 && render.dropped == 0,
                 "core-only drawing lost commands or added demo commands");
         REQUIRE(render.pixels == (uint32_t)UI_W * UI_H &&
                 render.bands == (UI_H + UI_BAND_H - 1) / UI_BAND_H,
@@ -142,6 +146,8 @@ static int test_core_drawing(void) {
                 "core-only rounded rectangle missing or square");
         REQUIRE(hal_host_pixel(4, 50) == 0xFFFF && hal_host_pixel(17, 50) == 0xFFFF &&
                 hal_host_pixel(30, 50) == 0xFFFF, "core-only line endpoints");
+        REQUIRE(hal_host_pixel(80, 32) == 0xCE79 && hal_host_pixel(60, 20) == 0x0863 &&
+                hal_host_pixel(60, 19) == 0x0863, "core-only clipped ripple bounds");
         hal_host_display_reset_stats();
         ui_draw_flush();
         hal_host_display_get_stats(&display);
@@ -206,6 +212,9 @@ static uint32_t read_le32(const uint8_t *p) {
 static int check_perf_reply(void) {
     ui_render_stats_t stats;
     uint32_t values[8];
+    uint32_t ram_used = 0;
+    uint32_t ram_total = 0;
+    uint16_t cpu;
     uint8_t checksum = 0;
     int n, i;
     ui_render_get_stats(&stats);
@@ -215,7 +224,10 @@ static int check_perf_reply(void) {
     values[3] = stats.frame_us;
     values[4] = stats.pixels;
     values[5] = (uint32_t)stats.bands | ((uint32_t)stats.dropped << 16);
-    ui_mem_get(&values[6], &values[7]);
+    hal_ram_get(&ram_used, &ram_total);
+    cpu = hal_cpu_tenths();
+    values[6] = (ram_used & 0xFFFFu) | ((uint32_t)cpu << 16);
+    values[7] = (ram_total & 0xFFFFu) | ((uint32_t)ui_app_get_fps() << 16);
     hal_host_link_tx_take(wire, sizeof wire, &n);
     /* The binary reply is exactly 36 bytes; the existing text ACK follows it. */
     REQUIRE(n == 36 + 4, "performance reply size plus legacy ACK");
@@ -462,10 +474,30 @@ static int test_arena(void) {
         ui_mem_init();
         REQUIRE(ui_mem_alloc(UI_RAM_BUDGET, 1) != NULL, "arena exact capacity");
         REQUIRE(!ui_mem_alloc(1, 1), "arena overflow accepted");
+        /* Dynamic block free, out-of-order coalescing, and gap reuse. */
+        ui_mem_init();
+        {
+            void *b0 = ui_mem_alloc(512, 4);
+            void *b1 = ui_mem_alloc(1024, 4);
+            void *b2 = ui_mem_alloc(1024, 4);
+            void *b3 = ui_mem_alloc(512, 4);
+            void *merged;
+            REQUIRE(b0 && b1 && b2 && b3, "dynamic block allocs");
+            ui_mem_free(b2);
+            ui_mem_free(b1);
+            merged = ui_mem_alloc(2048, 4);
+            REQUIRE(merged == b1, "coalesced middle gap reuse");
+            ui_mem_free(b0);
+            ui_mem_free(merged);
+            ui_mem_free(b3);
+            ui_mem_get(&later, NULL);
+            REQUIRE(later == 0 && ui_mem_avail() == UI_RAM_BUDGET,
+                    "all freed blocks returned to arena");
+        }
     }
     ui_init();
     ui_mem_get(&first, &total);
-    REQUIRE(total == 4864u + 4u * UI_W * UI_BAND_H, "declared RAM budget");
+    REQUIRE(total == 7424u + 4u * UI_W * UI_BAND_H, "declared RAM budget");
     REQUIRE(UI_BAND_H == 4, "four-row DMA buffers");
     REQUIRE(first >= 4u * UI_W * UI_BAND_H && first < total, "two buffers fit arena");
     for (pass = 0; pass < 32; pass++) {
@@ -584,6 +616,109 @@ static int test_dirty(void) {
         REQUIRE(!compare_full("scaled clipped transparent image"), "image clipping differs");
     }
     printf("Dirty/full equivalence PASS (including last %d rows)\n", UI_H % UI_BAND_H);
+    return 0;
+}
+
+/* FPS 贴近肉眼观感：统计局部脏区刷新与全屏传输，静止后自然衰减至 0 且不受调试角标自激。 */
+static int test_full_frame_fps(void) {
+    ui_render_stats_t render;
+    int i, saw_partial;
+
+    /* 1) Continuous full-screen redraw at 16ms (~62 fps). */
+    hal_host_set_async_delay_us(0);
+    hal_host_set_frame_step_us(16000);
+    ui_init();
+    for (i = 0; i < 20; i++) {
+        ui_draw_invalidate();
+        ui_frame();
+    }
+    REQUIRE(ui_app_get_fps() >= 58 && ui_app_get_fps() <= 64,
+            "fast lock-on full-frame FPS outside 58..64");
+    for (i = 0; i < 50; i++) {
+        ui_draw_invalidate();
+        ui_frame();
+    }
+    REQUIRE(ui_app_get_fps() >= 58 && ui_app_get_fps() <= 64,
+            "steady full-frame FPS outside 58..64");
+
+    /* 2) Slow full-screen DMA (32ms frame step -> ~31 fps). */
+    hal_host_set_frame_step_us(32000);
+    for (i = 0; i < 60; i++) {
+        ui_draw_invalidate();
+        ui_frame();
+    }
+    REQUIRE(ui_app_get_fps() >= 28 && ui_app_get_fps() <= 35,
+            "slow 32ms full-frame FPS did not converge near 31 fps");
+
+    /* 3) Active partial dirty-band animation (Settings -> Brightness detail @ 16ms). */
+    hal_host_set_frame_step_us(16000);
+    ui_init();
+    ui_nav_goto(UI_PAGE_SETTINGS);
+    ui_frame();
+    key_tap(HAL_KEY2);
+    step(24); /* Finish zoom-in so Settings list is settled at top level. */
+    key_tap(HAL_KEY3);
+    step(2);
+    key_tap(HAL_KEY3);
+    step(2);
+    key_tap(HAL_KEY3);
+    step(24);
+    key_tap(HAL_KEY2);
+    step(24); /* Settle on Settings -> Brightness detail (3 items, bottom margin clean). */
+    step(95); /* Let FPS decay completely to 0 before starting animation burst. */
+    REQUIRE(ui_app_get_fps() == 0,
+            "settled static Settings menu did not decay to 0 fps");
+
+    saw_partial = 0;
+    key_tap(HAL_KEY3);
+    for (i = 0; i < 24; i++) {
+        if (i == 8) {
+            key_tap(HAL_KEY1);
+        } else if (i == 17) {
+            key_tap(HAL_KEY3);
+        } else {
+            ui_frame();
+        }
+        ui_render_get_stats(&render);
+        if (render.pixels > 0 && render.pixels < (uint32_t)UI_W * UI_H) {
+            saw_partial++;
+        }
+    }
+    REQUIRE(saw_partial >= 16,
+            "Settings scroll did not exercise partial dirty-band updates");
+    REQUIRE(ui_app_get_fps() >= 50 && ui_app_get_fps() <= 64,
+            "active partial dirty-band scroll FPS outside 50..64");
+
+    /* 4) Truly static settled UI (1.5s after scroll finishes -> 0 fps). */
+    step(95);
+    ui_render_get_stats(&render);
+    REQUIRE(render.pixels == 0, "settled Settings still transmitted pixels");
+    REQUIRE(ui_app_get_fps() <= 5 && ui_app_get_fps() == 0,
+            "idle CPU loop inflated static Settings FPS");
+
+    /* 5) Debug badge enabled while static -> decays cleanly to 0 without self-feedback. */
+    ui_settings_set_debug(1);
+    step(16); /* Finish badge fade-in animation. */
+    key_tap(HAL_KEY1);
+    for (i = 0; i < 20; i++) {
+        if (i == 8) {
+            key_tap(HAL_KEY3);
+        } else if (i == 16) {
+            key_tap(HAL_KEY1);
+        } else {
+            ui_frame();
+        }
+    }
+    REQUIRE(ui_app_get_fps() >= 50 && ui_app_get_fps() <= 64,
+            "partial scroll with debug badge enabled outside 50..64");
+    step(100); /* 1.6s static with debug badge visible */
+    ui_render_get_stats(&render);
+    REQUIRE(render.pixels == 0,
+            "static UI with debug badge kept redrawing");
+    REQUIRE(ui_app_get_fps() == 0,
+            "debug badge self-feedback loop prevented decay to 0 fps");
+
+    printf("Perceptual partial + full-frame FPS PASS\n");
     return 0;
 }
 
@@ -728,6 +863,129 @@ static int test_face_snapshot_and_keys(void) {
     return 0;
 }
 
+static int test_ext_flash_and_stream(void) {
+    uint8_t rgb_row[16];
+    uint8_t read_back[16];
+    int i;
+
+    REQUIRE(hal_ext_flash_present(), "simulated 32KB ext flash online");
+    REQUIRE(!hal_ext_flash_write(HAL_EXT_FLASH_SIZE - 4u, rgb_row, 8u),
+            "ext flash out-of-bounds write rejected");
+    for (i = 0; i < 8; i++) {
+        uint16_t c = (i & 1) ? UI_COL_MINT : UI_COL_AMBER;
+        rgb_row[i * 2] = (uint8_t)(c & 0xFFu);
+        rgb_row[i * 2 + 1] = (uint8_t)(c >> 8);
+    }
+    for (i = 0; i < 8; i++) {
+        REQUIRE(hal_ext_flash_write(LINK_EXT_OFF_IMG + (uint32_t)i * 16u, rgb_row, 16u),
+                "ext flash row write");
+    }
+    REQUIRE(hal_ext_flash_read(LINK_EXT_OFF_IMG, read_back, 16u) &&
+            memcmp(read_back, rgb_row, 16u) == 0, "ext flash read verify");
+
+    ui_core_init();
+    ui_draw_begin();
+    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, 255);
+    ui_ext_image_draw(10, 12, 8, 8, LINK_EXT_OFF_IMG, UI_EXT_FMT_RGB565, 0, 255);
+    ui_draw_flush();
+    REQUIRE(hal_host_pixel(10, 14) == UI_COL_AMBER &&
+            hal_host_pixel(11, 14) == UI_COL_MINT &&
+            hal_host_pixel(17, 19) == UI_COL_MINT,
+            "streaming RGB565 from 32KB ext flash across bands");
+    ui_init();
+    printf("External 32KB Flash & streaming image PASS\n");
+    return 0;
+}
+
+static int angle_diff_deg(int a, int b) {
+    int d = (a - b) % 360;
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    return d < 0 ? -d : d;
+}
+
+static int test_imu9_fusion(void) {
+    imu9_state_t s;
+    hal_imu_t imu;
+    hal_mag_t mag;
+    uint32_t t = 1000u;
+    int i;
+
+    imu9_init();
+    memset(&imu, 0, sizeof imu);
+    imu.az = 1000;
+    imu.temp = 285;
+    mag.x = 0; mag.y = 300; mag.z = -500; /* 面朝正北 */
+    imu9_feed(&imu, &mag, t);
+    imu9_get(&s);
+    REQUIRE(s.fused_axes == 9 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 2 &&
+            s.roll_d10 >= -20 && s.roll_d10 <= 20 &&
+            s.pitch_d10 >= -20 && s.pitch_d10 <= 20,
+            "9-axis instant triad north alignment");
+
+    /* 顺时针转向东 90°：+X体轴指东变指南，+Y体轴指北变指东，磁场沿-X_b */
+    imu9_reset();
+    mag.x = -300; mag.y = 0; mag.z = -500;
+    imu9_feed(&imu, &mag, t += 20u);
+    imu9_get(&s);
+    REQUIRE(angle_diff_deg((int)s.heading_deg, 90) <= 2,
+            "9-axis triad east heading 90 deg");
+
+    /* 抬表 45° (+pitch around +X_b)：az=707, ay=+707；北方在Body +Y_b/+Z_b投影 */
+    imu9_reset();
+    imu.ax = 0; imu.ay = 707; imu.az = 707;
+    /* 北(0,300,-500) 沿 Pitch=+45°(+Y->+Z) 逆变换到体轴: my=300*c-(-500)*s=565? Wait R_x(+45)^T*(0,B_h,B_z) */
+    mag.x = 0; mag.y = -141; mag.z = -566; /* R_x(+45)^T * (0, 300, -500): y=212-354=-142, z=-212-354=-566 */
+    imu9_feed(&imu, &mag, t += 20u);
+    imu9_get(&s);
+    REQUIRE(s.pitch_d10 >= 435 && s.pitch_d10 <= 465 &&
+            s.roll_d10 >= -20 && s.roll_d10 <= 20 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 3,
+            "9-axis tilt-compensated north at +45 deg pitch");
+
+    /* 平放静止陀螺零偏学习 (gb = +25, -15, +12 0.1dps) */
+    imu9_init();
+    imu.ax = 0; imu.ay = 0; imu.az = 1000;
+    imu.gx = 25; imu.gy = -15; imu.gz = 12;
+    mag.x = 0; mag.y = 300; mag.z = -500;
+    for (i = 0; i < 45; i++) {
+        imu9_feed(&imu, &mag, t += 20u);
+    }
+    imu9_get(&s);
+    REQUIRE(s.gyro_cal == 1 && s.gbx == 25 && s.gby == -15 && s.gbz == 12 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 2,
+            "9-axis gyro bias convergence & stationary lock");
+
+    /* 3D 磁硬铁校准 */
+    imu9_cal_start();
+    for (i = -1; i <= 1; i += 2) {
+        mag.x = (int16_t)(120 + i * 300); mag.y = -180; mag.z = 90;
+        imu9_feed(&imu, &mag, t += 20u);
+        mag.x = 120; mag.y = (int16_t)(-180 + i * 300); mag.z = 90;
+        imu9_feed(&imu, &mag, t += 20u);
+        mag.x = 120; mag.y = -180; mag.z = (int16_t)(90 + i * 500);
+        imu9_feed(&imu, &mag, t += 20u);
+    }
+    imu9_cal_start(); /* 完成校准 */
+    mag.x = 120 + 0; mag.y = -180 + 300; mag.z = 90 - 500;
+    imu9_feed(&imu, &mag, t += 20u);
+    imu9_get(&s);
+    REQUIRE(s.mag_cal == 2 && s.mox == 120 && s.moy == -180 && s.moz == 90 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 2,
+            "9-axis hard-iron calibration");
+
+    /* 磁力计失联退化到 6 轴 */
+    t += 1100u;
+    imu9_feed(&imu, NULL, t);
+    imu9_get(&s);
+    REQUIRE(s.fused_axes == 6 && s.imu_ok == 1 && s.mag_ok == 0,
+            "6-axis fallback when magnetometer drops");
+
+    printf("IMU9 9-axis fusion & calibration PASS\n");
+    return 0;
+}
+
 int host_render_test(const char *shots) {
     int result;
     output_dir = shots;
@@ -741,8 +999,11 @@ int host_render_test(const char *shots) {
     if (!result) result = test_arena();
     if (!result) result = test_perf_request();
     if (!result) result = test_dirty();
+    if (!result) result = test_full_frame_fps();
     if (!result) result = test_async_and_preempt();
     if (!result) result = test_face_snapshot_and_keys();
+    if (!result) result = test_ext_flash_and_stream();
+    if (!result) result = test_imu9_fusion();
     ui_set_service(NULL);
     hal_host_set_keys(0);
     hal_host_shutdown();

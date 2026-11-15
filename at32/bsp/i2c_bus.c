@@ -110,3 +110,31 @@ int i2c_read(uint8_t addr7, uint8_t reg, uint8_t *data, int n) {
     stop();
     return 1;
 }
+
+int i2c_write16(uint8_t addr7, uint16_t reg16, const uint8_t *data, int n) {
+    int i;
+    start();
+    if (!tx_byte((uint8_t)(addr7 << 1))) { stop(); return 0; }
+    if (!tx_byte((uint8_t)(reg16 >> 8))) { stop(); return 0; }
+    if (!tx_byte((uint8_t)(reg16 & 0xFFu))) { stop(); return 0; }
+    for (i = 0; i < n; i++) {
+        if (!tx_byte(data[i])) { stop(); return 0; }
+    }
+    stop();
+    return 1;
+}
+
+int i2c_read16(uint8_t addr7, uint16_t reg16, uint8_t *data, int n) {
+    int i;
+    start();
+    if (!tx_byte((uint8_t)(addr7 << 1))) { stop(); return 0; }
+    if (!tx_byte((uint8_t)(reg16 >> 8))) { stop(); return 0; }
+    if (!tx_byte((uint8_t)(reg16 & 0xFFu))) { stop(); return 0; }
+    start();
+    if (!tx_byte((uint8_t)((addr7 << 1) | 1))) { stop(); return 0; }
+    for (i = 0; i < n; i++) {
+        data[i] = rx_byte(i < n - 1);
+    }
+    stop();
+    return 1;
+}

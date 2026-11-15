@@ -39,5 +39,6 @@ void hal_host_set_painter(void (*fn)(void *hdc, int x, int panel_w, int height))
 /* 传感器/执行器仿真控制（仅电脑端）。 */
 void hal_host_set_walking(int on);   /* 1=模拟走路加速度，0=静止 */
 void hal_host_raise_wrist(void);     /* 触发一次抬腕手势 */
+void hal_host_set_ext_flash(int on); /* 1=模拟外挂 32KB I2C Flash 在线，0=离线 */
 
 #endif

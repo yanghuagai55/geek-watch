@@ -41,28 +41,38 @@ void music_page_draw(uint8_t a) {
     const char *lyric = link_media_lyric();
     char fitted[64];
     int margin = UI_MX(UI_LAYOUT_MARGIN_M);
-    int header = ui_song_height(UI_SONG_TITLE) + UI_MY(20);
-    int divider = header + UI_MY(20);
     int cx = UI_W / 2;
     int by = UI_H - UI_MY(190);
     int r = UI_MX(110);
     int playing = link_media_playing();
-    int16_t tw;
+    int mask_ready = link_media_mask_ready();
+
+    if (r < 12) r = 12;
+    if (a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, a);
+    }
+
+    /* 没有 PC/手机在线时只显示未连接，画面/歌词由对端下发。 */
+    if (!link_connected()) {
+        int16_t tw = ui_song_width(UI_SONG_TITLE, "无连接");
+        int16_t th = ui_song_height(UI_SONG_TITLE);
+        ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2),
+                     (int16_t)((UI_H - th) / 2 - UI_MY(25)),
+                     "无连接", UI_COL_MUTED_LIGHT, a);
+        return;
+    }
 
     if (!lyric[0]) lyric = "暂无歌词";
-    if (r < 12) r = 12;
-
-    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, a);
-    tw = ui_song_width(UI_SONG_TITLE, "音乐");
-    ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2),
-                 (int16_t)UI_MY(25), "音乐", UI_COL_TEXT, a);
-    ui_draw_line((int16_t)margin, (int16_t)divider,
-                 (int16_t)(UI_W - margin), (int16_t)divider, UI_COL_LINE, a);
-
-    ui_text_fit(fitted, sizeof fitted, lyric,
-                (int16_t)(UI_W - margin * 2), 1);
-    ui_text_draw_center((int16_t)cx, (int16_t)(divider + UI_MY(90)), fitted,
-                        UI_COL_TEXT, a, 1);
+    if (mask_ready) {
+        /* PC 端栅格化的 128x32 点阵，直接贴图，绕开 500 字字库限制。 */
+        ui_mask_draw(0, (int16_t)UI_MY(120), (int16_t)UI_W, 32,
+                     link_media_mask(), UI_COL_TEXT, a);
+    } else {
+        ui_text_fit(fitted, sizeof fitted, lyric,
+                    (int16_t)(UI_W - margin * 2), 1);
+        ui_text_draw_center((int16_t)cx, (int16_t)UI_MY(170), fitted,
+                            UI_COL_TEXT, a, 1);
+    }
     equalizer(UI_MY(560), UI_MY(120), playing, a);
 
     skip_icon(cx - UI_MX(310), by, UI_MX(55), -1, UI_COL_MINT, a);

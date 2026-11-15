@@ -15,10 +15,12 @@
 #include "mpu6050.h"
 #include "qmc5883l.h"
 #include "bmp580.h"
+#include "ext_flash.h"
 #include "adc_bat.h"
 #include "beep.h"
 #include "led_bl.h"
 #include "sport.h"
+#include "imu9.h"
 
 /* AT32F421K8T7（LQFP-32，64KB Flash / 16KB SRAM，无 FPU）。
    时钟：HICK 48MHz / 2 = 24MHz 进 PLL，×5 = 120MHz。
@@ -66,7 +68,6 @@ static unsigned char rx_q[128];
 static volatile unsigned char rx_r;
 static volatile unsigned char rx_n;
 static unsigned char clock_src;
-volatile uint32_t hal_frame_count;
 
 /* 上电自检结果与最近一次采样，供 SWD 直接读 RAM 验证（不依赖蓝牙）。
    bit0 MPU6050 / bit1 QMC5883L / bit2 BMP580。 */
@@ -79,7 +80,7 @@ volatile uint8_t g_i2c_found[8];
 volatile uint8_t g_imu_read_ok;
 volatile uint8_t g_mag_read_ok;
 /* 最近一次调试快照，SWD 直接按字符串读，不依赖蓝牙。 */
-char g_debug_line[128];
+char g_debug_line[160];
 
 static uint32_t irq_save(void) {
     uint32_t mask;
@@ -624,7 +625,6 @@ void hal_frame_pace(void) {
     for(;;) {
         ui_service();
         if((tick_ms - pace_ms) >= 16u) {
-            hal_frame_count++;
             break;
         }
         hal_idle();
@@ -684,18 +684,22 @@ void board_init(void) {
         int mpu_ok = mpu6050_init();
         int mag_ok = qmc5883l_init();
         int baro_ok = bmp580_init();
+        int ext_ok = ext_flash_init();
         g_sensor_ok = (uint8_t)((mpu_ok ? 1u : 0u) |
                                 (mag_ok ? 2u : 0u) |
-                                (baro_ok ? 4u : 0u));
+                                (baro_ok ? 4u : 0u) |
+                                (ext_ok ? 8u : 0u));
         uart_puts(mpu_ok ? "mpu OK\r\n" : "mpu FAIL\r\n");
         uart_puts(mag_ok ? "qmc OK\r\n" : "qmc FAIL\r\n");
         uart_puts(baro_ok ? "bmp OK\r\n" : "bmp FAIL\r\n");
+        uart_puts(ext_ok ? "ext OK\r\n" : "ext --\r\n");
     }
     adc_init();
     beep_init();
     led_init();
     backlight_init();
     backlight_set(255);
+    imu9_init();
     /* 上电把 I2C 扫描 + QMC 寄存器存一份到 RAM，SWD 可读。 */
     g_battery_mv = battery_mv();
     (void)hal_debug_snapshot(g_debug_line, (int)sizeof g_debug_line);
@@ -705,12 +709,45 @@ void board_init(void) {
 }
 
 /* ---- 传感器/执行器 HAL 包装 ---- */
+/* 按实物模块焊装方位（D:\下载\IMG_20261115_130804.jpg）统一映射到手表右手系：
+   +X = 屏幕右，+Y = 屏幕上（12点方向），+Z = 朝屏幕外（平放指天）。
+   - GY-521 MPU6050(0x68)：Pin1 在右上 (+X_mpu=-Y_b, +Y_mpu=+X_b, +Z_mpu=+Z_b)
+   - GY-273 QMC5883P(0x2C)：Pin1 在右上，按手册 Fig.2 旋转 90°CW
+     (+X_qmc=+Y_b, +Y_qmc=-X_b, +Z_qmc=+Z_b)；若为 QMC5883L(0x0D) 按丝印 (-mx,-my,+mz)。 */
+static void board_align_imu(hal_imu_t *s) {
+    int16_t rx = s->ax, ry = s->ay;
+    int16_t gx = s->gx, gy = s->gy;
+    s->ax = ry;
+    s->ay = (int16_t)-rx;
+    s->gx = gy;
+    s->gy = (int16_t)-gx;
+}
+
+static void board_align_mag(hal_mag_t *m, int chip) {
+    int16_t rx = m->x, ry = m->y;
+    if(chip == 2) {         /* QMC5883P @ 0x2C */
+        m->x = (int16_t)-ry;
+        m->y = rx;
+    } else if(chip == 1) {  /* QMC5883L @ 0x0D */
+        m->x = (int16_t)-rx;
+        m->y = (int16_t)-ry;
+    }
+}
+
 int hal_imu_read(hal_imu_t *out) {
-    return mpu6050_read(out);
+    if(!out || !mpu6050_read(out)) {
+        return 0;
+    }
+    board_align_imu(out);
+    return 1;
 }
 
 int hal_mag_read(hal_mag_t *out) {
-    return qmc5883l_read(out);
+    if(!out || !qmc5883l_read(out)) {
+        return 0;
+    }
+    board_align_mag(out, qmc5883l_chip());
+    return 1;
 }
 
 int hal_baro_read(hal_baro_t *out) {
@@ -769,9 +806,18 @@ int hal_debug_snapshot(char *out, int cap) {
         DBG_ADD("NONE");
     }
     qmc5883l_debug(qbuf, (int)sizeof qbuf);
-    DBG_ADD(";MPU=%d;%s;M=%d,%d,%d;BAT=%u",
-            mpu6050_present(), qbuf,
-            g_mag_x, g_mag_y, g_mag_z, (unsigned)g_battery_mv);
+    {
+        imu9_state_t s9;
+        imu9_get(&s9);
+        DBG_ADD(";MPU=%d;%s;A=%d,%d,%d;M=%d,%d,%d;9AX=%u;RPY=%d,%d,%u;BAT=%u",
+                mpu6050_present(), qbuf,
+                g_imu_ax, g_imu_ay, g_imu_az,
+                g_mag_x, g_mag_y, g_mag_z,
+                (unsigned)s9.fused_axes,
+                (int)(s9.roll_d10 / 10), (int)(s9.pitch_d10 / 10),
+                (unsigned)s9.heading_deg,
+                (unsigned)g_battery_mv);
+    }
 #undef DBG_ADD
     for(addr = 0; addr < n && addr < (int)sizeof g_debug_line - 1; addr++) {
         g_debug_line[addr] = out[addr];
@@ -815,10 +861,18 @@ void hal_ram_get(uint32_t *used, uint32_t *total) {
     uint32_t end = (uint32_t)&_ebss;
     uint32_t top = (uint32_t)&_estack;
     uint32_t static_used = end - base;
+    uint32_t ui_used = 0;
+    uint32_t ui_total = 0;
+    uint32_t ui_free;
     uint32_t msp;
     uint32_t stack_used;
     uint32_t all = top - base;
 
+    ui_mem_get(&ui_used, &ui_total);
+    ui_free = ui_total > ui_used ? (ui_total - ui_used) : 0u;
+    if(static_used > ui_free) {
+        static_used -= ui_free;
+    }
     __asm volatile("mrs %0, msp" : "=r"(msp));
     if(msp > top) {
         msp = top;
@@ -831,6 +885,22 @@ void hal_ram_get(uint32_t *used, uint32_t *total) {
     if(total) {
         *total = all;
     }
+}
+
+int hal_ext_flash_present(void) {
+    return ext_flash_present();
+}
+
+int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
+    return ext_flash_read(offset, dst, len);
+}
+
+int hal_ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
+    return ext_flash_write(offset, src, len);
+}
+
+int hal_ext_flash_erase(uint32_t offset, uint32_t len) {
+    return ext_flash_erase(offset, len);
 }
 
 const char *hal_fw_version(void) {
@@ -878,8 +948,10 @@ void port_service(void) {
 
     link_poll();
     if((now - sensor_ms) >= 20u) {
+        int imu_ok = hal_imu_read(&imu);
+        int mag_ok = hal_mag_read(&mag);
         sensor_ms = now;
-        if(mpu6050_read(&imu)) {
+        if(imu_ok) {
             sport_feed(&imu, now);
             g_imu_read_ok = 1;
             g_imu_ax = imu.ax;
@@ -889,11 +961,14 @@ void port_service(void) {
             g_imu_gy = imu.gy;
             g_imu_gz = imu.gz;
         }
-        if(qmc5883l_read(&mag)) {
+        if(mag_ok) {
             g_mag_read_ok = 1;
             g_mag_x = mag.x;
             g_mag_y = mag.y;
             g_mag_z = mag.z;
+        }
+        if(imu_ok || mag_ok) {
+            imu9_feed(imu_ok ? &imu : 0, mag_ok ? &mag : 0, now);
         }
         g_battery_mv = battery_mv();
     }

@@ -106,8 +106,16 @@ void hal_led_mode(int mode);
 /* 背光 0..255。 */
 void hal_backlight_set(uint8_t level);
 
-/* 整片 SRAM 使用量/总量（字节）。含当前栈，调试角标用。 */
+/* 整片 SRAM 使用量/总量（字节）。含当前栈与动态池实时用量，调试角标用。 */
 void hal_ram_get(uint32_t *used, uint32_t *total);
+
+/* ---- 外部 32KB I2C Flash / EEPROM（16 位地址 0x0000..0x7FFF）----
+   成功返回 1，设备未接或越界返回 0。 */
+#define HAL_EXT_FLASH_SIZE (32u * 1024u)
+int hal_ext_flash_present(void);
+int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len);
+int hal_ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len);
+int hal_ext_flash_erase(uint32_t offset, uint32_t len);
 
 /* 固件标识，关于本机用。返回静态字符串。 */
 const char *hal_fw_version(void);

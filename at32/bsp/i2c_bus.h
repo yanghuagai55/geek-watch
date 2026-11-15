@@ -9,5 +9,8 @@ void i2c_bus_init(void);
 int i2c_probe(uint8_t addr7);
 int i2c_write(uint8_t addr7, uint8_t reg, const uint8_t *data, int n);
 int i2c_read(uint8_t addr7, uint8_t reg, uint8_t *data, int n);
+/* 16 位内存地址读写（用于 32KB 24C256 / FM24C256 等 I2C Flash/EEPROM）。 */
+int i2c_write16(uint8_t addr7, uint16_t reg16, const uint8_t *data, int n);
+int i2c_read16(uint8_t addr7, uint16_t reg16, uint8_t *data, int n);
 
 #endif

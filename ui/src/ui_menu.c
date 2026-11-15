@@ -56,24 +56,36 @@ void ui_menu_back(ui_menu_t *menu) {
     ui_anim_play_range(UI_ANIM_ZOOM_OUT, &menu->zoom, (int16_t)menu->zoom.scale, 0);
 }
 
-int ui_menu_prev(ui_menu_t *menu) {
+static int menu_prev_impl(ui_menu_t *menu, int allow_back) {
     if (!menu || menu->level == UI_MENU_ICON) {
         return 0;
     }
     if (menu->level == UI_MENU_CHILD) {
-        if (!move_focus(&menu->child_scroll, &menu->child_focus, -1, menu->child_count)) {
+        if (!move_focus(&menu->child_scroll, &menu->child_focus, -1, menu->child_count) &&
+            allow_back) {
             ui_menu_back(menu);
         }
         return 1;
     }
     if (menu->zoom.scale < 255 || ui_anim_busy(&menu->zoom)) {
-        ui_menu_back(menu);
+        if (allow_back) {
+            ui_menu_back(menu);
+        }
         return 1;
     }
-    if (!move_focus(&menu->scroll, &menu->focus, -1, menu->count)) {
+    if (!move_focus(&menu->scroll, &menu->focus, -1, menu->count) &&
+        allow_back) {
         ui_menu_back(menu);
     }
     return 1;
+}
+
+int ui_menu_prev(ui_menu_t *menu) {
+    return menu_prev_impl(menu, 1);
+}
+
+int ui_menu_prev_no_back(ui_menu_t *menu) {
+    return menu_prev_impl(menu, 0);
 }
 
 int ui_menu_next(ui_menu_t *menu) {

@@ -12,7 +12,7 @@
 /* 64KB Flash。每个 16×16 汉字大约 44 字节，连 ASCII 一起收到 530 个汉字为止。
    不在表里的码位，手表画 8×16 空心方框。串口一条消息正文最多 23 字节 UTF-8。
    这不是 GB2312 全集。工具默认发「你好」，这两个字排在补充表最前。 */
-enum { CELL = 16, MAX_GLYPH = 650, CJK_MAX = 535, MAX_BYTES = 64 };
+enum { CELL = 16, MAX_GLYPH = 650, CJK_MAX = 545, MAX_BYTES = 64 };
 
 typedef struct grec {
     uint32_t cp;
@@ -199,15 +199,17 @@ static int write_source(const char *path) {
     fprintf(fp, "};\n\n");
     fprintf(fp, "static const ui_glyph_t glyphs[] = {\n");
     for (i = 0; i < nrec; i++) {
-        fprintf(fp, "    {0x%04Xu, %u, %u, %u, %u},\n",
-                recs[i].cp, recs[i].w, recs[i].h, recs[i].advance, offset);
+        fprintf(fp, "    {0x%04Xu, %u, %u, %u},\n",
+                recs[i].cp, offset, recs[i].w, recs[i].h);
         offset += recs[i].nbytes;
     }
     fprintf(fp, "};\n\n");
     fprintf(fp, "const uint8_t *ui_font_bits(void) { return bits; }\n\n");
+    fprintf(fp, "int ui_font_is_rle(void) { return 0; }\n\n");
     fprintf(fp, "const ui_glyph_t *ui_font_find(uint32_t cp) {\n");
     fprintf(fp, "    int lo = 0;\n");
     fprintf(fp, "    int hi = (int)(sizeof glyphs / sizeof glyphs[0]) - 1;\n");
+    fprintf(fp, "    if (cp > 0xFFFFu) return 0;\n");
     fprintf(fp, "    while (lo <= hi) {\n");
     fprintf(fp, "        int mid = (lo + hi) >> 1;\n");
     fprintf(fp, "        if (glyphs[mid].cp == cp) return &glyphs[mid];\n");
@@ -422,7 +424,9 @@ int main(int argc, char **argv) {
         0x6001, /* 态 */
         0x95EA, /* 闪 */
         0x70C1, /* 烁 */
-        0x7184  /* 熄 */
+        0x7184, /* 熄 */
+        0x6307, /* 指 */
+        0x9488  /* 针 */
     };
     HDC screen;
     HDC mem;

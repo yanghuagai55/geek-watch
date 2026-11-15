@@ -29,7 +29,7 @@
 #define UI_W HAL_LCD_W
 #define UI_H HAL_LCD_H
 #define UI_BAND_H 4
-#define UI_RAM_BUDGET (4864u + 4u * UI_W * UI_BAND_H)
+#define UI_RAM_BUDGET (7424u + 4u * UI_W * UI_BAND_H)
 
 /* ---- lifecycle & cooperative service ---- */
 /* ui_core_init omits the demo app; follow with begin/draw/flush for custom pages. */
@@ -55,10 +55,12 @@ typedef struct ui_render_stats {
 void ui_render_get_stats(ui_render_stats_t *out);
 void ui_draw_invalidate(void);
 
-/* 供调试链路读取的实时帧率（每秒刷新一次） */
+/* 贴近肉眼观感的屏幕刷新帧率（fps，约每 250ms 平滑更新；含局部脏区刷新与全屏传输，静止时回落至 0）。 */
 uint8_t ui_app_get_fps(void);
 /* 强制回到表盘主页（关闭子页/菜单） */
 void ui_app_go_home(void);
+/* 打开音乐页（PC 下发媒体点阵时使用） */
+void ui_app_open_music(void);
 
 /* ---- layout: permille of the panel, never hard-coded pixels ----
    屏幕长边竖着放。0 贴着左或上，1000 贴着右或下。 */
@@ -70,11 +72,13 @@ void ui_app_go_home(void);
    Compile-time RGB565 keeps the theme out of RAM and avoids per-page drift. */
 #define UI_RGB565(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | \
                                       (((g) & 0xFC) << 3) | ((b) >> 3)))
-#define UI_COL_BG       UI_RGB565(10, 15, 16)
+#define UI_COL_BG       UI_RGB565(0, 0, 0)
 #define UI_COL_SURFACE  UI_RGB565(24, 33, 32)
 #define UI_COL_LINE     UI_RGB565(49, 65, 60)
 #define UI_COL_TEXT     UI_RGB565(240, 241, 228)
 #define UI_COL_MUTED    UI_RGB565(135, 151, 143)
+#define UI_COL_MUTED_LIGHT UI_RGB565(176, 186, 180)
+#define UI_COL_RIPPLE   UI_RGB565(172, 178, 176)
 #define UI_COL_MINT     UI_RGB565(115, 212, 174)
 #define UI_COL_AMBER    UI_RGB565(255, 177, 94)
 
@@ -124,8 +128,12 @@ uint8_t ui_anim_pulse(uint32_t now_ms, uint32_t period_ms);
 /* ---- drawing primitives (record into the current frame) ---- */
 void ui_draw_begin(void);
 void ui_draw_xform(int scale256, int ox, int oy);
+void ui_draw_get_xform(int *scale256, int *ox, int *oy);
 void ui_draw_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t opacity);
 void ui_draw_round(int16_t x, int16_t y, int16_t w, int16_t h, int16_t radius, uint16_t color, uint8_t opacity);
+void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
+                    int16_t radius, int16_t cy, int16_t rip_r,
+                    uint16_t color, uint8_t opacity);
 void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color, uint8_t opacity);
 void ui_draw_flush(void);
 
@@ -158,6 +166,24 @@ void ui_svg_draw_p(int16_t x, int16_t y, uint8_t scale,
                    uint16_t color, uint8_t opacity, uint8_t width);
 void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                    uint8_t scale, const uint16_t *rgb565, uint8_t opacity);
+/* 4bpp 覆盖位图：每字节两个像素，高半字节在前，alpha 0..15。 */
+void ui_mask_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                  const uint8_t *cover4, uint16_t color, uint8_t opacity);
+/* 1bpp 位图：每行 (w+7)/8 字节，MSB 在左，用于手机下发的消息列表/详情。 */
+void ui_mask1_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                   const uint8_t *bits, uint16_t color, uint8_t opacity);
+void ui_mask1_draw_clip(int16_t x, int16_t y, int16_t w, int16_t h,
+                        int16_t src_w, const uint8_t *bits,
+                        uint16_t color, uint8_t opacity);
+/* 外部 32KB Flash 流式贴图：按 4 行分带直接从 hal_ext_flash_read 逐行流式读取渲染，无需全屏 RAM 缓冲。 */
+enum {
+    UI_EXT_FMT_1BPP = 1,
+    UI_EXT_FMT_4BPP = 2,
+    UI_EXT_FMT_RGB565 = 3
+};
+void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                       uint32_t ext_offset, uint8_t fmt,
+                       uint16_t color, uint8_t opacity);
 void ui_text_draw(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale);
 int16_t ui_text_width(const char *utf8, uint8_t scale);
@@ -182,7 +208,10 @@ int16_t ui_song_height(int face);
 void ui_settings_set_debug(int enabled);
 int ui_settings_get_debug(void);
 
-/* ---- memory arena ---- */
+/* ---- dynamic memory pool (arena) ---- */
+void *ui_mem_alloc(uint32_t size, uint32_t align);
+void ui_mem_free(void *ptr);
+uint32_t ui_mem_avail(void);
 void ui_mem_get(uint32_t *used_bytes, uint32_t *total_bytes);
 
 /* ---- trace hook ---- */
@@ -197,6 +226,39 @@ const char *link_message(int index);
 int link_brightness(void);
 const char *link_media_lyric(void);
 int link_media_playing(void);
+/* 0x0B 下发的 128x32 点阵位图（4bpp 覆盖）；ready 为 0 时音乐页回退文字歌词。 */
+int link_media_mask_ready(void);
+const uint8_t *link_media_mask(void);
+/* 消息页：列表 128x112、详情 128x160 的 1bpp 点阵，由手机按需下发。 */
+int link_msg_list_ready(void);
+int link_msg_list_empty(void);
+const uint8_t *link_msg_list_mask(void);
+int link_msg_detail_ready(void);
+const uint8_t *link_msg_detail_mask(void);
+void link_request_messages(void);
+void link_request_message_detail(int index);
+void link_leave_messages(void);
+void link_enter_music(void);
+void link_leave_music(void);
+/* 外部 32KB Flash 区域偏移与图片预览接口（0x28 元信息 + 0x29 分块数据）。 */
+enum {
+    LINK_EXT_OFF_MEDIA      = 0x0100u, /*   512B: 128x32 1bpp 媒体点阵缓存 */
+    LINK_EXT_OFF_MSG_LIST   = 0x0300u, /*  1792B: 128x112 1bpp 消息列表缓存 */
+    LINK_EXT_OFF_MSG_DETAIL = 0x0A00u, /* 12800B: 5 槽 x 2560B 消息详情缓存 */
+    LINK_EXT_OFF_IMG        = 0x3C00u, /* 17408B: 图片预览区（最高至 0x7FFF） */
+    LINK_EXT_IMG_MAX        = 0x4400u
+};
+int link_img_preview_ready(void);
+void link_img_preview_info(int16_t *w, int16_t *h, uint8_t *fmt, uint32_t *ext_offset);
+void link_img_preview_clear(void);
+void link_notify_settings(void);
+void ui_settings_apply(int key, int value);
+void ui_app_set_message_count(int count);
+/* 消息/音乐应用打开状态查询，用于按需管理动态 RAM 缓冲。 */
+int ui_app_message_active(void);
+int ui_app_music_active(void);
+/* 最近 4 秒内收到过合法帧即认为 PC/手机在线。 */
+int link_connected(void);
 /* 调试模式打开后，07 命令里按住的键会并进按键电平。 */
 uint8_t link_key_level(void);
 void link_key_edges(uint8_t *down, uint8_t *up);

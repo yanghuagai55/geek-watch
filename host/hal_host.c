@@ -4,6 +4,7 @@
 
 #include "hal.h"
 #include "hal_host.h"
+#include "ui.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,12 +54,14 @@ static void (*painter)(void *hdc, int x, int panel_w, int height);
 static int clock_override;
 static hal_clock_t clock_base;
 static uint32_t clock_base_ms;
-enum { HOST_LINK_N = 128 };
+enum { HOST_LINK_N = 512 };
 static uint8_t link_rx[HOST_LINK_N];
 static int link_rx_r;
 static int link_rx_n;
 static uint8_t link_tx[FB_W * FB_H * 2 + 4096];
 static int link_tx_n;
+static int sim_ext_flash_on = 1;
+static uint8_t sim_ext_flash[HAL_EXT_FLASH_SIZE];
 
 static int month_days(int year, int month) {
     static const uint8_t days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -251,6 +254,8 @@ void hal_host_init(int create_window_flag) {
     cpu_shown_ok = 0;
     hal_host_link_clear();
     hal_host_display_reset_stats();
+    sim_ext_flash_on = 1;
+    memset(sim_ext_flash, 0, sizeof sim_ext_flash);
     for (i = 0; i < FB_W * FB_H; i++) {
         fb[i] = 0;
     }
@@ -671,6 +676,10 @@ void hal_host_set_walking(int on) {
     sim_walking = on ? 1 : 0;
 }
 
+void hal_host_set_ext_flash(int on) {
+    sim_ext_flash_on = on ? 1 : 0;
+}
+
 void hal_host_raise_wrist(void) {
     sim_raise_ms = hal_tick_ms();
     if (sim_raise_ms == 0) {
@@ -714,9 +723,9 @@ int hal_mag_read(hal_mag_t *out) {
     if (!out) {
         return 0;
     }
-    out->x = 200;
-    out->y = -150;
-    out->z = 400;
+    out->x = 140;
+    out->y = 260;
+    out->z = -460;
     return 1;
 }
 
@@ -738,7 +747,7 @@ uint8_t hal_battery_pct(void) {
 }
 
 int hal_i2c_scan(uint8_t *out, int max) {
-    static const uint8_t ids[] = {0x68, 0x0D, 0x46};
+    static const uint8_t ids[] = {0x2C, 0x68};
     int n = 0;
 
     if (!out || max <= 0) {
@@ -760,8 +769,8 @@ int hal_debug_snapshot(char *out, int cap) {
         return 0;
     }
     return snprintf(out, (size_t)cap,
-                    "I2C=2C,68;MPU=1;QMC5883P@2C;ID=80;ST=01;C1=55;C2=08;"
-                    "M=20,-15,40;BAT=4020");
+                    "I2C=2C,68;MPU=1;QMC5883P@2C;ID=80;ST=19;C1=CD;C2=08;"
+                    "A=0,0,1000;M=140,260,-460;9AX=9;RPY=0,0,332;BAT=4020");
 }
 
 int hal_ble_connected(void) {
@@ -787,11 +796,50 @@ void hal_backlight_set(uint8_t level) {
 
 void hal_ram_get(uint32_t *used, uint32_t *total) {
     if (used) {
-        *used = 10816;   /* 模拟 MCU：静态 10048 + 当前栈 */
+        uint32_t ui_used = 0;
+        ui_mem_get(&ui_used, NULL);
+        *used = 4088u + ui_used; /* 模拟 MCU：非 UI 静态段/当前栈 + ui_mem 动态池实时用量 */
     }
     if (total) {
         *total = 16384;
     }
+}
+
+int hal_ext_flash_present(void) {
+    return sim_ext_flash_on;
+}
+
+int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
+    if (!sim_ext_flash_on || !dst || offset > HAL_EXT_FLASH_SIZE ||
+        len > HAL_EXT_FLASH_SIZE - offset) {
+        return 0;
+    }
+    if (len > 0) {
+        memcpy(dst, sim_ext_flash + offset, len);
+    }
+    return 1;
+}
+
+int hal_ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
+    if (!sim_ext_flash_on || !src || offset > HAL_EXT_FLASH_SIZE ||
+        len > HAL_EXT_FLASH_SIZE - offset) {
+        return 0;
+    }
+    if (len > 0) {
+        memcpy(sim_ext_flash + offset, src, len);
+    }
+    return 1;
+}
+
+int hal_ext_flash_erase(uint32_t offset, uint32_t len) {
+    if (!sim_ext_flash_on || offset > HAL_EXT_FLASH_SIZE ||
+        len > HAL_EXT_FLASH_SIZE - offset) {
+        return 0;
+    }
+    if (len > 0) {
+        memset(sim_ext_flash + offset, 0, len);
+    }
+    return 1;
 }
 
 const char *hal_fw_version(void) {
