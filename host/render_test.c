@@ -1,5 +1,6 @@
 #include "ui_internal.h"
 #include "hal_host.h"
+#include "imu9.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -896,6 +897,95 @@ static int test_ext_flash_and_stream(void) {
     return 0;
 }
 
+static int angle_diff_deg(int a, int b) {
+    int d = (a - b) % 360;
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    return d < 0 ? -d : d;
+}
+
+static int test_imu9_fusion(void) {
+    imu9_state_t s;
+    hal_imu_t imu;
+    hal_mag_t mag;
+    uint32_t t = 1000u;
+    int i;
+
+    imu9_init();
+    memset(&imu, 0, sizeof imu);
+    imu.az = 1000;
+    imu.temp = 285;
+    mag.x = 0; mag.y = 300; mag.z = -500; /* 面朝正北 */
+    imu9_feed(&imu, &mag, t);
+    imu9_get(&s);
+    REQUIRE(s.fused_axes == 9 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 2 &&
+            s.roll_d10 >= -20 && s.roll_d10 <= 20 &&
+            s.pitch_d10 >= -20 && s.pitch_d10 <= 20,
+            "9-axis instant triad north alignment");
+
+    /* 顺时针转向东 90°：+X体轴指东变指南，+Y体轴指北变指东，磁场沿-X_b */
+    imu9_reset();
+    mag.x = -300; mag.y = 0; mag.z = -500;
+    imu9_feed(&imu, &mag, t += 20u);
+    imu9_get(&s);
+    REQUIRE(angle_diff_deg((int)s.heading_deg, 90) <= 2,
+            "9-axis triad east heading 90 deg");
+
+    /* 抬表 45° (+pitch around +X_b)：az=707, ay=+707；北方在Body +Y_b/+Z_b投影 */
+    imu9_reset();
+    imu.ax = 0; imu.ay = 707; imu.az = 707;
+    /* 北(0,300,-500) 沿 Pitch=+45°(+Y->+Z) 逆变换到体轴: my=300*c-(-500)*s=565? Wait R_x(+45)^T*(0,B_h,B_z) */
+    mag.x = 0; mag.y = -141; mag.z = -566; /* R_x(+45)^T * (0, 300, -500): y=212-354=-142, z=-212-354=-566 */
+    imu9_feed(&imu, &mag, t += 20u);
+    imu9_get(&s);
+    REQUIRE(s.pitch_d10 >= 435 && s.pitch_d10 <= 465 &&
+            s.roll_d10 >= -20 && s.roll_d10 <= 20 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 3,
+            "9-axis tilt-compensated north at +45 deg pitch");
+
+    /* 平放静止陀螺零偏学习 (gb = +25, -15, +12 0.1dps) */
+    imu9_init();
+    imu.ax = 0; imu.ay = 0; imu.az = 1000;
+    imu.gx = 25; imu.gy = -15; imu.gz = 12;
+    mag.x = 0; mag.y = 300; mag.z = -500;
+    for (i = 0; i < 45; i++) {
+        imu9_feed(&imu, &mag, t += 20u);
+    }
+    imu9_get(&s);
+    REQUIRE(s.gyro_cal == 1 && s.gbx == 25 && s.gby == -15 && s.gbz == 12 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 2,
+            "9-axis gyro bias convergence & stationary lock");
+
+    /* 3D 磁硬铁校准 */
+    imu9_cal_start();
+    for (i = -1; i <= 1; i += 2) {
+        mag.x = (int16_t)(120 + i * 300); mag.y = -180; mag.z = 90;
+        imu9_feed(&imu, &mag, t += 20u);
+        mag.x = 120; mag.y = (int16_t)(-180 + i * 300); mag.z = 90;
+        imu9_feed(&imu, &mag, t += 20u);
+        mag.x = 120; mag.y = -180; mag.z = (int16_t)(90 + i * 500);
+        imu9_feed(&imu, &mag, t += 20u);
+    }
+    imu9_cal_start(); /* 完成校准 */
+    mag.x = 120 + 0; mag.y = -180 + 300; mag.z = 90 - 500;
+    imu9_feed(&imu, &mag, t += 20u);
+    imu9_get(&s);
+    REQUIRE(s.mag_cal == 2 && s.mox == 120 && s.moy == -180 && s.moz == 90 &&
+            angle_diff_deg((int)s.heading_deg, 0) <= 2,
+            "9-axis hard-iron calibration");
+
+    /* 磁力计失联退化到 6 轴 */
+    t += 1100u;
+    imu9_feed(&imu, NULL, t);
+    imu9_get(&s);
+    REQUIRE(s.fused_axes == 6 && s.imu_ok == 1 && s.mag_ok == 0,
+            "6-axis fallback when magnetometer drops");
+
+    printf("IMU9 9-axis fusion & calibration PASS\n");
+    return 0;
+}
+
 int host_render_test(const char *shots) {
     int result;
     output_dir = shots;
@@ -913,6 +1003,7 @@ int host_render_test(const char *shots) {
     if (!result) result = test_async_and_preempt();
     if (!result) result = test_face_snapshot_and_keys();
     if (!result) result = test_ext_flash_and_stream();
+    if (!result) result = test_imu9_fusion();
     ui_set_service(NULL);
     hal_host_set_keys(0);
     hal_host_shutdown();

@@ -723,9 +723,9 @@ int hal_mag_read(hal_mag_t *out) {
     if (!out) {
         return 0;
     }
-    out->x = 200;
-    out->y = -150;
-    out->z = 400;
+    out->x = 140;
+    out->y = 260;
+    out->z = -460;
     return 1;
 }
 
@@ -747,7 +747,7 @@ uint8_t hal_battery_pct(void) {
 }
 
 int hal_i2c_scan(uint8_t *out, int max) {
-    static const uint8_t ids[] = {0x68, 0x0D, 0x46};
+    static const uint8_t ids[] = {0x2C, 0x68};
     int n = 0;
 
     if (!out || max <= 0) {
@@ -769,8 +769,8 @@ int hal_debug_snapshot(char *out, int cap) {
         return 0;
     }
     return snprintf(out, (size_t)cap,
-                    "I2C=2C,68;MPU=1;QMC5883P@2C;ID=80;ST=01;C1=55;C2=08;"
-                    "M=20,-15,40;BAT=4020");
+                    "I2C=2C,68;MPU=1;QMC5883P@2C;ID=80;ST=19;C1=CD;C2=08;"
+                    "A=0,0,1000;M=140,260,-460;9AX=9;RPY=0,0,332;BAT=4020");
 }
 
 int hal_ble_connected(void) {

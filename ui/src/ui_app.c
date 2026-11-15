@@ -4,6 +4,7 @@
 
 #include "hal.h"
 #include "sport.h"
+#include "imu9.h"
 #include "music.h"
 #include "settings.h"
 
@@ -922,36 +923,57 @@ static void draw_sport_child(uint8_t a) {
     draw_header_anim("运动", scroll, a);
 }
 
-/* 运动 -> 传感器数值。MPU 加速度/陀螺/温度 + QMC 三轴磁场，10Hz 刷新。
-   显示单位：A=0.1g，G=10dps，M=10mG（屏幕只有 128 宽，压缩后一行放得下）。 */
+static void fmt_deg(char *out, int cap, char tag, int d10) {
+    int v = d10 < 0 ? -d10 : d10;
+    char sg = d10 < 0 ? '-' : '+';
+
+    if (v >= 1000) {
+        snprintf(out, (size_t)cap, "%c%c%3d", tag, sg, v / 10);
+    } else {
+        snprintf(out, (size_t)cap, "%c%c%d.%d", tag, sg, v / 10, v % 10);
+    }
+}
+
+static const char *compass_dir(uint16_t heading) {
+    static const char *const dirs[8] = {
+        "N", "NE", "E", "SE", "S", "SW", "W", "NW"
+    };
+    return dirs[((heading + 22u) % 360u) / 45u];
+}
+
+/* 运动 -> 传感器数值。统一表体坐标系 9 轴融合姿态 + 对齐后 A/G/M，10Hz 刷新。
+   显示单位：A=0.1g，G=1dps，M=10mG，R/P/H=度；KEY2 启停磁校准，KEY3 归零。 */
 static void draw_sensor_page(uint8_t a) {
-    static hal_imu_t imu;
-    static hal_mag_t mag;
-    static uint32_t poll_ms, imu_ok_ms, mag_ok_ms, scan_ms;
-    static int imu_seen, mag_seen;
+    static imu9_state_t s9;
+    static uint32_t poll_ms, scan_ms;
     static char scan[20] = "I2C --";
     uint32_t now = hal_tick_ms();
-    int imu_ok, mag_ok;
-    char line[20];
+    char line[28], rbuf[8], pbuf[8];
+    const char *badge;
+    uint16_t badge_col;
     int x = UI_MX(45);
-    int y = UI_MY(220);
+    int y = UI_MY(175);
     int step = ui_text_height("A", 1) + UI_MY(12);
-    int t;
+    int max_step = (badge_y() - 2 - y) / 7;
+    int gx, gy, gz, t;
+
+    if (step > max_step && max_step > 10) {
+        step = max_step;
+    }
 
     if ((now - poll_ms) >= 100u) {
         poll_ms = now;
-        if (hal_imu_read(&imu)) {
-            imu_seen = 1;
-            imu_ok_ms = now;
+        if (imu9_is_stale(now, 150u)) {
+            hal_imu_t imu;
+            hal_mag_t mag;
+            int io = hal_imu_read(&imu);
+            int mo = hal_mag_read(&mag);
+            if (io || mo) {
+                imu9_feed(io ? &imu : NULL, mo ? &mag : NULL, now);
+            }
         }
-        if (hal_mag_read(&mag)) {
-            mag_seen = 1;
-            mag_ok_ms = now;
-        }
+        imu9_get(&s9);
     }
-    /* 1 秒没读到就显示 --，避免器件掉线后还挂着旧数据装正常。 */
-    imu_ok = imu_seen && (now - imu_ok_ms) < 1000u;
-    mag_ok = mag_seen && (now - mag_ok_ms) < 1000u;
     /* 插拔模块后不用重启，1 秒重扫一次总线。 */
     if ((now - scan_ms) >= 1000u) {
         uint8_t addrs[4];
@@ -969,51 +991,98 @@ static void draw_sensor_page(uint8_t a) {
         }
     }
 
+    if (s9.mag_cal == 1) {
+        badge = "CAL";
+        badge_col = col_accent;
+    } else if (s9.fused_axes == 9) {
+        badge = "9DOF";
+        badge_col = col_ring;
+    } else if (s9.fused_axes) {
+        badge = (s9.fused_axes == 6) ? "6DOF" : "3DOF";
+        badge_col = col_accent;
+    } else {
+        badge = "--";
+        badge_col = col_dim;
+    }
+
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     ui_draw_round((int16_t)x, (int16_t)UI_MY(40), (int16_t)UI_MX(20),
                   (int16_t)UI_MY(100), 1, col_accent, a);
     ui_draw_text((int16_t)(x + UI_MX(50)), (int16_t)UI_MY(30),
                  "传感器", col_text, a, 1);
-    ui_draw_line((int16_t)x, (int16_t)UI_MY(170),
-                 (int16_t)(UI_W - x), (int16_t)UI_MY(170), col_line, a);
+    ui_draw_text((int16_t)(x + UI_MX(50) + ui_text_width("传感器", 1) + UI_MX(45)),
+                 (int16_t)UI_MY(30), badge, badge_col, a, 1);
+    ui_draw_line((int16_t)x, (int16_t)UI_MY(155),
+                 (int16_t)(UI_W - x), (int16_t)UI_MY(155), col_line, a);
 
-    snprintf(line, sizeof line, "MPU6050 %s", imu_ok ? "OK" : "--");
-    ui_draw_text((int16_t)x, (int16_t)y, line,
-                 imu_ok ? col_ring : col_dim, a, 1);
-    if (imu_ok) {
-        snprintf(line, sizeof line, "A%4d%4d%4d",
-                 imu.ax / 100, imu.ay / 100, imu.az / 100);
+    if (s9.mag_cal == 1) {
+        snprintf(line, sizeof line, "MAG CAL ROT360");
+        ui_draw_text((int16_t)x, (int16_t)y, line, col_accent, a, 1);
+    } else if (s9.imu_ok) {
+        t = s9.temp;
+        snprintf(line, sizeof line, "%uDOF%c T%d.%dC",
+                 (unsigned)s9.fused_axes,
+                 s9.mag_cal == 2 ? '*' : (s9.gyro_cal ? '.' : ' '),
+                 t / 10, (t % 10 < 0) ? -(t % 10) : (t % 10));
+        ui_draw_text((int16_t)x, (int16_t)y, line,
+                     s9.fused_axes == 9 ? col_ring : col_accent, a, 1);
     } else {
-        snprintf(line, sizeof line, "A   --  --  --");
+        snprintf(line, sizeof line, "%s %s", hal_mag_name(), s9.mag_ok ? "3DOF" : "--");
+        ui_draw_text((int16_t)x, (int16_t)y, line, s9.mag_ok ? col_accent : col_dim, a, 1);
+    }
+
+    if (s9.imu_ok) {
+        fmt_deg(rbuf, (int)sizeof rbuf, 'R', s9.roll_d10);
+        fmt_deg(pbuf, (int)sizeof pbuf, 'P', s9.pitch_d10);
+        snprintf(line, sizeof line, "%-6s %-6s", rbuf, pbuf);
+    } else {
+        snprintf(line, sizeof line, "R --   P --");
     }
     ui_draw_text((int16_t)x, (int16_t)(y + step), line, col_text, a, 1);
-    if (imu_ok) {
-        snprintf(line, sizeof line, "G%4d%4d%4d",
-                 imu.gx / 100, imu.gy / 100, imu.gz / 100);
-    } else {
-        snprintf(line, sizeof line, "G   --  --  --");
-    }
-    ui_draw_text((int16_t)x, (int16_t)(y + step * 2), line, col_text, a, 1);
-    if (imu_ok) {
-        t = imu.temp;
-        snprintf(line, sizeof line, "T%d.%dC", t / 10,
-                 (t % 10 < 0) ? -(t % 10) : (t % 10));
-    } else {
-        snprintf(line, sizeof line, "T --.-C");
-    }
-    ui_draw_text((int16_t)x, (int16_t)(y + step * 3), line, col_dim, a, 1);
 
-    snprintf(line, sizeof line, "%s %s", hal_mag_name(), mag_ok ? "OK" : "--");
-    ui_draw_text((int16_t)x, (int16_t)(y + step * 4), line,
-                 mag_ok ? col_ring : col_dim, a, 1);
-    if (mag_ok) {
-        snprintf(line, sizeof line, "M%4d%4d%4d",
-                 mag.x / 10, mag.y / 10, mag.z / 10);
+    if (s9.fused_axes) {
+        const char *cstr = s9.mag_cal == 1 ? "CAL" :
+                           (s9.mag_cal == 2 ? "MCAL" :
+                           (s9.gyro_cal ? "OK" : "INIT"));
+        snprintf(line, sizeof line, "H%3u %-2s %s",
+                 (unsigned)s9.heading_deg, compass_dir(s9.heading_deg), cstr);
     } else {
-        snprintf(line, sizeof line, "M   --  --  --");
+        snprintf(line, sizeof line, "H --- --");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 2), line,
+                 s9.mag_ok ? col_ring : col_accent, a, 1);
+
+    if (s9.imu_ok) {
+        snprintf(line, sizeof line, "A%4d%4d%4d",
+                 s9.ax / 100, s9.ay / 100, s9.az / 100);
+    } else {
+        snprintf(line, sizeof line, "A  --  --  --");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 3), line, col_text, a, 1);
+
+    if (s9.imu_ok) {
+        gx = s9.gx / 10;
+        gy = s9.gy / 10;
+        gz = s9.gz / 10;
+        if (gx > 999) gx = 999; else if (gx < -999) gx = -999;
+        if (gy > 999) gy = 999; else if (gy < -999) gy = -999;
+        if (gz > 999) gz = 999; else if (gz < -999) gz = -999;
+        snprintf(line, sizeof line, "G%4d%4d%4d", gx, gy, gz);
+    } else {
+        snprintf(line, sizeof line, "G  --  --  --");
+    }
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 4), line, col_text, a, 1);
+
+    if (s9.mag_ok) {
+        snprintf(line, sizeof line, "M%4d%4d%4d",
+                 s9.mx / 10, s9.my / 10, s9.mz / 10);
+    } else {
+        snprintf(line, sizeof line, "M  --  --  --");
     }
     ui_draw_text((int16_t)x, (int16_t)(y + step * 5), line, col_text, a, 1);
-    ui_draw_text((int16_t)x, (int16_t)(y + step * 6), scan, col_dim, a, 1);
+
+    snprintf(line, sizeof line, "%s %s", scan, s9.mag_cal == 1 ? "K2ok" : "K2c");
+    ui_draw_text((int16_t)x, (int16_t)(y + step * 6), line, col_dim, a, 1);
 }
 
 static void draw_msg_card(int scroll, int count, int i, int hot,
@@ -1407,6 +1476,14 @@ static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
             st->sensor_open = 0;
             return;
         }
+        if (pressed & HAL_KEY2) {
+            imu9_cal_start();
+            return;
+        }
+        if (pressed & HAL_KEY3) {
+            imu9_reset();
+            return;
+        }
         if (pressed) {
             return;
         }
@@ -1519,6 +1596,7 @@ void ui_init(void) {
     st->sensor_open = 0;
     link_init();
     sport_init();
+    imu9_init();
     settings_init();
     st->screen_asleep = 0;
     st->active_ms = hal_tick_ms();

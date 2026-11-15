@@ -20,6 +20,7 @@
 #include "beep.h"
 #include "led_bl.h"
 #include "sport.h"
+#include "imu9.h"
 
 /* AT32F421K8T7（LQFP-32，64KB Flash / 16KB SRAM，无 FPU）。
    时钟：HICK 48MHz / 2 = 24MHz 进 PLL，×5 = 120MHz。
@@ -79,7 +80,7 @@ volatile uint8_t g_i2c_found[8];
 volatile uint8_t g_imu_read_ok;
 volatile uint8_t g_mag_read_ok;
 /* 最近一次调试快照，SWD 直接按字符串读，不依赖蓝牙。 */
-char g_debug_line[128];
+char g_debug_line[160];
 
 static uint32_t irq_save(void) {
     uint32_t mask;
@@ -698,6 +699,7 @@ void board_init(void) {
     led_init();
     backlight_init();
     backlight_set(255);
+    imu9_init();
     /* 上电把 I2C 扫描 + QMC 寄存器存一份到 RAM，SWD 可读。 */
     g_battery_mv = battery_mv();
     (void)hal_debug_snapshot(g_debug_line, (int)sizeof g_debug_line);
@@ -707,12 +709,45 @@ void board_init(void) {
 }
 
 /* ---- 传感器/执行器 HAL 包装 ---- */
+/* 按实物模块焊装方位（D:\下载\IMG_20261115_130804.jpg）统一映射到手表右手系：
+   +X = 屏幕右，+Y = 屏幕上（12点方向），+Z = 朝屏幕外（平放指天）。
+   - GY-521 MPU6050(0x68)：Pin1 在右上 (+X_mpu=-Y_b, +Y_mpu=+X_b, +Z_mpu=+Z_b)
+   - GY-273 QMC5883P(0x2C)：Pin1 在右上，按手册 Fig.2 旋转 90°CW
+     (+X_qmc=+Y_b, +Y_qmc=-X_b, +Z_qmc=+Z_b)；若为 QMC5883L(0x0D) 按丝印 (-mx,-my,+mz)。 */
+static void board_align_imu(hal_imu_t *s) {
+    int16_t rx = s->ax, ry = s->ay;
+    int16_t gx = s->gx, gy = s->gy;
+    s->ax = ry;
+    s->ay = (int16_t)-rx;
+    s->gx = gy;
+    s->gy = (int16_t)-gx;
+}
+
+static void board_align_mag(hal_mag_t *m, int chip) {
+    int16_t rx = m->x, ry = m->y;
+    if(chip == 2) {         /* QMC5883P @ 0x2C */
+        m->x = (int16_t)-ry;
+        m->y = rx;
+    } else if(chip == 1) {  /* QMC5883L @ 0x0D */
+        m->x = (int16_t)-rx;
+        m->y = (int16_t)-ry;
+    }
+}
+
 int hal_imu_read(hal_imu_t *out) {
-    return mpu6050_read(out);
+    if(!out || !mpu6050_read(out)) {
+        return 0;
+    }
+    board_align_imu(out);
+    return 1;
 }
 
 int hal_mag_read(hal_mag_t *out) {
-    return qmc5883l_read(out);
+    if(!out || !qmc5883l_read(out)) {
+        return 0;
+    }
+    board_align_mag(out, qmc5883l_chip());
+    return 1;
 }
 
 int hal_baro_read(hal_baro_t *out) {
@@ -771,9 +806,18 @@ int hal_debug_snapshot(char *out, int cap) {
         DBG_ADD("NONE");
     }
     qmc5883l_debug(qbuf, (int)sizeof qbuf);
-    DBG_ADD(";MPU=%d;%s;M=%d,%d,%d;BAT=%u",
-            mpu6050_present(), qbuf,
-            g_mag_x, g_mag_y, g_mag_z, (unsigned)g_battery_mv);
+    {
+        imu9_state_t s9;
+        imu9_get(&s9);
+        DBG_ADD(";MPU=%d;%s;A=%d,%d,%d;M=%d,%d,%d;9AX=%u;RPY=%d,%d,%u;BAT=%u",
+                mpu6050_present(), qbuf,
+                g_imu_ax, g_imu_ay, g_imu_az,
+                g_mag_x, g_mag_y, g_mag_z,
+                (unsigned)s9.fused_axes,
+                (int)(s9.roll_d10 / 10), (int)(s9.pitch_d10 / 10),
+                (unsigned)s9.heading_deg,
+                (unsigned)g_battery_mv);
+    }
 #undef DBG_ADD
     for(addr = 0; addr < n && addr < (int)sizeof g_debug_line - 1; addr++) {
         g_debug_line[addr] = out[addr];
@@ -904,8 +948,10 @@ void port_service(void) {
 
     link_poll();
     if((now - sensor_ms) >= 20u) {
+        int imu_ok = hal_imu_read(&imu);
+        int mag_ok = hal_mag_read(&mag);
         sensor_ms = now;
-        if(mpu6050_read(&imu)) {
+        if(imu_ok) {
             sport_feed(&imu, now);
             g_imu_read_ok = 1;
             g_imu_ax = imu.ax;
@@ -915,11 +961,14 @@ void port_service(void) {
             g_imu_gy = imu.gy;
             g_imu_gz = imu.gz;
         }
-        if(qmc5883l_read(&mag)) {
+        if(mag_ok) {
             g_mag_read_ok = 1;
             g_mag_x = mag.x;
             g_mag_y = mag.y;
             g_mag_z = mag.z;
+        }
+        if(imu_ok || mag_ok) {
+            imu9_feed(imu_ok ? &imu : 0, mag_ok ? &mag : 0, now);
         }
         g_battery_mv = battery_mv();
     }

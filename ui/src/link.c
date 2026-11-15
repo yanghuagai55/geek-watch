@@ -740,7 +740,7 @@ static void apply_frame(void) {
         return;
     }
     if (cmd == LINK_SENSOR && len == 0) {
-        char buf[128];
+        char buf[160];
         int n = hal_debug_snapshot(buf, (int)sizeof buf);
         if (n > 0) {
             hal_link_write((const uint8_t *)"DBG ", 4);
