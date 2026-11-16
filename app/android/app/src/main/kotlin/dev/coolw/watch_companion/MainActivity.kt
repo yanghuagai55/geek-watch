@@ -21,10 +21,12 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL = "watch_companion/bluetooth"
         private const val EVENTS = "watch_companion/bluetooth/events"
         private const val PERMISSION_REQUEST = 1001
+        private const val PICK_IMAGE_REQUEST = 1002
     }
 
     private var events: EventChannel.EventSink? = null
     private var pendingPermission: MethodChannel.Result? = null
+    private var pendingPickImage: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -88,6 +90,10 @@ class MainActivity : FlutterActivity() {
                     "messageCount" -> result.success(
                         WatchLinkService.cachedMessageCount,
                     )
+                    "clearMessages" -> {
+                        WatchLinkService.instance?.clearNotifications()
+                        result.success(true)
+                    }
                     "messageRules" -> result.success(
                         mapOf(
                             "mode" to NotificationRules.mode,
@@ -142,6 +148,7 @@ class MainActivity : FlutterActivity() {
                         openBatterySettings()
                         result.success(true)
                     }
+                    "pickImage" -> startPickImage(result)
                     else -> result.notImplemented()
                 }
             }
@@ -254,6 +261,60 @@ class MainActivity : FlutterActivity() {
                 Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
+        }
+    }
+
+    private fun startPickImage(result: MethodChannel.Result) {
+        if (pendingPickImage != null) {
+            result.error("BUSY", "图片选择窗口已打开", null)
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+        }
+        pendingPickImage = result
+        try {
+            startActivityForResult(intent, PICK_IMAGE_REQUEST)
+        } catch (_: Exception) {
+            pendingPickImage = null
+            result.success(null)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PICK_IMAGE_REQUEST) return
+        val pending = pendingPickImage
+        pendingPickImage = null
+        if (pending == null) return
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            pending.success(null)
+            return
+        }
+        try {
+            var name = "photo"
+            contentResolver.query(
+                uri,
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    name = cursor.getString(0) ?: name
+                }
+            }
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes == null || bytes.isEmpty()) {
+                pending.success(null)
+            } else {
+                pending.success(mapOf("name" to name, "bytes" to bytes))
+            }
+        } catch (e: Exception) {
+            pending.error("IO", e.message ?: "读取图片失败", null)
         }
     }
 

@@ -37,6 +37,10 @@ class WatchSession {
   final StreamController<int> _controls = StreamController<int>.broadcast();
   final StreamController<WatchSettings> _watchSettings =
       StreamController<WatchSettings>.broadcast();
+  final StreamController<WatchConfigBundle> _watchConfigs =
+      StreamController<WatchConfigBundle>.broadcast();
+  final StreamController<WatchExtPoolState> _extPoolStates =
+      StreamController<WatchExtPoolState>.broadcast();
   final StreamController<WatchSport> _sport =
       StreamController<WatchSport>.broadcast();
   final StreamController<WatchSensorData> _sensors =
@@ -79,8 +83,14 @@ class WatchSession {
   /// 手表按键产生的播放控制（1 播放 / 2 暂停 / 3 下一首 / 4 上一首）。
   Stream<int> get controls => _controls.stream;
 
-  /// 手表当前设置（亮度、抬腕、按键音、状态灯、熄屏等）。
+  /// 手表当前设置（亮度、抬腕、1207 震动、状态灯、熄屏等）。
   Stream<WatchSettings> get watchSettings => _watchSettings.stream;
+
+  /// 手表完整配置与表盘 / AT24C256 持久化状态（0x2C）。
+  Stream<WatchConfigBundle> get watchConfigs => _watchConfigs.stream;
+
+  /// 手表外置 AT24C256 动态 ROM Pool 实时分配状态（0x2E）。
+  Stream<WatchExtPoolState> get extPoolStates => _extPoolStates.stream;
 
   /// 手表今日运动数据（步数、距离、卡路里、活跃分钟、12 个时段桶）。
   Stream<WatchSport> get sport => _sport.stream;
@@ -249,9 +259,190 @@ class WatchSession {
     return _command(WatchCmd.getSettings);
   }
 
-  /// key：1 抬腕 2 按键音 3 亮度 4 蓝牙 5 状态灯 6 熄屏。
+  /// key：1 抬腕 2 震动 3 亮度 4 蓝牙 5 状态灯 6 熄屏。
   Future<bool> setSetting(int key, int value) {
     return _command(WatchCmd.setting, <int>[key, value]);
+  }
+
+  /// 查询完整配置、表盘状态与 AT24C256 存储信息（0x2B -> 0x2C）。
+  Future<bool> requestConfig() {
+    return _command(WatchCmd.getConfig);
+  }
+
+  /// 下发 20 字节完整配置与表盘样式，并按 flag 写入 AT24C256 持久化（0x2A）。
+  Future<bool> sendConfigBundle(WatchConfigBundle bundle) {
+    return _command(WatchCmd.setConfig, bundle.toSetConfigPayload());
+  }
+
+  /// 查询 AT24C256 动态 ROM 分配状态（0x2D [0x00] -> 0x2E）。
+  Future<bool> requestExtPoolState() {
+    return _command(WatchCmd.extOp, const <int>[0]);
+  }
+
+  /// 立即清空手表动态 ROM 与持久化目录里的全部消息（0x24）。
+  Future<bool> clearWatchMessages() {
+    return _command(WatchCmd.msgClear);
+  }
+
+  /// 分块上传按需页面 1bpp 资源到手表 AT24C256 动态 ROM（0x2F）。
+  Future<bool> sendExtAsset({
+    required int assetId,
+    required int width,
+    required int height,
+    required Uint8List bits,
+  }) async {
+    const chunkSize = 128;
+    for (var offset = 0, chunk = 0; offset < bits.length; offset += chunkSize, chunk++) {
+      final end = (offset + chunkSize < bits.length) ? offset + chunkSize : bits.length;
+      final pay = <int>[
+        assetId & 0xFF,
+        chunk & 0xFF,
+        width & 0xFF,
+        (width >> 8) & 0xFF,
+        height & 0xFF,
+        (height >> 8) & 0xFF,
+        ...bits.sublist(offset, end),
+      ];
+      if (!await _command(WatchCmd.extAsset, pay)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// 跨平台下发一条富文本通知点阵到手表 AT24C256 动态 ROM（0x2D + 0x26/0x23）。
+  Future<bool> pushRichNotification({
+    required Uint8List rowBytes,
+    required Uint8List detailBytes,
+    required int count,
+  }) {
+    if (rowBytes.length != 352 || detailBytes.length != 2560) {
+      throw ArgumentError('消息点阵大小需为行 352B + 详情 2560B');
+    }
+    return _serialize(() async {
+      final transport = _transport;
+      if (transport == null || !transport.isConnected) return false;
+
+      Future<bool> sendOne(int cmd, List<int> payload) async {
+        final ack = Completer<bool>();
+        _ack = ack;
+        _commandBusy = true;
+        try {
+          await transport.send(buildWatchFrame(cmd, payload));
+          return await ack.future.timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => false,
+          );
+        } on TransportException {
+          return false;
+        } finally {
+          _commandBusy = false;
+          if (identical(_ack, ack)) _ack = null;
+        }
+      }
+
+      if (!await sendOne(WatchCmd.extOp, <int>[0x01, count.clamp(1, 20)])) {
+        return false;
+      }
+      final rowChunks = (rowBytes.length + 127) ~/ 128;
+      for (var sub = 0; sub < rowChunks; sub++) {
+        final start = sub * 128;
+        final end = (start + 128 < rowBytes.length) ? start + 128 : rowBytes.length;
+        final payload = <int>[0x02, sub, ...rowBytes.sublist(start, end)];
+        if (!await sendOne(WatchCmd.extOp, payload)) return false;
+      }
+      final detailChunks = detailBytes.length ~/ 128;
+      for (var chunk = 0; chunk < detailChunks; chunk++) {
+        final offset = chunk * 128;
+        final rle = _rleEncode128(detailBytes, offset);
+        final ok = rle.length <= 125
+            ? await sendOne(WatchCmd.maskRle, <int>[5, 0, chunk, ...rle])
+            : await sendOne(
+                WatchCmd.msgDetailBmp,
+                <int>[0, chunk, ...detailBytes.sublist(offset, offset + 128)],
+              );
+        if (!ok) return false;
+      }
+      await sendOne(WatchCmd.extOp, const <int>[0x00]);
+      return true;
+    });
+  }
+
+  static List<int> _rleEncode128(Uint8List bits, int offset) {
+    final out = <int>[];
+    var i = 0;
+    while (i < 128) {
+      final value = bits[offset + i];
+      var run = 1;
+      while (i + run < 128 && bits[offset + i + run] == value && run < 255) {
+        run++;
+      }
+      out.add(value);
+      out.add(run);
+      i += run;
+    }
+    return out;
+  }
+
+  /// 分块上传压缩表盘图像至手表外置 AT24C256 Flash（0x28 meta + 0x29 chunks）。
+  Future<bool> sendExtImage({
+    required int width,
+    required int height,
+    required int format,
+    required Uint8List bytes,
+    bool applyDial = true,
+    void Function(int sentChunks, int totalChunks)? onProgress,
+  }) {
+    if (bytes.isEmpty || bytes.length > 0x4400) {
+      throw ArgumentError.value(bytes.length, 'bytes', '大小需在 1..17408 字节内');
+    }
+    return _serialize(() async {
+      final transport = _transport;
+      if (transport == null || !transport.isConnected) return false;
+
+      Future<bool> sendOne(int cmd, Uint8List payload) async {
+        final ack = Completer<bool>();
+        _ack = ack;
+        _commandBusy = true;
+        try {
+          await transport.send(buildWatchFrame(cmd, payload));
+          return await ack.future.timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => false,
+          );
+        } on TransportException {
+          return false;
+        } finally {
+          _commandBusy = false;
+          if (identical(_ack, ack)) _ack = null;
+        }
+      }
+
+      final meta = Uint8List.fromList(<int>[
+        width & 0xFF,
+        (width >> 8) & 0xFF,
+        height & 0xFF,
+        (height >> 8) & 0xFF,
+        format & 0xFF,
+        bytes.length & 0xFF,
+        (bytes.length >> 8) & 0xFF,
+        applyDial ? 1 : 0,
+      ]);
+      if (!await sendOne(WatchCmd.extImgMeta, meta)) return false;
+
+      final totalChunks = (bytes.length + 127) ~/ 128;
+      for (var c = 0; c < totalChunks; c++) {
+        final start = c * 128;
+        final end = (start + 128 < bytes.length) ? start + 128 : bytes.length;
+        final chunkLen = end - start;
+        final payload = Uint8List(1 + chunkLen);
+        payload[0] = c;
+        payload.setRange(1, 1 + chunkLen, bytes, start);
+        if (!await sendOne(WatchCmd.extImgData, payload)) return false;
+        onProgress?.call(c + 1, totalChunks);
+      }
+      return true;
+    });
   }
 
   /// 拉取今日运动数据；手表用 0x27 回。
@@ -339,6 +530,8 @@ class WatchSession {
     await _stats.close();
     await _controls.close();
     await _watchSettings.close();
+    await _watchConfigs.close();
+    await _extPoolStates.close();
     await _sport.close();
     await _sensors.close();
     await _logs.close();
@@ -399,6 +592,16 @@ class WatchSession {
         final settings = WatchSettings.fromFrame(frame);
         if (settings != null && !_watchSettings.isClosed) {
           _watchSettings.add(settings);
+        }
+      case WatchCmd.configState:
+        final cfg = WatchConfigBundle.fromFrame(frame);
+        if (cfg != null && !_watchConfigs.isClosed) {
+          _watchConfigs.add(cfg);
+        }
+      case WatchCmd.extPoolState:
+        final pool = WatchExtPoolState.fromFrame(frame);
+        if (pool != null && !_extPoolStates.isClosed) {
+          _extPoolStates.add(pool);
         }
       case WatchCmd.sport:
         final sport = WatchSport.fromFrame(frame);

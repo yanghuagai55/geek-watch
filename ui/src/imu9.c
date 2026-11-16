@@ -42,6 +42,30 @@ static int32_t clamp32(int32_t v, int32_t lo, int32_t hi) {
     return v;
 }
 
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+static int32_t div_s64_u32(int64_t num, uint32_t den) {
+    int neg = 0;
+    uint64_t n, q = 0u, rem = 0u;
+    int bit;
+    if (den == 0u) return 0;
+    if (num < 0) {
+        neg = 1;
+        n = (uint64_t)(0 - num);
+    } else {
+        n = (uint64_t)num;
+    }
+    for (bit = 63; bit >= 0; bit--) {
+        rem = (rem << 1) | ((n >> bit) & 1u);
+        if (rem >= den) {
+            rem -= den;
+            q |= ((uint64_t)1u << bit);
+        }
+    }
+    return neg ? -(int32_t)q : (int32_t)q;
+}
+
 static uint32_t isqrt64(uint64_t x) {
     uint64_t op = x;
     uint64_t res = 0;
@@ -73,7 +97,7 @@ static int16_t atan2_d10(int32_t y, int32_t x) {
     swap = ay > ax;
     num = swap ? ax : ay;
     den = swap ? ay : ax;
-    t = (int32_t)(((int64_t)num << 14) / den);
+    t = ((int32_t)num << 14) / den;
     if (t >= 16384) {
         ang = 4500;
     } else {
@@ -109,9 +133,9 @@ static int vec_norm_q14(int32_t x, int32_t y, int32_t z, int32_t out[3]) {
     if (n == 0) {
         return 0;
     }
-    out[0] = (int32_t)(((int64_t)x * Q14_ONE) / (int64_t)n);
-    out[1] = (int32_t)(((int64_t)y * Q14_ONE) / (int64_t)n);
-    out[2] = (int32_t)(((int64_t)z * Q14_ONE) / (int64_t)n);
+    out[0] = div_s64_u32((int64_t)x * Q14_ONE, n);
+    out[1] = div_s64_u32((int64_t)y * Q14_ONE, n);
+    out[2] = div_s64_u32((int64_t)z * Q14_ONE, n);
     return 1;
 }
 
@@ -133,10 +157,10 @@ static void quat_normalize_q24(void) {
         g_ctx.q1 = g_ctx.q2 = g_ctx.q3 = 0;
         return;
     }
-    g_ctx.q0 = (int32_t)(((int64_t)g_ctx.q0 * Q24_ONE) / (int64_t)n);
-    g_ctx.q1 = (int32_t)(((int64_t)g_ctx.q1 * Q24_ONE) / (int64_t)n);
-    g_ctx.q2 = (int32_t)(((int64_t)g_ctx.q2 * Q24_ONE) / (int64_t)n);
-    g_ctx.q3 = (int32_t)(((int64_t)g_ctx.q3 * Q24_ONE) / (int64_t)n);
+    g_ctx.q0 = div_s64_u32((int64_t)g_ctx.q0 * Q24_ONE, n);
+    g_ctx.q1 = div_s64_u32((int64_t)g_ctx.q1 * Q24_ONE, n);
+    g_ctx.q2 = div_s64_u32((int64_t)g_ctx.q2 * Q24_ONE, n);
+    g_ctx.q3 = div_s64_u32((int64_t)g_ctx.q3 * Q24_ONE, n);
 }
 
 /* 由正交旋转阵 R (Q14, Body->ENU) 按 Shepperd 方法转换到 Q24 四元数 */
@@ -149,33 +173,33 @@ static void rot_to_quat(const int32_t r[3][3]) {
         s = (int32_t)isqrt64((uint64_t)((int64_t)Q14_ONE * ((int64_t)Q14_ONE + tr)));
         if (s == 0) s = 1;
         q[0] = (s << 9);
-        q[1] = (int32_t)(((int64_t)(r[2][1] - r[1][2]) << 23) / s);
-        q[2] = (int32_t)(((int64_t)(r[0][2] - r[2][0]) << 23) / s);
-        q[3] = (int32_t)(((int64_t)(r[1][0] - r[0][1]) << 23) / s);
+        q[1] = div_s64_u32((int64_t)(r[2][1] - r[1][2]) << 23, (uint32_t)s);
+        q[2] = div_s64_u32((int64_t)(r[0][2] - r[2][0]) << 23, (uint32_t)s);
+        q[3] = div_s64_u32((int64_t)(r[1][0] - r[0][1]) << 23, (uint32_t)s);
     } else if (r[0][0] >= r[1][1] && r[0][0] >= r[2][2]) {
         s = (int32_t)isqrt64((uint64_t)((int64_t)Q14_ONE *
             ((int64_t)Q14_ONE + r[0][0] - r[1][1] - r[2][2])));
         if (s == 0) s = 1;
         q[1] = (s << 9);
-        q[0] = (int32_t)(((int64_t)(r[2][1] - r[1][2]) << 23) / s);
-        q[2] = (int32_t)(((int64_t)(r[0][1] + r[1][0]) << 23) / s);
-        q[3] = (int32_t)(((int64_t)(r[0][2] + r[2][0]) << 23) / s);
+        q[0] = div_s64_u32((int64_t)(r[2][1] - r[1][2]) << 23, (uint32_t)s);
+        q[2] = div_s64_u32((int64_t)(r[0][1] + r[1][0]) << 23, (uint32_t)s);
+        q[3] = div_s64_u32((int64_t)(r[0][2] + r[2][0]) << 23, (uint32_t)s);
     } else if (r[1][1] >= r[2][2]) {
         s = (int32_t)isqrt64((uint64_t)((int64_t)Q14_ONE *
             ((int64_t)Q14_ONE + r[1][1] - r[0][0] - r[2][2])));
         if (s == 0) s = 1;
         q[2] = (s << 9);
-        q[0] = (int32_t)(((int64_t)(r[0][2] - r[2][0]) << 23) / s);
-        q[1] = (int32_t)(((int64_t)(r[0][1] + r[1][0]) << 23) / s);
-        q[3] = (int32_t)(((int64_t)(r[1][2] + r[2][1]) << 23) / s);
+        q[0] = div_s64_u32((int64_t)(r[0][2] - r[2][0]) << 23, (uint32_t)s);
+        q[1] = div_s64_u32((int64_t)(r[0][1] + r[1][0]) << 23, (uint32_t)s);
+        q[3] = div_s64_u32((int64_t)(r[1][2] + r[2][1]) << 23, (uint32_t)s);
     } else {
         s = (int32_t)isqrt64((uint64_t)((int64_t)Q14_ONE *
             ((int64_t)Q14_ONE + r[2][2] - r[0][0] - r[1][1])));
         if (s == 0) s = 1;
         q[3] = (s << 9);
-        q[0] = (int32_t)(((int64_t)(r[1][0] - r[0][1]) << 23) / s);
-        q[1] = (int32_t)(((int64_t)(r[0][2] + r[2][0]) << 23) / s);
-        q[2] = (int32_t)(((int64_t)(r[1][2] + r[2][1]) << 23) / s);
+        q[0] = div_s64_u32((int64_t)(r[1][0] - r[0][1]) << 23, (uint32_t)s);
+        q[1] = div_s64_u32((int64_t)(r[0][2] + r[2][0]) << 23, (uint32_t)s);
+        q[2] = div_s64_u32((int64_t)(r[1][2] + r[2][1]) << 23, (uint32_t)s);
     }
     g_ctx.q0 = q[0];
     g_ctx.q1 = q[1];
@@ -363,6 +387,14 @@ void imu9_cal_start(void) {
     g_ctx.st.mag_cal = 1;
     g_ctx.m_min[0] = g_ctx.m_min[1] = g_ctx.m_min[2] = 32767;
     g_ctx.m_max[0] = g_ctx.m_max[1] = g_ctx.m_max[2] = -32768;
+}
+
+void imu9_load_mag_cal(int16_t ox, int16_t oy, int16_t oz) {
+    g_ctx.st.mox = ox;
+    g_ctx.st.moy = oy;
+    g_ctx.st.moz = oz;
+    g_ctx.st.mag_cal = 2;
+    g_ctx.mag_pose_snapped = 0;
 }
 
 void imu9_feed(const hal_imu_t *imu, const hal_mag_t *mag, uint32_t now_ms) {

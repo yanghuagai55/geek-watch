@@ -59,7 +59,7 @@
 #define BAT_DIV_NUM     2
 #define BAT_DIV_DEN     1
 
-/* ---- 蜂鸣器（PA8 = TMR1_CH1，MOS 低边驱动，有源蜂鸣器）---- */
+/* ---- 1207 转子马达（PA8 = MOS 低边 AO3400A + 1N4148 续流驱动）---- */
 #define BEEP_PORT       GPIOA
 #define BEEP_PIN        GPIO_PINS_8
 #define BEEP_CRM_CLK    CRM_GPIOA_PERIPH_CLOCK

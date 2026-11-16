@@ -669,6 +669,7 @@ static int sim_walking = 1;
 static uint32_t sim_raise_ms;
 static uint16_t sim_beep_freq;
 static uint16_t sim_beep_ms;
+static uint32_t sim_beep_count;
 static int sim_led;
 static uint8_t sim_backlight = 200;
 
@@ -780,6 +781,13 @@ int hal_ble_connected(void) {
 void hal_beep(uint16_t freq_hz, uint16_t ms) {
     sim_beep_freq = freq_hz;
     sim_beep_ms = ms;
+    sim_beep_count++;
+}
+
+void hal_host_beep_get(uint16_t *freq_hz, uint16_t *ms, uint32_t *count) {
+    if (freq_hz) *freq_hz = sim_beep_freq;
+    if (ms) *ms = sim_beep_ms;
+    if (count) *count = sim_beep_count;
 }
 
 void hal_led_set(int on) {
@@ -807,6 +815,10 @@ void hal_ram_get(uint32_t *used, uint32_t *total) {
 
 int hal_ext_flash_present(void) {
     return sim_ext_flash_on;
+}
+
+uint8_t hal_ext_flash_addr(void) {
+    return sim_ext_flash_on ? 0x50u : 0u;
 }
 
 int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {

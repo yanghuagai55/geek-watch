@@ -88,6 +88,28 @@ class _MediaPageState extends State<MediaPage> {
     );
   }
 
+  Future<void> _pushPersistentMessage() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final text = _message.text.trim();
+    if (text.isEmpty) return;
+    final ok = await widget.controller.pushRichMessage(
+      app: Platform.isWindows ? 'PC 桌面消息' : '手机消息',
+      title: '消息槽 ${_selectedSlot + 1}',
+      text: text,
+    );
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? '已置顶写入手表 AT24C256 动态 ROM（断电不丢失）。'
+              : '未连接手表：已存入本地历史队列，连接后可重发。',
+        ),
+      ),
+    );
+  }
+
   Widget _composer(BuildContext context) {
     final bytes = utf8.encode(_message.text).length;
     final scheme = Theme.of(context).colorScheme;
@@ -163,7 +185,12 @@ class _MediaPageState extends State<MediaPage> {
             OutlinedButton.icon(
               onPressed: _sendMessage,
               icon: const Icon(Icons.send_outlined, size: 17),
-              label: const Text('发送到手表'),
+              label: const Text('0x02 短信槽'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: _pushPersistentMessage,
+              icon: const Icon(Icons.memory_rounded, size: 17),
+              label: const Text('写入 AT24C256 持久化消息'),
             ),
           ],
         ),
@@ -625,22 +652,24 @@ class _NotificationRules extends StatelessWidget {
                 ),
           ],
           const Divider(height: 30),
-          const SectionHeader(
-            title: '发送限制',
-            subtitle: '手表最多保留 5 条，超出后丢掉最旧的',
+          SectionHeader(
+            title: '片外 AT24C256 动态持久化上限',
+            subtitle: '最多保留 20 条，断电重启不丢失；空间不足按 FIFO 自动淘汰最旧消息',
+            trailing: StatusPill(
+              label:
+                  '手表 ${controller.extPoolMsgCount}/${controller.extPoolMsgMax} 条 · ${controller.extPoolMsgBytes} B',
+            ),
           ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (var count = 1; count <= 5; count++)
+              for (final count in const [5, 10, 15, 20])
                 ChoiceChip(
                   label: Text('$count 条'),
                   selected: controller.maxMessages == count,
-                  onSelected: enabled
-                      ? (_) => controller.setMaxMessages(count)
-                      : null,
+                  onSelected: (_) => controller.setMaxMessages(count),
                 ),
             ],
           ),
@@ -652,12 +681,43 @@ class _NotificationRules extends StatelessWidget {
             value: controller.mergeNotifications,
             onChanged: enabled ? controller.setMergeNotifications : null,
           ),
-          Text(
-            enabled
-                ? '当前已缓存 ${controller.cachedNotifications} 条'
-                      '${controller.mergeNotifications ? '（已按应用合并）' : ''}'
-                : 'Windows 端不缓存系统通知',
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10.5),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('通知清理开关（开启即清空 / 重启不保留）'),
+            subtitle: const Text('同步至手表设置项「通知清理」，开启时自动抹除片外通知缓存'),
+            value: controller.autoClearMessages,
+            onChanged: controller.setAutoClearMessages,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final ok = await controller.clearWatchMessages();
+                  if (!context.mounted) return;
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        ok ? '已清空手表 AT24C256 动态 ROM 中的所有通知。' : '已清空本地队列（连接后可同步清理手表）。',
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                label: const Text('立即清理手表通知'),
+              ),
+              Text(
+                enabled
+                    ? '本机已缓存 ${controller.cachedNotifications} 条'
+                          '${controller.mergeNotifications ? '（已按应用合并）' : ''}'
+                    : 'Windows 已缓存 ${controller.localMessages.length} 条可持久化推送消息',
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10.5),
+              ),
+            ],
           ),
         ],
       ),

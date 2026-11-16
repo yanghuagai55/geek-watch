@@ -347,8 +347,8 @@ class SettingsPage extends StatelessWidget {
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('按键音'),
-              subtitle: const Text('按键时蜂鸣器短鸣'),
+              title: const Text('手表震动（1207 转子马达）'),
+              subtitle: const Text('PA8 MOS 驱动：短按轻震、长按长震、指南针校准双震与新消息经典三连震'),
               value: controller.keyBeep,
               onChanged: controller.setKeyBeep,
             ),
@@ -406,6 +406,86 @@ class SettingsPage extends StatelessWidget {
               value: controller.watchBluetooth,
               onChanged: null,
             ),
+            const Divider(height: 24),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('24 小时制'),
+              subtitle: const Text('同步作用于手表数字/仪表表盘与 App 预览'),
+              value: controller.use24Hour,
+              onChanged: controller.setUse24Hour,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('通知清理开关（重启自动清空）'),
+              subtitle: const Text(
+                '开启时立即清空手表 AT24C256 持久化消息且重启不再保留；关闭可断电永久留存最多 20 条',
+              ),
+              value: controller.autoClearMessages,
+              onChanged: controller.setAutoClearMessages,
+            ),
+            Row(
+              children: [
+                const Text('每日步数目标', style: TextStyle(fontWeight: FontWeight.w600)),
+                const Spacer(),
+                Text(
+                  '${controller.stepGoal} 步',
+                  style: TextStyle(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            Slider(
+              value: controller.stepGoal.clamp(2000, 20000).toDouble(),
+              min: 2000,
+              max: 20000,
+              divisions: 18,
+              label: '${controller.stepGoal} 步',
+              onChanged: (v) => controller.setStepGoal(v.round()),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _Section(
+          icon: Icons.memory_rounded,
+          title: '配置优先级与 AT24C256 持久化',
+          subtitle: '未连手机开机读取手表 I2C EEPROM 默认配置；连上后以 App 为最高优先级覆盖写入',
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                StatusPill(
+                  label: controller.connected
+                      ? (controller.extFlashPresent
+                            ? 'AT24C256 (0x${controller.extI2cAddr.toRadixString(16).toUpperCase().padLeft(2, '0')}) 在线'
+                            : '未探测到 AT24C256')
+                      : '离线本地已记忆（待连接下发）',
+                  color: controller.connected && controller.extFlashPresent
+                      ? scheme.primary
+                      : scheme.onSurfaceVariant,
+                ),
+                StatusPill(
+                  label: controller.mcuCfgSource == 2
+                      ? '生效源：App 最高优先级（已写 I2C）'
+                      : (controller.mcuCfgSource == 1
+                            ? '生效源：手表 I2C EEPROM'
+                            : '策略：${controller.appPriorityOverride ? "App 最高优先级" : "跟随 I2C"}'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('App 最高优先级（连接自动覆盖 I2C）'),
+              subtitle: const Text(
+                '开启后，连接手表会立即将 App 的设置、步数目标和表盘写入 AT24C256；'
+                '断开或重上电后手表默认按该 I2C 记录启动',
+              ),
+              value: controller.appPriorityOverride,
+              onChanged: controller.setAppPriorityOverride,
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -455,6 +535,85 @@ class SettingsPage extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        AppCard(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      width: 72,
+                      height: 72,
+                      color: const Color(0xFF141B24),
+                      padding: const EdgeInsets.all(6),
+                      child: Image.asset(
+                        'assets/images/about_logo.png',
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '关于本作品 · 超级 Vibe Coding',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'AT32 极客智能手表 & 双端伴侣（单片机大作业终极进化体）',
+                          style: TextStyle(
+                            color: scheme.primary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Chip(label: Text('Token 大炮轰炸')),
+                  Chip(label: Text('额度见底警告')),
+                  Chip(label: Text('AI 神力加持')),
+                  Chip(label: Text('单片机大作业')),
+                  Chip(label: Text('1207 转子马达')),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                '本项目是一场纯正的「超级 Vibe Coding」大型极限拉扯现场：'
+                '从焊板调 I2C 到手搓 GUI 引擎，全程架起 Token 大炮连发轰炸，'
+                '无数次看着模型上下文额度见底红灯狂闪，硬是靠 AI 神力强行续命，'
+                '把一份普通单片机大作业魔改成了能真戴手上的 128×160 彩色小手表！\n'
+                '\n'
+                '• 极限压榨主控：AT32F421K8T7（64KB Flash / 16KB SRAM）内部极限抠出四行异步 DMA、局部脏矩形合并、Trim-RLE 汉字库与零碎片动态 RAM 池。\n'
+                '• 32KB 外置续命池：AT24C256 通过自研 ATD1 目录 + PackBits 压缩掉电保存设置、自定义相册表盘、20 条长消息与按需功能页资源。\n'
+                '• 九轴与复古触觉：MPU6050/QMI8658 + QMC5883L 九轴融合指南针；原 PA8 蜂鸣器改装为 AO3400A 低边驱动 1207 转子马达，还原老手机按键/长按/校准/新消息的多段震动灵魂。\n'
+                '• 双端全栈伴侣：Windows + Android 共用 Flutter 工程，蓝牙 SPP 传屏、通知实时光栅化、3D 姿态可视化一把梭。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 12.5,
+                  height: 1.55,
+                ),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 20),
         Wrap(
           spacing: 10,
@@ -463,15 +622,30 @@ class SettingsPage extends StatelessWidget {
             FilledButton.icon(
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
-                final ok = await controller.refreshWatchSettings();
+                final ok = await controller.pushConfigToWatch(saveToI2c: true);
                 messenger.showSnackBar(
                   SnackBar(
-                    content: Text(ok ? '已读取手表当前设置。' : '请先连接手表。'),
+                    content: Text(
+                      ok ? '已以 App 最高优先级覆盖写入手表 AT24C256。' : '未连接手表：已保存在本地，连接后自动下发覆盖 I2C。',
+                    ),
                   ),
                 );
               },
-              icon: const Icon(Icons.sync_rounded, size: 18),
-              label: const Text('读取手表设置'),
+              icon: const Icon(Icons.upload_rounded, size: 18),
+              label: const Text('覆盖写入手表 I2C'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                final ok = await controller.pullConfigFromWatch();
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(ok ? '已从手表 AT24C256 同步当前设置到 App。' : '请先连接手表。'),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.download_rounded, size: 18),
+              label: const Text('从手表 I2C 读取'),
             ),
             OutlinedButton.icon(
               onPressed: controller.resetSettings,

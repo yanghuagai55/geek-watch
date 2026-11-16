@@ -255,7 +255,7 @@ void main() {
     expect(find.text('手动发送测试消息'), findsOneWidget);
     await tester.tap(find.byTooltip('表盘').first);
     await tester.pumpAndSettle();
-    expect(find.text('32KB 外置 I2C Flash 分区规划 (0x50)'), findsOneWidget);
+    expect(find.text('32KB 外置 AT24C256 动态 ROM (0x50)'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

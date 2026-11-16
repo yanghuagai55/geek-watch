@@ -76,9 +76,13 @@ static void dot_at(int page, int *x, int *y) {
     if (w < 3) {
         w = 3;
     }
-    /* 与 ui_app.c draw_dots 一致：HOME_N=5，dots_y=UI_H-4-lift-h。 */
-    x0 = (UI_W - 4 * gap) / 2;
-    *x = x0 + page * gap - UI_MX(16) + w / 2;
+    /* 与 ui_app.c draw_dots 一致：表盘(页0)除外，共 4 个功能点 (page 1..4)。 */
+    x0 = (UI_W - 3 * gap) / 2;
+    if (page <= 0) {
+        *x = UI_W / 2;
+    } else {
+        *x = x0 + (page - 1) * gap - UI_MX(16) + w / 2;
+    }
     *y = UI_H - 4 - lift - h + h / 2;
 }
 
@@ -460,6 +464,19 @@ int host_self_test(const char *output_dir) {
         if (hal_host_pixel(dx, dy) != UI_COL_MINT) {
             return fail("did not reach sport page");
         }
+        /* 从功能页1往表盘0滑动时，页面数点随功能页一起向右滑走；表盘静止后零圆点。 */
+        tap(HAL_KEY1);
+        frames(2);
+        save_shot("shot_dots_slide.bmp");
+        if (hal_host_pixel(dx, dy) == UI_COL_MINT) {
+            return fail("dots stayed fixed instead of sliding with sport page");
+        }
+        frames(26);
+        if (hal_host_pixel(dx, dy) == UI_COL_MINT) {
+            return fail("watchface still shows dots after settle");
+        }
+        tap(HAL_KEY3);
+        frames(20);
     }
     {
         int seen[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -503,27 +520,39 @@ int host_self_test(const char *output_dir) {
     }
     tap(HAL_KEY1);   /* 退出运动二级菜单回到一级柱状图 */
     frames(24);
-    tap(HAL_KEY3);   /* 一级柱状图按 KEY3 切到指南针，KEY2 触发校准 */
-    frames(24);
     {
-        imu9_state_t s9;
-        tap(HAL_KEY2);
-        frames(8);
-        imu9_get(&s9);
-        if (s9.mag_cal != 1) {
-            return fail("sport compass cal start");
+        uint32_t pre_compass_ram = 0, compass_ram = 0, post_compass_ram = 0;
+        ui_mem_get(&pre_compass_ram, NULL);
+        tap(HAL_KEY3);   /* 一级柱状图按 KEY3 切到指南针，KEY2 触发校准 */
+        frames(24);
+        ui_mem_get(&compass_ram, NULL);
+        if (!link_compass_asset_ready() || compass_ram <= pre_compass_ram) {
+            return fail("compass did not load dynamic asset into RAM");
         }
-        save_shot("shot_sport_compass_cal.bmp");
-        tap(HAL_KEY2);
-        frames(8);
-        imu9_get(&s9);
-        if (s9.mag_cal == 1) {
-            return fail("sport compass cal stop");
+        {
+            imu9_state_t s9;
+            tap(HAL_KEY2);
+            frames(8);
+            imu9_get(&s9);
+            if (s9.mag_cal != 1) {
+                return fail("sport compass cal start");
+            }
+            save_shot("shot_sport_compass_cal.bmp");
+            tap(HAL_KEY2);
+            frames(8);
+            imu9_get(&s9);
+            if (s9.mag_cal == 1) {
+                return fail("sport compass cal stop");
+            }
+            save_shot("shot_sport_compass.bmp");
         }
-        save_shot("shot_sport_compass.bmp");
+        tap(HAL_KEY1);   /* 指南针按 KEY1 退回一级柱状图 */
+        frames(24);
+        ui_mem_get(&post_compass_ram, NULL);
+        if (link_compass_asset_ready() || post_compass_ram != pre_compass_ram) {
+            return fail("compass leaked dynamic RAM on leave");
+        }
     }
-    tap(HAL_KEY1);   /* 指南针按 KEY1 退回一级柱状图 */
-    frames(24);
 
     {
         static const uint16_t gif_px[4] = {0xF800, 0xF800, 0xF800, 0xF800};

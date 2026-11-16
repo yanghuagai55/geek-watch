@@ -446,15 +446,17 @@ class TroubleshootingCard extends StatelessWidget {
             _StatusLine(
               icon: Icons.inbox_outlined,
               label: '已缓存通知',
-              value: '${controller.cachedNotifications} 条（最多 5 条）',
+              value: '${controller.cachedNotifications} 条（最多 ${controller.extPoolMsgMax} 条）',
               ok: controller.cachedNotifications > 0,
             )
           else
             _StatusLine(
               icon: Icons.inbox_outlined,
-              label: '消息槽',
-              value: controller.connected ? '可手动发送' : '未连接',
-              ok: controller.connected,
+              label: '持久化消息池',
+              value: controller.extFlashPresent
+                  ? '${controller.extPoolMsgCount}/${controller.extPoolMsgMax} 条'
+                  : '${controller.localMessages.length}/${controller.maxMessages} 条',
+              ok: controller.extPoolMsgCount > 0 || controller.localMessages.isNotEmpty,
             ),
           if (android &&
               (!controller.notificationAccess ||

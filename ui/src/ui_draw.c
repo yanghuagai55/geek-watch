@@ -1040,15 +1040,14 @@ static void raster_mask1(const draw_item_t *it, int band_y) {
            pic_ref[it->str_off], KIND_MASK1);
 }
 
-void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
-                       uint32_t ext_offset, uint8_t fmt,
-                       uint16_t color, uint8_t opacity) {
+static draw_item_t *ext_item_add(int16_t x, int16_t y, int16_t w, int16_t h,
+                                 uint32_t ext_offset, uint8_t fmt,
+                                 uint16_t color, uint8_t opacity) {
     draw_item_t *it;
 
     if (!items || w <= 0 || h <= 0 || !item_space() || opacity == 0 ||
-        ext_offset >= HAL_EXT_FLASH_SIZE || fmt < UI_EXT_FMT_1BPP ||
-        fmt > UI_EXT_FMT_RGB565) {
-        return;
+        fmt < UI_EXT_FMT_1BPP || fmt > UI_EXT_FMT_RGB565_RLE) {
+        return 0;
     }
     it = &items[item_n++];
     it->x = x;
@@ -1062,6 +1061,141 @@ void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
     it->scale = 1;
     stamp(it);
     it->pal_n = fmt;
+    return it;
+}
+
+void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                       uint32_t ext_offset, uint8_t fmt,
+                       uint16_t color, uint8_t opacity) {
+    if (ext_offset >= HAL_EXT_FLASH_SIZE) {
+        return;
+    }
+    (void)ext_item_add(x, y, w, h, ext_offset, fmt, color, opacity);
+}
+
+void ui_mem_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                       const uint8_t *pal4_rle, uint8_t transparent0, uint8_t opacity) {
+    int ref;
+    draw_item_t *it;
+
+    if (!pal4_rle) {
+        return;
+    }
+    ref = pic_add(pal4_rle);
+    if (ref < 0) {
+        return;
+    }
+    it = ext_item_add(x, y, w, h, 0u, UI_EXT_FMT_PAL4_RLE, transparent0 ? 1u : 0u, opacity);
+    if (it) {
+        it->pal_off = (uint16_t)(ref + 1);
+    }
+}
+
+static const uint8_t *ext_mem_ptr;
+
+static int read_img_src(uint32_t off, uint8_t *dst, uint32_t len) {
+    if (ext_mem_ptr) {
+        memcpy(dst, ext_mem_ptr + off, (size_t)len);
+        return 1;
+    }
+    return hal_ext_flash_read(off, dst, len);
+}
+
+typedef struct ext_stream {
+    uint32_t pos;
+    uint32_t end;
+    uint8_t off;
+    uint8_t len;
+    uint8_t eof;
+    uint8_t buf[48];
+} ext_stream_t;
+
+static int ext_stream_getc(ext_stream_t *s) {
+    if (s->off >= s->len) {
+        uint32_t rem = s->pos < s->end ? (s->end - s->pos) : 0u;
+        uint32_t n = rem > sizeof s->buf ? sizeof s->buf : rem;
+        if (n == 0u || !read_img_src(s->pos, s->buf, n)) {
+            s->eof = 1;
+            return 0;
+        }
+        s->pos += n;
+        s->off = 0;
+        s->len = (uint8_t)n;
+    }
+    return s->buf[s->off++];
+}
+
+static int decode_ext_rle_row(uint8_t fmt, uint32_t base_off,
+                              int sw, int sh, int sy, uint8_t *row_buf) {
+    uint32_t tbl_off = (fmt == UI_EXT_FMT_PAL4_RLE) ? (base_off + 32u) : base_off;
+    uint32_t data_off = tbl_off + (uint32_t)sh * 2u;
+    uint8_t b[4];
+    uint16_t r_start, r_end;
+    ext_stream_t s;
+    int px = 0;
+
+    if (sy == 0) {
+        if ((!ext_mem_ptr && tbl_off + 2u > HAL_EXT_FLASH_SIZE) ||
+            !read_img_src(tbl_off, b, 2u)) {
+            return 0;
+        }
+        r_start = 0u;
+        r_end = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+    } else {
+        uint32_t boff = tbl_off + (uint32_t)(sy - 1) * 2u;
+        if ((!ext_mem_ptr && boff + 4u > HAL_EXT_FLASH_SIZE) ||
+            !read_img_src(boff, b, 4u)) {
+            return 0;
+        }
+        r_start = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+        r_end = (uint16_t)(b[2] | ((uint16_t)b[3] << 8));
+    }
+    if (r_end <= r_start || (!ext_mem_ptr && data_off + (uint32_t)r_end > HAL_EXT_FLASH_SIZE)) {
+        return 0;
+    }
+    s.pos = data_off + (uint32_t)r_start;
+    s.end = data_off + (uint32_t)r_end;
+    s.off = 0;
+    s.len = 0;
+    s.eof = 0;
+
+    while (px < sw && !s.eof) {
+        int hdr = ext_stream_getc(&s);
+        int is_rep = (hdr & 0x80) != 0;
+        int n = (hdr & 0x7F) + (is_rep ? 2 : 1);
+        uint8_t p0 = 0, p1 = 0;
+        int i, nib = 0;
+        if (s.eof) break;
+        if (is_rep) {
+            p0 = (uint8_t)ext_stream_getc(&s);
+            if (fmt == UI_EXT_FMT_RGB565_RLE) {
+                p1 = (uint8_t)ext_stream_getc(&s);
+            } else {
+                p0 &= 0x0Fu;
+            }
+        }
+        for (i = 0; i < n && px < sw && !s.eof; i++) {
+            if (fmt == UI_EXT_FMT_PAL4_RLE) {
+                uint8_t idx = p0;
+                if (!is_rep) {
+                    if ((i & 1) == 0) {
+                        nib = ext_stream_getc(&s);
+                        idx = (uint8_t)((nib >> 4) & 0x0Fu);
+                    } else {
+                        idx = (uint8_t)(nib & 0x0Fu);
+                    }
+                }
+                row_buf[px++] = idx;
+            } else {
+                uint8_t lo = is_rep ? p0 : (uint8_t)ext_stream_getc(&s);
+                uint8_t hi = is_rep ? p1 : (uint8_t)ext_stream_getc(&s);
+                row_buf[px * 2] = lo;
+                row_buf[px * 2 + 1] = hi;
+                px++;
+            }
+        }
+    }
+    return !s.eof && px == sw;
 }
 
 static void raster_ext_image(const draw_item_t *it, int band_y) {
@@ -1069,21 +1203,38 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     int sw = it->w, sh = it->h;
     int scale = it->scale ? it->scale : 1;
     uint8_t fmt = it->pal_n;
-    int row_bytes;
+    int row_bytes = 0;
     int loaded_sy = -1;
     uint8_t row_buf[256];
+    uint16_t pal[16];
+    uint8_t skip0;
     sample_axis_t ay, ax0;
 
+    ext_mem_ptr = it->pal_off ? (const uint8_t *)pic_ref[it->pal_off - 1] : 0;
+    skip0 = (uint8_t)(ext_mem_ptr && it->color);
     use_item_xform(it);
     if (fmt == UI_EXT_FMT_1BPP) {
         row_bytes = (sw + 7) >> 3;
     } else if (fmt == UI_EXT_FMT_4BPP) {
         row_bytes = (sw + 1) >> 1;
+    } else if (fmt == UI_EXT_FMT_PAL4_RLE) {
+        row_bytes = sw;
     } else {
         row_bytes = sw * 2;
     }
     if (row_bytes <= 0 || row_bytes > (int)sizeof row_buf) {
         return;
+    }
+    if (fmt == UI_EXT_FMT_PAL4_RLE) {
+        uint8_t raw_pal[32];
+        int k;
+        if ((!ext_mem_ptr && (uint32_t)it->str_off + 32u > HAL_EXT_FLASH_SIZE) ||
+            !read_img_src(it->str_off, raw_pal, 32u)) {
+            return;
+        }
+        for (k = 0; k < 16; k++) {
+            pal[k] = (uint16_t)(raw_pal[k * 2] | ((uint16_t)raw_pal[k * 2 + 1] << 8));
+        }
     }
     x0 = tf_ox + it->x * tf_s / 256;
     x1 = tf_ox + (it->x + sw * scale - 1) * tf_s / 256 + 1;
@@ -1105,9 +1256,15 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
             continue;
         }
         if (sy != loaded_sy) {
-            uint32_t off = (uint32_t)it->str_off + (uint32_t)sy * (uint32_t)row_bytes;
-            if (!hal_ext_flash_read(off, row_buf, (uint32_t)row_bytes)) {
-                return;
+            if (fmt == UI_EXT_FMT_PAL4_RLE || fmt == UI_EXT_FMT_RGB565_RLE) {
+                if (!decode_ext_rle_row(fmt, it->str_off, sw, sh, sy, row_buf)) {
+                    return;
+                }
+            } else {
+                uint32_t off = (uint32_t)it->str_off + (uint32_t)sy * (uint32_t)row_bytes;
+                if (!hal_ext_flash_read(off, row_buf, (uint32_t)row_bytes)) {
+                    return;
+                }
             }
             loaded_sy = sy;
         }
@@ -1125,6 +1282,11 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
                 uint8_t a4 = (sx & 1) ? (b & 15u) : (b >> 4);
                 if (a4) {
                     pixel(x, y, band_y, it->color, (uint8_t)((int)it->opacity * a4 / 15));
+                }
+            } else if (fmt == UI_EXT_FMT_PAL4_RLE) {
+                uint8_t ci = (uint8_t)(row_buf[sx] & 15u);
+                if (!skip0 || ci != 0u) {
+                    pixel(x, y, band_y, pal[ci], it->opacity);
                 }
             } else {
                 uint16_t c = (uint16_t)(row_buf[sx * 2] | ((uint16_t)row_buf[sx * 2 + 1] << 8));

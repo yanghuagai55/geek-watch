@@ -92,15 +92,15 @@ void main() {
     await tester.tap(find.text('表盘'));
     await tester.pumpAndSettle();
     expect(find.text('表盘方案预览库'), findsOneWidget);
-    expect(find.text('32KB 外置 I2C Flash 分区规划 (0x50)'), findsOneWidget);
+    expect(find.text('32KB 外置 AT24C256 动态 ROM (0x50)'), findsOneWidget);
 
     await tester.ensureVisible(find.text('墨竹极简指针'));
     await tester.tap(find.text('墨竹极简指针'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('下发到手表（待接入 32KB）'));
-    await tester.tap(find.text('下发到手表（待接入 32KB）'));
+    await tester.ensureVisible(find.text('保存本地（连表覆盖）'));
+    await tester.tap(find.text('保存本地（连表覆盖）'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('32KB 外挂 Flash'), findsOneWidget);
+    expect(find.textContaining('AT24C256'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 

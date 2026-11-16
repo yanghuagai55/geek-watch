@@ -12,7 +12,7 @@ static int wait_ready(void) {
     if (!flash_addr) {
         return 0;
     }
-    for (tries = 0; tries < 160; tries++) {
+    for (tries = 0; tries < 450; tries++) {
         if (i2c_probe(flash_addr)) {
             return 1;
         }

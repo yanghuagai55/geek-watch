@@ -37,6 +37,7 @@ typedef struct imu9_state {
 void imu9_init(void);
 void imu9_reset(void);
 void imu9_cal_start(void);
+void imu9_load_mag_cal(int16_t ox, int16_t oy, int16_t oz);
 void imu9_feed(const hal_imu_t *imu, const hal_mag_t *mag, uint32_t now_ms);
 void imu9_get(imu9_state_t *out);
 int imu9_is_stale(uint32_t now_ms, uint32_t max_age_ms);

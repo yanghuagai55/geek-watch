@@ -222,12 +222,21 @@ class AndroidWatchBridge {
     }
   }
 
-  /// 服务里缓存的通知条数（最多 5 条）。
+  /// 服务里缓存的通知条数（最多 20 条）。
   static Future<int> messageCount() async {
     try {
       return await _channel.invokeMethod<int>('messageCount') ?? 0;
     } on PlatformException {
       return 0;
+    }
+  }
+
+  /// 清空原生服务缓存与手表 AT24C256 中的消息记录。
+  static Future<void> clearMessages() async {
+    try {
+      await _channel.invokeMethod<void>('clearMessages');
+    } on PlatformException {
+      // 服务未启动时忽略。
     }
   }
 

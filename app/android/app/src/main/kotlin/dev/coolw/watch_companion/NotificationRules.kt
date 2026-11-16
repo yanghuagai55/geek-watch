@@ -48,7 +48,7 @@ object NotificationRules {
             MODE_ALL
         }
         packages = store.getStringSet(KEY_PACKAGES, emptySet())?.toSet().orEmpty()
-        maxMessages = store.getInt(KEY_MAX, 5).coerceIn(1, 5)
+        maxMessages = store.getInt(KEY_MAX, 10).coerceIn(1, 20)
         merge = store.getBoolean(KEY_MERGE, true)
     }
 
@@ -60,7 +60,7 @@ object NotificationRules {
     ) {
         this.mode = if (mode == MODE_SELECTED) MODE_SELECTED else MODE_ALL
         this.packages = packages.toSet()
-        this.maxMessages = maxMessages.coerceIn(1, 5)
+        this.maxMessages = maxMessages.coerceIn(1, 20)
         this.merge = merge
         prefs?.edit()
             ?.putString(KEY_MODE, this.mode)

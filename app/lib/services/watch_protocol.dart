@@ -30,7 +30,20 @@ abstract final class WatchCmd {
   static const int setting = 0x18;
   static const int getSettings = 0x19;
   static const int settingsState = 0x1A;
+  static const int msgListBmp = 0x22;
+  static const int msgDetailBmp = 0x23;
+  static const int msgClear = 0x24;
+  static const int msgCount = 0x25;
+  static const int maskRle = 0x26;
   static const int sport = 0x27;
+  static const int extImgMeta = 0x28;
+  static const int extImgData = 0x29;
+  static const int setConfig = 0x2A;
+  static const int getConfig = 0x2B;
+  static const int configState = 0x2C;
+  static const int extOp = 0x2D;
+  static const int extPoolState = 0x2E;
+  static const int extAsset = 0x2F;
   static const int nop = 0x7F;
 }
 
@@ -43,7 +56,7 @@ abstract final class WatchControl {
 }
 
 /// 0x1A：手表当前设置。key 与固件 ui_settings_apply 一致：
-/// 1 抬腕 2 按键音 3 亮度 4 蓝牙 5 状态灯 6 熄屏。
+/// 1 抬腕 2 震动(1207马达) 3 亮度 4 蓝牙 5 状态灯 6 熄屏。
 class WatchSettings {
   const WatchSettings({
     required this.raiseWrist,
@@ -521,6 +534,195 @@ class WatchSensorData {
       timestamp: timestamp ?? DateTime.now(),
       magCalState: magCalState,
       gyroCalState: gyroCalState,
+    );
+  }
+}
+
+int argbToRgb565(int argb) {
+  final r = (argb >> 16) & 0xFF;
+  final g = (argb >> 8) & 0xFF;
+  final b = argb & 0xFF;
+  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+int rgb565ToArgb(int c565) {
+  final r5 = (c565 >> 11) & 0x1F;
+  final g6 = (c565 >> 5) & 0x3F;
+  final b5 = c565 & 0x1F;
+  final r = (r5 << 3) | (r5 >> 2);
+  final g = (g6 << 2) | (g6 >> 4);
+  final b = (b5 << 3) | (b5 >> 2);
+  return 0xFF000000 | (r << 16) | (g << 8) | b;
+}
+
+/// 手表 0x2A/0x2C 完整持久化配置 + 表盘样式 + AT24C256 I2C Flash 状态。
+class WatchConfigBundle {
+  const WatchConfigBundle({
+    required this.saveToI2c,
+    required this.appOverride,
+    required this.use24h,
+    required this.debug,
+    required this.raiseWrist,
+    required this.keyBeep,
+    required this.brightness,
+    required this.ledMode,
+    required this.screenOff,
+    required this.stepGoal,
+    required this.dialId,
+    required this.dialTop,
+    required this.dialBot,
+    required this.dialFlags,
+    required this.dialTextColor,
+    required this.dialAccentColor,
+    required this.dialBgColor,
+    this.autoClearMessages = false,
+    this.extFlashPresent = false,
+    this.cfgLoadedFromI2c = false,
+    this.imgReady = false,
+    this.magCalSaved = false,
+    this.cfgSource = 0,
+    this.imgBytes = 0,
+    this.imgFmt = 0,
+    this.extI2cAddr = 0,
+  });
+
+  final bool saveToI2c;
+  final bool appOverride;
+  final bool use24h;
+  final bool debug;
+  final bool autoClearMessages;
+  final bool raiseWrist;
+  final bool keyBeep;
+  final int brightness;
+  final int ledMode;
+  final int screenOff;
+  final int stepGoal;
+  final int dialId;
+  final int dialTop;
+  final int dialBot;
+  final int dialFlags;
+  final int dialTextColor;
+  final int dialAccentColor;
+  final int dialBgColor;
+  final bool extFlashPresent;
+  final bool cfgLoadedFromI2c;
+  final bool imgReady;
+  final bool magCalSaved;
+  final int cfgSource;
+  final int imgBytes;
+  final int imgFmt;
+  final int extI2cAddr;
+
+  /// 编码为 `0x2A` 下发给单片机的 20 字节载荷（与 C `settings_pack_wire` 一一对应）。
+  Uint8List toSetConfigPayload() {
+    final out = Uint8List(20);
+    final goal = stepGoal.clamp(1000, 100000);
+    out[0] = (saveToI2c ? 0x01 : 0) |
+        (appOverride ? 0x02 : 0) |
+        (use24h ? 0x04 : 0) |
+        (debug ? 0x08 : 0) |
+        (autoClearMessages ? 0x20 : 0);
+    out[1] = raiseWrist ? 1 : 0;
+    out[2] = keyBeep ? 1 : 0;
+    out[3] = brightness.clamp(0, 2);
+    out[4] = ledMode.clamp(0, 2);
+    out[5] = screenOff.clamp(0, 4);
+    out[6] = goal & 0xFF;
+    out[7] = (goal >> 8) & 0xFF;
+    out[8] = (goal >> 16) & 0xFF;
+    out[9] = (goal >> 24) & 0xFF;
+    out[10] = dialId.clamp(0, 3);
+    out[11] = dialTop.clamp(0, 4);
+    out[12] = dialBot.clamp(0, 4);
+    out[13] = dialFlags & 0xFF;
+    final fg = argbToRgb565(dialTextColor);
+    final ac = argbToRgb565(dialAccentColor);
+    final bg = argbToRgb565(dialBgColor);
+    out[14] = fg & 0xFF;
+    out[15] = (fg >> 8) & 0xFF;
+    out[16] = ac & 0xFF;
+    out[17] = (ac >> 8) & 0xFF;
+    out[18] = bg & 0xFF;
+    out[19] = (bg >> 8) & 0xFF;
+    return out;
+  }
+
+  static WatchConfigBundle? fromFrame(WatchFrame frame) {
+    final d = frame.data;
+    if (frame.cmd != WatchCmd.configState || d.length < 26) return null;
+    int u16(int off) => d[off] | (d[off + 1] << 8);
+    int u32(int off) =>
+        d[off] | (d[off + 1] << 8) | (d[off + 2] << 16) | (d[off + 3] << 24);
+    final hw = d[20];
+    return WatchConfigBundle(
+      saveToI2c: (d[0] & 0x01) != 0,
+      appOverride: (d[0] & 0x02) != 0,
+      use24h: (d[0] & 0x04) != 0,
+      debug: (d[0] & 0x08) != 0,
+      autoClearMessages: (d[0] & 0x20) != 0,
+      raiseWrist: d[1] != 0,
+      keyBeep: d[2] != 0,
+      brightness: d[3].clamp(0, 2),
+      ledMode: d[4].clamp(0, 2),
+      screenOff: d[5].clamp(0, 4),
+      stepGoal: u32(6),
+      dialId: d[10].clamp(0, 3),
+      dialTop: d[11].clamp(0, 4),
+      dialBot: d[12].clamp(0, 4),
+      dialFlags: d[13],
+      dialTextColor: rgb565ToArgb(u16(14)),
+      dialAccentColor: rgb565ToArgb(u16(16)),
+      dialBgColor: rgb565ToArgb(u16(18)),
+      extFlashPresent: (hw & 0x01) != 0,
+      cfgLoadedFromI2c: (hw & 0x02) != 0,
+      imgReady: (hw & 0x04) != 0,
+      magCalSaved: (hw & 0x08) != 0,
+      cfgSource: d[21],
+      imgBytes: u16(22),
+      imgFmt: d[24],
+      extI2cAddr: d[25],
+    );
+  }
+}
+
+/// AT24C256 统一外置动态 ROM Pool 状态（0x2E，12/13 字节）。
+class WatchExtPoolState {
+  const WatchExtPoolState({
+    required this.poolTotal,
+    required this.usedBytes,
+    required this.freeContiguous,
+    required this.msgBytes,
+    required this.imgBytes,
+    required this.msgCount,
+    required this.msgMax,
+    this.assetFlags = 0,
+    this.hasAssetFlags = false,
+  });
+
+  final int poolTotal;
+  final int usedBytes;
+  final int freeContiguous;
+  final int msgBytes;
+  final int imgBytes;
+  final int msgCount;
+  final int msgMax;
+  final int assetFlags;
+  final bool hasAssetFlags;
+
+  static WatchExtPoolState? fromFrame(WatchFrame frame) {
+    final d = frame.data;
+    if (frame.cmd != WatchCmd.extPoolState || d.length < 12) return null;
+    int u16(int off) => d[off] | (d[off + 1] << 8);
+    return WatchExtPoolState(
+      poolTotal: u16(0),
+      usedBytes: u16(2),
+      freeContiguous: u16(4),
+      msgBytes: u16(6),
+      imgBytes: u16(8),
+      msgCount: d[10],
+      msgMax: d[11],
+      assetFlags: d.length >= 13 ? d[12] : 0,
+      hasAssetFlags: d.length >= 13,
     );
   }
 }

@@ -52,6 +52,7 @@ class WatchLinkService : Service() {
         private const val KEY_ADDRESS = "last_address"
         private const val KEY_MEDIA = "media_follow"
         private const val KEY_NOTIFY = "notification_forward"
+        private const val KEY_MESSAGES = "cached_messages"
 
         @Volatile
         var instance: WatchLinkService? = null
@@ -145,6 +146,7 @@ class WatchLinkService : Service() {
         mediaFollow = prefs.getBoolean(KEY_MEDIA, true)
         notificationForward = prefs.getBoolean(KEY_NOTIFY, true)
         NotificationRules.load(this)
+        loadPersistedMessages()
         createChannel()
     }
 
@@ -693,7 +695,140 @@ class WatchLinkService : Service() {
 
     // ---- 通知缓存与消息页 ---------------------------------------------------
 
-    /** 通知只进缓存，等手表打开一级消息页时再要。 */
+    private fun loadPersistedMessages() {
+        val raw = prefs.getString(KEY_MESSAGES, null) ?: return
+        try {
+            val arr = org.json.JSONArray(raw)
+            messages.clear()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                messages.addLast(
+                    CachedMessage(
+                        key = obj.optString("key"),
+                        pkg = obj.optString("pkg"),
+                        item = WatchMessageRasterizer.Item(
+                            app = obj.optString("app"),
+                            title = obj.optString("title"),
+                            text = obj.optString("text"),
+                        ),
+                    ),
+                )
+            }
+            while (messages.size > NotificationRules.maxMessages) {
+                messages.removeLast()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun persistMessages() {
+        val arr = org.json.JSONArray()
+        for (entry in messages) {
+            val obj = org.json.JSONObject()
+            obj.put("key", entry.key)
+            obj.put("pkg", entry.pkg)
+            obj.put("app", entry.item.app)
+            obj.put("title", entry.item.title)
+            obj.put("text", entry.item.text)
+            arr.put(obj)
+        }
+        prefs.edit().putString(KEY_MESSAGES, arr.toString()).apply()
+    }
+
+    fun clearNotifications() {
+        mainHandler.post {
+            messages.clear()
+            persistMessages()
+            if (connected.get()) {
+                worker.execute {
+                    synchronized(bitmapLock) {
+                        writeOrReport(buildFrame(0x24, ByteArray(0)))
+                        writeOrReport(buildFrame(0x2D, byteArrayOf(0x00)))
+                    }
+                }
+            }
+        }
+    }
+
+    /** 推送一条置顶消息到手表片外 AT24C256 动态 ROM（0x2D prepend + 行点阵 + 槽位 0 详情）。 */
+    private fun pushPrependToWatch(count: Int, item: WatchMessageRasterizer.Item) {
+        worker.execute {
+            if (!connected.get()) return@execute
+            waitForCapture()
+            if (!connected.get()) return@execute
+            val rowBits = WatchMessageRasterizer.row(item)
+            val detailBits = WatchMessageRasterizer.detail(item)
+            val ok = synchronized(bitmapLock) {
+                if (!writeOrReport(buildFrame(0x2D, byteArrayOf(0x01, count.coerceIn(1, 20).toByte())))) {
+                    return@synchronized false
+                }
+                Thread.sleep(6)
+                val chunks = (rowBits.size + 127) / 128
+                for (sub in 0 until chunks) {
+                    val start = sub * 128
+                    val len = minOf(128, rowBits.size - start)
+                    val payload = ByteArray(2 + len)
+                    payload[0] = 0x02
+                    payload[1] = sub.toByte()
+                    System.arraycopy(rowBits, start, payload, 2, len)
+                    if (!writeOrReport(buildFrame(0x2D, payload))) return@synchronized false
+                    Thread.sleep(6)
+                }
+                true
+            }
+            if (ok) {
+                sendDetailSlot(0, detailBits)
+                synchronized(bitmapLock) {
+                    writeOrReport(buildFrame(0x2D, byteArrayOf(0x00)))
+                }
+            }
+        }
+    }
+
+    private fun sendDetailSlot(slot: Int, bits: ByteArray): Boolean =
+        synchronized(bitmapLock) {
+            if (bits.isEmpty() || bits.size % 128 != 0 || slot !in 0..19) return false
+            bitmapBusy.set(true)
+            try {
+                val chunks = bits.size / 128
+                for (chunk in 0 until chunks) {
+                    if (!connected.get()) return false
+                    waitForCapture()
+                    if (!connected.get()) return false
+                    val encoded = rleEncode(bits, chunk * 128)
+                    val frame = if (encoded.size <= 125) {
+                        val payload = ByteArray(3 + encoded.size)
+                        payload[0] = 0x05
+                        payload[1] = slot.toByte()
+                        payload[2] = chunk.toByte()
+                        System.arraycopy(encoded, 0, payload, 3, encoded.size)
+                        buildFrame(0x26, payload)
+                    } else {
+                        val payload = ByteArray(2 + 128)
+                        payload[0] = slot.toByte()
+                        payload[1] = chunk.toByte()
+                        System.arraycopy(bits, chunk * 128, payload, 2, 128)
+                        buildFrame(0x23, payload)
+                    }
+                    var sent = false
+                    var tries = 0
+                    while (!sent && tries < 80) {
+                        sent = writeOrReport(frame)
+                        if (sent) break
+                        if (!connected.get() || !scanner.imageGuardActive()) return false
+                        Thread.sleep(50)
+                        tries++
+                    }
+                    if (!sent) return false
+                    Thread.sleep(6)
+                }
+                true
+            } finally {
+                bitmapBusy.set(false)
+            }
+        }
+
+    /** 通知入本机持久化缓存，已连接时同步增量写入手表 AT24C256 动态 ROM。 */
     fun cacheNotification(
         app: String,
         title: String,
@@ -703,29 +838,53 @@ class WatchLinkService : Service() {
     ) {
         if (!notificationForward) return
         mainHandler.post {
+            val hadSame = messages.any {
+                it.key == key || (NotificationRules.merge && it.pkg == pkg)
+            }
             messages.removeAll { it.key == key }
             if (NotificationRules.merge) {
                 // 同一应用只留最新一条，避免占满全部位置。
                 messages.removeAll { it.pkg == pkg }
             }
-            messages.addFirst(
-                CachedMessage(
-                    key,
-                    pkg,
-                    WatchMessageRasterizer.Item(app, title, text),
-                ),
-            )
+            val item = WatchMessageRasterizer.Item(app, title, text)
+            messages.addFirst(CachedMessage(key, pkg, item))
             trimMessages()
+            persistMessages()
+            if (connected.get()) {
+                if (!hadSame) {
+                    pushPrependToWatch(messages.size, item)
+                } else {
+                    val items = messages.map { it.item }
+                    worker.execute {
+                        synchronized(bitmapLock) {
+                            writeOrReport(buildFrame(0x25, byteArrayOf(items.size.toByte())))
+                        }
+                        if (sendMaskChunks(0x22, WatchMessageRasterizer.list(items), 2)) {
+                            sendDetailSlot(0, WatchMessageRasterizer.detail(item))
+                            synchronized(bitmapLock) {
+                                writeOrReport(buildFrame(0x2D, byteArrayOf(0x00)))
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     fun removeNotification(key: String) {
-        mainHandler.post { messages.removeAll { it.key == key } }
+        mainHandler.post {
+            if (messages.removeAll { it.key == key }) {
+                persistMessages()
+            }
+        }
     }
 
     /** 规则修改后立即把缓存收紧到新的条数上限。 */
     fun applyMessageRules() {
-        mainHandler.post { trimMessages() }
+        mainHandler.post {
+            trimMessages()
+            persistMessages()
+        }
     }
 
     private fun trimMessages() {
@@ -736,7 +895,7 @@ class WatchLinkService : Service() {
 
     fun messageCount(): Int = messages.size
 
-    /** 手表打开一级消息页：渲染当前缓存的列表并下发，期间暂停媒体推送。 */
+    /** 手表打开一级消息页：若本机有缓存则同步点阵，无缓存时保留手表 AT24C256 持久化历史。 */
     private fun onMessageListRequested() {
         mainHandler.post {
             messageMode = true
@@ -744,7 +903,6 @@ class WatchLinkService : Service() {
             mediaRunnable = null
             val items = messages.map { it.item }
             if (items.isEmpty()) {
-                worker.execute { writeOrReport(buildFrame(0x24, ByteArray(0))) }
                 return@post
             }
             Log.d("WatchLink", "消息列表请求：${items.size} 条")
@@ -760,13 +918,13 @@ class WatchLinkService : Service() {
         }
     }
 
-    /** 选中某条消息：渲染 128×160 详情点阵。 */
+    /** 选中某条消息：本机存在缓存时刷新 128×160 详情点阵；否则沿用手表本地动态 ROM。 */
     private fun onMessageDetailRequested(index: Int) {
         mainHandler.post {
             messageMode = true
-            val item = messages.getOrNull(index)?.item
+            val item = messages.getOrNull(index)?.item ?: return@post
             worker.execute {
-                sendMaskChunks(0x23, WatchMessageRasterizer.detail(item), 3)
+                sendDetailSlot(index, WatchMessageRasterizer.detail(item))
             }
         }
     }

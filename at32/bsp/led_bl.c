@@ -67,7 +67,6 @@ void led_tick(uint32_t now_ms) {
 
 void backlight_init(void) {
     gpio_init_type g;
-    tmr_output_config_type oc;
 
     crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
     crm_periph_clock_enable(CRM_TMR3_PERIPH_CLOCK, TRUE);
@@ -82,23 +81,26 @@ void backlight_init(void) {
     gpio_init(LCD_BLK_PORT, &g);
     gpio_pin_mux_config(LCD_BLK_PORT, GPIO_PINS_SOURCE0, GPIO_MUX_1);
 
-    tmr_base_init(TMR3, BL_PWM_PERIOD - 1u, 0u);
-    tmr_cnt_dir_set(TMR3, TMR_COUNT_UP);
-    tmr_output_default_para_init(&oc);
-    oc.oc_mode = TMR_OUTPUT_CONTROL_PWM_MODE_A;
-    oc.oc_idle_state = FALSE;
-    oc.oc_polarity = TMR_OUTPUT_ACTIVE_HIGH;
-    oc.oc_output_state = TRUE;
-    tmr_output_channel_config(TMR3, TMR_SELECT_CHANNEL_3, &oc);
-    tmr_channel_value_set(TMR3, TMR_SELECT_CHANNEL_3, BL_PWM_PERIOD);
-    tmr_period_buffer_enable(TMR3, TRUE);
-    tmr_output_channel_buffer_enable(TMR3, TMR_SELECT_CHANNEL_3, TRUE);
-    tmr_counter_enable(TMR3, TRUE);
+    TMR3->pr = BL_PWM_PERIOD - 1u;
+    TMR3->div = 0u;
+    TMR3->swevt_bit.ovfswtr = TRUE;
+    TMR3->ctrl1_bit.cnt_dir = TMR_COUNT_UP;
+    TMR3->ctrl1_bit.prben = TRUE;
+    TMR3->cm2_output_bit.c3c = FALSE;
+    TMR3->cm2_output_bit.c3octrl = TMR_OUTPUT_CONTROL_PWM_MODE_A;
+    TMR3->cm2_output_bit.c3oben = TRUE;
+    TMR3->ctrl2_bit.c3ios = FALSE;
+    TMR3->ctrl2_bit.c3cios = FALSE;
+    TMR3->cctrl_bit.c3p = TMR_OUTPUT_ACTIVE_HIGH;
+    TMR3->cctrl_bit.c3cp = TMR_OUTPUT_ACTIVE_HIGH;
+    TMR3->cctrl_bit.c3cen = FALSE;
+    TMR3->cctrl_bit.c3en = TRUE;
+    TMR3->c3dt = BL_PWM_PERIOD;
+    TMR3->ctrl1_bit.tmren = TRUE;
 }
 
 void backlight_set(uint8_t level) {
-    tmr_channel_value_set(TMR3, TMR_SELECT_CHANNEL_3,
-                          (uint32_t)level * BL_PWM_PERIOD / 255u);
+    TMR3->c3dt = (uint32_t)level * BL_PWM_PERIOD / 255u;
 }
 
 int ble_state_read(void) {

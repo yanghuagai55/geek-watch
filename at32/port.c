@@ -64,9 +64,9 @@ static int cpu_shown_ok;
 static int clock_on;
 static hal_clock_t clock_base;
 static uint32_t clock_ms;
-static unsigned char rx_q[128];
+static unsigned char rx_q[256];
 static volatile unsigned char rx_r;
-static volatile unsigned char rx_n;
+static volatile uint16_t rx_n;
 static unsigned char clock_src;
 
 /* 上电自检结果与最近一次采样，供 SWD 直接读 RAM 验证（不依赖蓝牙）。
@@ -76,7 +76,6 @@ volatile int16_t g_imu_ax, g_imu_ay, g_imu_az;
 volatile int16_t g_imu_gx, g_imu_gy, g_imu_gz;
 volatile int16_t g_mag_x, g_mag_y, g_mag_z;
 volatile uint16_t g_battery_mv;
-volatile uint8_t g_i2c_found[8];
 volatile uint8_t g_imu_read_ok;
 volatile uint8_t g_mag_read_ok;
 /* 最近一次调试快照，SWD 直接按字符串读，不依赖蓝牙。 */
@@ -243,8 +242,11 @@ static void spi_setup(void) {
 }
 
 static void usart_setup(void) {
+    uint32_t apb_hz = hal_sysclk_mhz() * 1000000u;
     crm_periph_clock_enable(CRM_USART2_PERIPH_CLOCK, TRUE);
-    usart_init(USART2, BLE_UART_BAUD, USART_DATA_8BITS, USART_STOP_1_BIT);
+    USART2->baudr_bit.div = (apb_hz + BLE_UART_BAUD / 2u) / BLE_UART_BAUD;
+    USART2->ctrl1_bit.dbn = USART_DATA_8BITS;
+    USART2->ctrl2_bit.stopbn = USART_STOP_1_BIT;
     usart_transmitter_enable(USART2, TRUE);
     usart_receiver_enable(USART2, TRUE);
     usart_interrupt_enable(USART2, USART_RDBF_INT, TRUE);
@@ -275,36 +277,6 @@ static void uart_puts(const char *s) {
     while(*s) {
         uart_putc((unsigned char)*s++);
     }
-}
-
-static void uart_hex8(unsigned char v) {
-    static const char hex[] = "0123456789ABCDEF";
-    uart_putc((unsigned char)hex[v >> 4]);
-    uart_putc((unsigned char)hex[v & 15u]);
-}
-
-/* 上电扫一遍 I2C：预期 0D(QMC5883L) / 46(BMP580) / 68(MPU6050)。
-   蓝牙串口直接看这一行，最省事。 */
-static void i2c_log_scan(void) {
-    int addr;
-    int found = 0;
-    int slot = 0;
-
-    uart_puts("i2c:");
-    for(addr = 0x08; addr < 0x78; addr++) {
-        if(i2c_probe((uint8_t)addr)) {
-            uart_putc(' ');
-            uart_hex8((unsigned char)addr);
-            if(slot < (int)sizeof g_i2c_found) {
-                g_i2c_found[slot++] = (uint8_t)addr;
-            }
-            found = 1;
-        }
-    }
-    if(!found) {
-        uart_puts(" none");
-    }
-    uart_puts("\r\n");
 }
 
 static void delay_ms(unsigned int ms) {
@@ -665,34 +637,22 @@ void board_init(void) {
     spi_setup();
     usart_setup();
     uart_puts("boot\r\n");
-    if(clock_src == 2) {
-        uart_puts("120X\r\n");
-    } else if(clock_src == 1) {
-        uart_puts("120I\r\n");
-    } else if(clock_src == 4) {
-        uart_puts("48\r\n");
-    } else {
-        uart_puts("8\r\n");
-    }
-    uart_puts("hw\r\n");
     lcd_init();
-    uart_puts("lcd\r\n");
 
     i2c_bus_init();
-    i2c_log_scan();
     {
         int mpu_ok = mpu6050_init();
         int mag_ok = qmc5883l_init();
+#ifdef WATCH_BARO_ENABLE
         int baro_ok = bmp580_init();
+#else
+        int baro_ok = 0;
+#endif
         int ext_ok = ext_flash_init();
         g_sensor_ok = (uint8_t)((mpu_ok ? 1u : 0u) |
                                 (mag_ok ? 2u : 0u) |
                                 (baro_ok ? 4u : 0u) |
                                 (ext_ok ? 8u : 0u));
-        uart_puts(mpu_ok ? "mpu OK\r\n" : "mpu FAIL\r\n");
-        uart_puts(mag_ok ? "qmc OK\r\n" : "qmc FAIL\r\n");
-        uart_puts(baro_ok ? "bmp OK\r\n" : "bmp FAIL\r\n");
-        uart_puts(ext_ok ? "ext OK\r\n" : "ext --\r\n");
     }
     adc_init();
     beep_init();
@@ -700,12 +660,11 @@ void board_init(void) {
     backlight_init();
     backlight_set(255);
     imu9_init();
-    /* 上电把 I2C 扫描 + QMC 寄存器存一份到 RAM，SWD 可读。 */
+    /* 上电把 I2C 扫描 + QMC 寄存器存一份到 RAM，SWD 与蓝牙 DBG 共用。 */
     g_battery_mv = battery_mv();
     (void)hal_debug_snapshot(g_debug_line, (int)sizeof g_debug_line);
     uart_puts(g_debug_line);
     uart_puts("\r\n");
-    uart_puts("sens\r\n");
 }
 
 /* ---- 传感器/执行器 HAL 包装 ---- */
@@ -751,7 +710,12 @@ int hal_mag_read(hal_mag_t *out) {
 }
 
 int hal_baro_read(hal_baro_t *out) {
+#ifdef WATCH_BARO_ENABLE
     return bmp580_read(out);
+#else
+    (void)out;
+    return 0;
+#endif
 }
 
 uint16_t hal_battery_mv(void) {
@@ -889,6 +853,10 @@ void hal_ram_get(uint32_t *used, uint32_t *total) {
 
 int hal_ext_flash_present(void) {
     return ext_flash_present();
+}
+
+uint8_t hal_ext_flash_addr(void) {
+    return ext_flash_addr();
 }
 
 int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {

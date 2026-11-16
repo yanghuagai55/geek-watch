@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
@@ -12,6 +13,7 @@ import '../services/snapshot_image.dart';
 import '../services/system_tray.dart';
 import '../services/text_bitmap.dart';
 import '../services/text_paginator.dart';
+import '../services/watch_message_rasterizer.dart';
 import '../services/watch_protocol.dart';
 import '../services/watch_session.dart';
 import '../services/watch_transport.dart';
@@ -36,6 +38,8 @@ class WatchController extends ChangeNotifier {
     _statsSub = session?.stats.listen(_applyStats);
     _controlsSub = session?.controls.listen(_applyControl);
     _settingsSub = session?.watchSettings.listen(_applyWatchSettings);
+    _configSub = session?.watchConfigs.listen(_applyWatchConfig);
+    _extPoolSub = session?.extPoolStates.listen(_applyExtPool);
     _sportSub = session?.sport.listen(_applySport);
     _sensorSub = session?.sensors.listen(_applySensor);
     if (startTicker) {
@@ -58,6 +62,8 @@ class WatchController extends ChangeNotifier {
   StreamSubscription<WatchStats>? _statsSub;
   StreamSubscription<int>? _controlsSub;
   StreamSubscription<WatchSettings>? _settingsSub;
+  StreamSubscription<WatchConfigBundle>? _configSub;
+  StreamSubscription<WatchExtPoolState>? _extPoolSub;
   StreamSubscription<WatchSport>? _sportSub;
   StreamSubscription<WatchSensorData>? _sensorSub;
 
@@ -74,14 +80,54 @@ class WatchController extends ChangeNotifier {
   bool liquidGlass = true;
   bool use24Hour = true;
 
-  /// 手表实际设置（0x1A 回传）。
+  /// 手表实际设置（0x1A / 0x2C 回传）与 App 最高优先级策略。
+  bool appPriorityOverride = true;
   bool raiseWrist = true;
   bool keyBeep = true;
   int watchBrightness = 1;
   bool watchBluetooth = true;
   int ledMode = 1;
   int screenOff = 0;
+  bool watchDebugOverlay = false;
   bool watchSettingsLoaded = false;
+
+  /// 表盘全系列自定义配置（与固件 0x2A/0x2C 及 AT24C256 持久化槽完全对齐）。
+  int dialId = 0; // 0=琥珀数字, 1=墨竹指针, 2=九轴仪表, 3=自定义相册
+  int dialTop = 0; // 0=日期/媒体, 1=步数, 2=航向, 3=电量, 4=极简
+  int dialBot = 1;
+  bool dialShowSeconds = true;
+  int dialPhotoAlign = 0; // 0=居中, 1=居顶, 2=居底
+  bool dialPhotoScrim = true;
+  int dialTextColor = 0xFFF0F1E4;
+  int dialAccentColor = 0xFF73D4AE;
+  int dialBgColor = 0xFF000000;
+  Uint8List? customDialPreviewRgba;
+
+  /// 单片机外置 32KB AT24C256 I2C EEPROM 实时状态（由 0x2C / 0x2E 回传）。
+  bool extFlashPresent = false;
+  int extI2cAddr = 0;
+  bool cfgLoadedFromI2c = false;
+  bool mcuImgReady = false;
+  int mcuImgBytes = 0;
+  int mcuImgFmt = 0;
+  bool mcuMagCalSaved = false;
+  int mcuCfgSource = 0; // 0=默认, 1=I2C模块, 2=App覆盖
+  bool autoClearMessages = false;
+  WatchExtPoolState? extPoolState;
+  List<WatchMessageItem> localMessages = <WatchMessageItem>[];
+
+  int get extPoolTotal => extPoolState?.poolTotal ?? 32000;
+  int get extPoolUsed => extPoolState?.usedBytes ?? 0;
+  int get extPoolFreeMax =>
+      extPoolState?.freeContiguous ?? (extPoolTotal - extPoolUsed).clamp(0, extPoolTotal);
+  int get extPoolMsgBytes => extPoolState?.msgBytes ?? 0;
+  int get extPoolMsgCount => extPoolState?.msgCount ?? 0;
+  int get extPoolMsgMax => extPoolState?.msgMax ?? 20;
+  bool _initialOverridePending = false;
+  bool _pullingFromWatch = false;
+  bool _syncingAssets = false;
+  int _syncedAssetMask = 0;
+  bool _disposed = false;
 
   /// 今日运动（0x27）。断开后保留最后一次读数，界面会标明“上次同步”。
   int steps = 0;
@@ -108,7 +154,7 @@ class WatchController extends ChangeNotifier {
   double mediaPosition = 0;
   double mediaDuration = 0;
 
-  /// Android：服务缓存的通知条数（最多 5 条）。
+  /// 服务或本机缓存的消息条数（AT24C256 动态 ROM 最多 20 条）。
   int cachedNotifications = 0;
 
   bool get hasMedia => mediaTitle.isNotEmpty;
@@ -267,10 +313,15 @@ class WatchController extends ChangeNotifier {
           active.syncTime(DateTime.now()).catchError((Object _) => false),
         );
       }
+      _initialOverridePending = appPriorityOverride;
+      _syncedAssetMask = 0;
+      await _syncConfigOnConnect().catchError((Object _) {});
+      if (_disposed || !connected) return null;
       unawaited(active.requestSport().catchError((Object _) => false));
-      unawaited(capturePreview());
+      unawaited(capturePreview().catchError((Object _) {}));
       return null;
     } catch (error) {
+      if (_disposed) return null;
       lastError = error is TransportException ? error.message : '$error';
       notifyListeners();
       return lastError;
@@ -359,14 +410,14 @@ class WatchController extends ChangeNotifier {
   /// 抓一帧真机画面给主页预览用；失败时保留旧画面。
   Future<void> capturePreview() async {
     final active = session;
-    if (active == null || !connected || capturingPreview) return;
+    if (_disposed || active == null || !connected || capturingPreview) return;
     capturingPreview = true;
     notifyListeners();
     try {
       final snapshot = await active.requestSnapshot();
-      if (snapshot == null) return;
+      if (_disposed || snapshot == null) return;
       final image = await decodeWatchSnapshot(snapshot);
-      if (!connected) {
+      if (_disposed || !connected) {
         image.dispose();
         return;
       }
@@ -374,7 +425,7 @@ class WatchController extends ChangeNotifier {
       deviceScreen = image;
     } finally {
       capturingPreview = false;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -385,6 +436,7 @@ class WatchController extends ChangeNotifier {
   }
 
   void _onLinkState(LinkState state) {
+    if (_disposed) return;
     linkState = state;
     if (state != LinkState.connected) {
       _liveTelemetry = false;
@@ -402,6 +454,12 @@ class WatchController extends ChangeNotifier {
       _stopMediaPager();
       deviceScreen?.dispose();
       deviceScreen = null;
+      _initialOverridePending = false;
+      _pullingFromWatch = false;
+      extFlashPresent = false;
+      extI2cAddr = 0;
+      cfgLoadedFromI2c = false;
+      mcuCfgSource = 0;
     } else {
       unawaited(_syncAndroidIntegration());
     }
@@ -452,14 +510,254 @@ class WatchController extends ChangeNotifier {
   }
 
   void _applyWatchSettings(WatchSettings settings) {
-    raiseWrist = settings.raiseWrist;
-    keyBeep = settings.keyBeep;
-    watchBrightness = settings.brightness;
     watchBluetooth = settings.bluetooth;
-    ledMode = settings.ledMode;
-    screenOff = settings.screenOff;
+    watchSettingsLoaded = true;
+    // 开启 App 最高优先级且处于刚连接覆写期时，不让 MCU 旧设置反向覆盖 App 配置。
+    if (!(appPriorityOverride && _initialOverridePending && !_pullingFromWatch)) {
+      raiseWrist = settings.raiseWrist;
+      keyBeep = settings.keyBeep;
+      watchBrightness = settings.brightness;
+      ledMode = settings.ledMode;
+      screenOff = settings.screenOff;
+    }
+    notifyListeners();
+  }
+
+  void _applyWatchConfig(WatchConfigBundle cfg) {
+    extFlashPresent = cfg.extFlashPresent;
+    extI2cAddr = cfg.extI2cAddr;
+    cfgLoadedFromI2c = cfg.cfgLoadedFromI2c;
+    mcuImgReady = cfg.imgReady;
+    mcuImgBytes = cfg.imgBytes;
+    mcuImgFmt = cfg.imgFmt;
+    mcuMagCalSaved = cfg.magCalSaved;
+    mcuCfgSource = cfg.cfgSource;
+
+    if (!appPriorityOverride || !_initialOverridePending || _pullingFromWatch) {
+      if (_pullingFromWatch || !appPriorityOverride) {
+        raiseWrist = cfg.raiseWrist;
+        keyBeep = cfg.keyBeep;
+        watchBrightness = cfg.brightness;
+        ledMode = cfg.ledMode;
+        screenOff = cfg.screenOff;
+        use24Hour = cfg.use24h;
+        watchDebugOverlay = cfg.debug;
+        autoClearMessages = cfg.autoClearMessages;
+        stepGoal = cfg.stepGoal > 0 ? cfg.stepGoal : 8000;
+        dialId = cfg.dialId;
+        dialTop = cfg.dialTop;
+        dialBot = cfg.dialBot;
+        dialShowSeconds = (cfg.dialFlags & 0x01) != 0;
+        dialPhotoAlign = (cfg.dialFlags >> 1) & 0x03;
+        dialPhotoScrim = (cfg.dialFlags & 0x08) != 0;
+        dialTextColor = cfg.dialTextColor;
+        dialAccentColor = cfg.dialAccentColor;
+        dialBgColor = cfg.dialBgColor;
+        if (_pullingFromWatch) {
+          _pullingFromWatch = false;
+          onSettingsChanged?.call();
+        }
+      }
+    }
     watchSettingsLoaded = true;
     notifyListeners();
+  }
+
+  WatchConfigBundle buildConfigBundle({bool saveToI2c = true}) {
+    final flags = (dialShowSeconds ? 0x01 : 0) |
+        ((dialPhotoAlign.clamp(0, 2) & 0x03) << 1) |
+        (dialPhotoScrim ? 0x08 : 0);
+    return WatchConfigBundle(
+      saveToI2c: saveToI2c,
+      appOverride: appPriorityOverride,
+      use24h: use24Hour,
+      debug: watchDebugOverlay,
+      autoClearMessages: autoClearMessages,
+      raiseWrist: raiseWrist,
+      keyBeep: keyBeep,
+      brightness: watchBrightness,
+      ledMode: ledMode,
+      screenOff: screenOff,
+      stepGoal: stepGoal,
+      dialId: dialId,
+      dialTop: dialTop,
+      dialBot: dialBot,
+      dialFlags: flags,
+      dialTextColor: dialTextColor,
+      dialAccentColor: dialAccentColor,
+      dialBgColor: dialBgColor,
+    );
+  }
+
+  Future<void> _syncConfigOnConnect() async {
+    final active = session;
+    if (active == null || !connected) return;
+    try {
+      await active.requestConfig();
+      if (appPriorityOverride && connected) {
+        await pushConfigToWatch(saveToI2c: true);
+      } else if (connected) {
+        await active.requestExtPoolState();
+      }
+    } finally {
+      _initialOverridePending = false;
+    }
+  }
+
+  void _applyExtPool(WatchExtPoolState pool) {
+    extPoolState = pool;
+    notifyListeners();
+    if (pool.hasAssetFlags &&
+        !_syncingAssets &&
+        ((pool.assetFlags | _syncedAssetMask) & 0x03) != 0x03) {
+      unawaited(_syncMissingExtAssets(pool.assetFlags | _syncedAssetMask));
+    }
+  }
+
+  Future<void> _syncMissingExtAssets(int presentFlags) async {
+    final active = session;
+    if (active == null || !connected || _syncingAssets) return;
+    _syncingAssets = true;
+    try {
+      if ((presentFlags & 0x01) == 0 && connected) {
+        final bits = await WatchMessageRasterizer.renderCompassAsset();
+        if (connected &&
+            await active.sendExtAsset(
+              assetId: WatchMessageRasterizer.compassAssetId,
+              width: WatchMessageRasterizer.compassW,
+              height: WatchMessageRasterizer.compassH,
+              bits: bits,
+            )) {
+          _syncedAssetMask |= 0x01;
+        }
+      }
+      if ((presentFlags & 0x02) == 0 && connected) {
+        final bits = await WatchMessageRasterizer.renderMsgEmptyAsset();
+        if (connected &&
+            await active.sendExtAsset(
+              assetId: WatchMessageRasterizer.msgEmptyAssetId,
+              width: WatchMessageRasterizer.msgEmptyW,
+              height: WatchMessageRasterizer.msgEmptyH,
+              bits: bits,
+            )) {
+          _syncedAssetMask |= 0x02;
+        }
+      }
+    } catch (_) {
+      // 资源下发属后台增强，失败不打断主链路，下次重连或查询 0x2E 可重试。
+    } finally {
+      _syncingAssets = false;
+    }
+  }
+
+  Future<bool> refreshExtPoolState() async {
+    final active = session;
+    if (active == null || !connected) return false;
+    return active.requestExtPoolState();
+  }
+
+  void setAutoClearMessages(bool value) {
+    autoClearMessages = value;
+    if (value) {
+      localMessages = <WatchMessageItem>[];
+      if (!Platform.isAndroid) {
+        cachedNotifications = 0;
+      } else {
+        unawaited(AndroidWatchBridge.clearMessages());
+      }
+    }
+    _pushFullConfigIfOnline();
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  /// 立即清空本机/服务端以及手表 AT24C256 动态 ROM 中的全部持久化消息（0x24）。
+  Future<bool> clearWatchMessages() async {
+    localMessages = <WatchMessageItem>[];
+    cachedNotifications = 0;
+    if (Platform.isAndroid) {
+      await AndroidWatchBridge.clearMessages();
+    }
+    notifyListeners();
+    onSettingsChanged?.call();
+    final active = session;
+    if (active == null || !connected) return false;
+    return active.clearWatchMessages();
+  }
+
+  /// 跨平台推送一条持久化富文本消息点阵到手表 AT24C256 动态 ROM（0x2D + 0x26/0x23）。
+  Future<bool> pushRichMessage({
+    required String app,
+    String title = '',
+    required String text,
+  }) async {
+    final item = WatchMessageItem(app: app, title: title, text: text);
+    final limit = maxMessages.clamp(1, 20);
+    localMessages = <WatchMessageItem>[
+      item,
+      ...localMessages.take(limit - 1),
+    ];
+    if (!Platform.isAndroid) {
+      cachedNotifications = localMessages.length;
+    }
+    notifyListeners();
+    onSettingsChanged?.call();
+
+    final active = session;
+    if (active == null || !connected) return false;
+    final rowBits = await WatchMessageRasterizer.renderRow(item);
+    final detBits = await WatchMessageRasterizer.renderDetail(item);
+    return active.pushRichNotification(
+      rowBytes: rowBits,
+      detailBytes: detBits,
+      count: localMessages.length.clamp(1, limit),
+    );
+  }
+
+  /// App 主动下发全量设置与表盘配置，默认覆盖写入 AT24C256 I2C EEPROM。
+  Future<bool> pushConfigToWatch({bool saveToI2c = true}) async {
+    final active = session;
+    if (active == null || !connected) return false;
+    _initialOverridePending = false;
+    return active.sendConfigBundle(buildConfigBundle(saveToI2c: saveToI2c));
+  }
+
+  /// 从手表 AT24C256 读取并回填到 App（适合切换查看手表独立保存的状态）。
+  Future<bool> pullConfigFromWatch() async {
+    final active = session;
+    if (active == null || !connected) return false;
+    _pullingFromWatch = true;
+    final ok = await active.requestConfig();
+    if (!ok) _pullingFromWatch = false;
+    return ok;
+  }
+
+  /// 压缩下发自定义表盘底图到 AT24C256 (0x3C00)，并应用表盘颜色与布局配置。
+  Future<bool> uploadDialImage({
+    required int width,
+    required int height,
+    required int formatCode,
+    required Uint8List compressedBytes,
+    required Uint8List previewRgba,
+    void Function(int sentChunks, int totalChunks)? onProgress,
+  }) async {
+    customDialPreviewRgba = previewRgba;
+    dialId = 3;
+    notifyListeners();
+    onSettingsChanged?.call();
+
+    final active = session;
+    if (active == null || !connected) return false;
+    final okImg = await active.sendExtImage(
+      width: width,
+      height: height,
+      format: formatCode,
+      bytes: compressedBytes,
+      applyDial: true,
+      onProgress: onProgress,
+    );
+    if (!okImg) return false;
+    return pushConfigToWatch(saveToI2c: true);
   }
 
   void _applySport(WatchSport sport) {
@@ -672,7 +970,62 @@ class WatchController extends ChangeNotifier {
   void _sendSetting(int key, int value) {
     final active = session;
     if (active == null) return;
-    unawaited(active.setSetting(key, value));
+    if (connected) {
+      unawaited(active.setSetting(key, value));
+    }
+  }
+
+  void _pushFullConfigIfOnline() {
+    final active = session;
+    if (active == null || !connected) return;
+    _initialOverridePending = false;
+    unawaited(active.sendConfigBundle(buildConfigBundle(saveToI2c: true)));
+  }
+
+  void setAppPriorityOverride(bool value) {
+    appPriorityOverride = value;
+    if (connected && value) {
+      _pushFullConfigIfOnline();
+    } else if (connected && !value) {
+      unawaited(pullConfigFromWatch());
+    }
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void setStepGoal(int goal) {
+    stepGoal = goal.clamp(1000, 100000);
+    _pushFullConfigIfOnline();
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
+
+  void updateDialConfig({
+    int? id,
+    int? top,
+    int? bot,
+    bool? showSeconds,
+    int? photoAlign,
+    bool? photoScrim,
+    int? textColor,
+    int? accentColor,
+    int? bgColor,
+    bool syncToWatch = true,
+  }) {
+    if (id != null) dialId = id.clamp(0, 3);
+    if (top != null) dialTop = top.clamp(0, 4);
+    if (bot != null) dialBot = bot.clamp(0, 4);
+    if (showSeconds != null) dialShowSeconds = showSeconds;
+    if (photoAlign != null) dialPhotoAlign = photoAlign.clamp(0, 2);
+    if (photoScrim != null) dialPhotoScrim = photoScrim;
+    if (textColor != null) dialTextColor = textColor;
+    if (accentColor != null) dialAccentColor = accentColor;
+    if (bgColor != null) dialBgColor = bgColor;
+    if (syncToWatch) {
+      _pushFullConfigIfOnline();
+    }
+    notifyListeners();
+    onSettingsChanged?.call();
   }
 
   void setRaiseWrist(bool value) {
@@ -720,7 +1073,7 @@ class WatchController extends ChangeNotifier {
       for (final item in (rules['packages'] as List<Object?>? ?? const []))
         '$item',
     };
-    maxMessages = ((rules['maxMessages'] as num?)?.toInt() ?? 5).clamp(1, 5);
+    maxMessages = ((rules['maxMessages'] as num?)?.toInt() ?? 5).clamp(1, 20);
     mergeNotifications = rules['merge'] != false;
     final apps = await AndroidWatchBridge.notificationApps();
     knownApps = <NotificationApp>[
@@ -754,9 +1107,14 @@ class WatchController extends ChangeNotifier {
   }
 
   void setMaxMessages(int value) {
-    maxMessages = value.clamp(1, 5);
+    maxMessages = value.clamp(1, 20);
+    if (localMessages.length > maxMessages) {
+      localMessages = localMessages.take(maxMessages).toList();
+      if (!Platform.isAndroid) cachedNotifications = localMessages.length;
+    }
     unawaited(_pushMessageRules());
     notifyListeners();
+    onSettingsChanged?.call();
   }
 
   void setMergeNotifications(bool value) {
@@ -1101,7 +1459,12 @@ class WatchController extends ChangeNotifier {
   void setAnimations(bool value) => _update(() => animations = value);
   void setDemoStreaming(bool value) => _update(() => demoStreaming = value);
   void setLiquidGlass(bool value) => _update(() => liquidGlass = value);
-  void setUse24Hour(bool value) => _update(() => use24Hour = value);
+  void setUse24Hour(bool value) {
+    use24Hour = value;
+    _pushFullConfigIfOnline();
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
   void setAddress(String value) {
     deviceAddress = value;
     onSettingsChanged?.call();
@@ -1132,10 +1495,31 @@ class WatchController extends ChangeNotifier {
     demoStreaming = true;
     liquidGlass = true;
     use24Hour = true;
+    appPriorityOverride = true;
+    raiseWrist = true;
+    keyBeep = true;
+    watchBrightness = 1;
+    ledMode = 1;
+    screenOff = 0;
+    stepGoal = 8000;
+    dialId = 0;
+    dialTop = 0;
+    dialBot = 1;
+    dialShowSeconds = true;
+    dialPhotoAlign = 0;
+    dialPhotoScrim = true;
+    dialTextColor = 0xFFF0F1E4;
+    dialAccentColor = 0xFF73D4AE;
+    dialBgColor = 0xFF000000;
     previewConnected = false;
     mediaFollow = true;
     notificationForward = true;
+    autoClearMessages = false;
+    maxMessages = 5;
+    localMessages = <WatchMessageItem>[];
+    if (!Platform.isAndroid) cachedNotifications = 0;
     backgroundEnabled = false;
+    _pushFullConfigIfOnline();
     _stopMediaPager();
     _syncMediaPolling();
     unawaited(SystemTray.setEnabled(false));
@@ -1147,14 +1531,51 @@ class WatchController extends ChangeNotifier {
   void applyPersisted(Map<String, dynamic> values) {
     bool readBool(String key, bool fallback) =>
         values[key] is bool ? values[key] as bool : fallback;
+    int readInt(String key, int fallback) =>
+        values[key] is int ? values[key] as int : fallback;
     String readString(String key, String fallback) =>
         values[key] is String ? values[key] as String : fallback;
 
     mediaFollow = readBool('mediaFollow', mediaFollow);
     notificationForward = readBool('notificationForward', notificationForward);
+    autoClearMessages = readBool('autoClearMessages', autoClearMessages);
+    maxMessages = readInt('maxMessages', maxMessages).clamp(1, 20);
+    if (values['localMessages'] is List) {
+      final restored = <WatchMessageItem>[];
+      for (final raw in values['localMessages'] as List<dynamic>) {
+        if (raw is Map) {
+          restored.add(
+            WatchMessageItem(
+              app: '${raw['app'] ?? ''}',
+              title: '${raw['title'] ?? ''}',
+              text: '${raw['text'] ?? ''}',
+            ),
+          );
+        }
+      }
+      localMessages = restored.take(maxMessages).toList();
+      if (!Platform.isAndroid) cachedNotifications = localMessages.length;
+    }
     backgroundEnabled = readBool('backgroundEnabled', backgroundEnabled);
     autoConnect = readBool('autoConnect', autoConnect);
     autoSyncTime = readBool('autoSyncTime', autoSyncTime);
+    appPriorityOverride = readBool('appPriorityOverride', appPriorityOverride);
+    use24Hour = readBool('use24Hour', use24Hour);
+    raiseWrist = readBool('raiseWrist', raiseWrist);
+    keyBeep = readBool('keyBeep', keyBeep);
+    watchBrightness = readInt('watchBrightness', watchBrightness).clamp(0, 2);
+    ledMode = readInt('ledMode', ledMode).clamp(0, 2);
+    screenOff = readInt('screenOff', screenOff).clamp(0, 4);
+    stepGoal = readInt('stepGoal', stepGoal).clamp(1000, 100000);
+    dialId = readInt('dialId', dialId).clamp(0, 3);
+    dialTop = readInt('dialTop', dialTop).clamp(0, 4);
+    dialBot = readInt('dialBot', dialBot).clamp(0, 4);
+    dialShowSeconds = readBool('dialShowSeconds', dialShowSeconds);
+    dialPhotoAlign = readInt('dialPhotoAlign', dialPhotoAlign).clamp(0, 2);
+    dialPhotoScrim = readBool('dialPhotoScrim', dialPhotoScrim);
+    dialTextColor = readInt('dialTextColor', dialTextColor);
+    dialAccentColor = readInt('dialAccentColor', dialAccentColor);
+    dialBgColor = readInt('dialBgColor', dialBgColor);
     final theme = readString('themeMode', themeMode.name);
     themeMode = ThemeMode.values.firstWhere(
       (mode) => mode.name == theme,
@@ -1180,9 +1601,32 @@ class WatchController extends ChangeNotifier {
   Map<String, Object?> get persistedSettings => <String, Object?>{
     'mediaFollow': mediaFollow,
     'notificationForward': notificationForward,
+    'autoClearMessages': autoClearMessages,
+    'maxMessages': maxMessages,
+    'localMessages': <Map<String, String>>[
+      for (final m in localMessages)
+        <String, String>{'app': m.app, 'title': m.title, 'text': m.text},
+    ],
     'backgroundEnabled': backgroundEnabled,
     'autoConnect': autoConnect,
     'autoSyncTime': autoSyncTime,
+    'appPriorityOverride': appPriorityOverride,
+    'use24Hour': use24Hour,
+    'raiseWrist': raiseWrist,
+    'keyBeep': keyBeep,
+    'watchBrightness': watchBrightness,
+    'ledMode': ledMode,
+    'screenOff': screenOff,
+    'stepGoal': stepGoal,
+    'dialId': dialId,
+    'dialTop': dialTop,
+    'dialBot': dialBot,
+    'dialShowSeconds': dialShowSeconds,
+    'dialPhotoAlign': dialPhotoAlign,
+    'dialPhotoScrim': dialPhotoScrim,
+    'dialTextColor': dialTextColor,
+    'dialAccentColor': dialAccentColor,
+    'dialBgColor': dialBgColor,
     'themeMode': themeMode.name,
     'transport': transport.name,
     'deviceAddress': deviceAddress,
@@ -1197,6 +1641,7 @@ class WatchController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _ticker?.cancel();
     _sensorTimer?.cancel();
     _mediaTimer?.cancel();
@@ -1205,6 +1650,8 @@ class WatchController extends ChangeNotifier {
     _statsSub?.cancel();
     _controlsSub?.cancel();
     _settingsSub?.cancel();
+    _configSub?.cancel();
+    _extPoolSub?.cancel();
     _sportSub?.cancel();
     _sensorSub?.cancel();
     deviceScreen?.dispose();

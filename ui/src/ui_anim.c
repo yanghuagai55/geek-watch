@@ -108,6 +108,7 @@ static void apply(slot_t *s, int16_t value) {
     s->obj->opacity = (uint8_t)value;
 }
 
+#ifndef UI_NO_TRACE
 static const char *anim_name(ui_anim_id_t id) {
     switch (id) {
     case UI_ANIM_SLIDE_LEFT:
@@ -128,6 +129,7 @@ static const char *anim_name(ui_anim_id_t id) {
         return "ui_anim_play";
     }
 }
+#endif
 
 void ui_anim_init(void) {
     slots = ui_mem_alloc(sizeof(slot_t) * SLOT_N, 4);
@@ -227,7 +229,11 @@ void ui_anim_tick(uint32_t now_ms) {
         if (!s->active || !s->obj) {
             continue;
         }
-        elapsed = now_ms - s->t0;
+        if ((int32_t)(now_ms - s->t0) <= 0) {
+            elapsed = 0u;
+        } else {
+            elapsed = now_ms - s->t0;
+        }
         if (s->dur == 0 || elapsed >= s->dur) {
             apply(s, s->to);
             s->active = 0;

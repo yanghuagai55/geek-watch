@@ -38,24 +38,40 @@ object WatchMessageRasterizer {
     }
 
     fun list(items: List<Item>): ByteArray {
-        val bitmap = Bitmap.createBitmap(LIST_W, LIST_H, Bitmap.Config.ARGB_8888)
+        val picked = items.take(20)
+        val rawBytes = maxOf(1, picked.size) * 22 * (LIST_W / 8)
+        val chunks = (rawBytes + 127) / 128
+        val height = chunks * 8
+        val bitmap = Bitmap.createBitmap(LIST_W, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.TRANSPARENT)
         val maxWidth = LIST_W - MARGIN * 2
 
-        items.take(5).forEachIndexed { index, item ->
-            val top = index * ROW_H
-            // 一级列表只显示应用名；读不到应用名时退回消息前几个字。
-            val heading = item.app.ifBlank { preview(item).take(6) }
-            if (heading.isEmpty()) return@forEachIndexed
-            canvas.drawText(
-                ellipsize(heading, namePaint, maxWidth),
-                MARGIN,
-                top + 15.5f,
-                namePaint,
-            )
+        picked.forEachIndexed { index, item ->
+            drawRowText(canvas, index * ROW_H, item, maxWidth)
         }
         return pack(bitmap)
+    }
+
+    /** 渲染单条消息列表行 128×22（352 字节），用于 0x2D 单条增量插入动态 ROM。 */
+    fun row(item: Item): ByteArray {
+        val bitmap = Bitmap.createBitmap(LIST_W, ROW_H.toInt(), Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.TRANSPARENT)
+        drawRowText(canvas, 0f, item, LIST_W - MARGIN * 2)
+        return pack(bitmap)
+    }
+
+    private fun drawRowText(canvas: Canvas, top: Float, item: Item, maxWidth: Float) {
+        // 一级列表只显示应用名；读不到应用名时退回消息前几个字。
+        val heading = item.app.ifBlank { preview(item).take(6) }
+        if (heading.isEmpty()) return
+        canvas.drawText(
+            ellipsize(heading, namePaint, maxWidth),
+            MARGIN,
+            top + 15.5f,
+            namePaint,
+        )
     }
 
     fun detail(item: Item?): ByteArray {

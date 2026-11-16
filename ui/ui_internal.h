@@ -3,7 +3,11 @@
 
 #include "ui.h"
 
+#ifdef UI_NO_TRACE
+#define ui_trace_emit(message) ((void)0)
+#else
 void ui_trace_emit(const char *message);
+#endif
 
 void ui_mem_init(void);
 void *ui_mem_alloc(uint32_t size, uint32_t align);

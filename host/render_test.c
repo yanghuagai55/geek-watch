@@ -1,6 +1,8 @@
 #include "ui_internal.h"
 #include "hal_host.h"
 #include "imu9.h"
+#include "settings.h"
+#include "sport.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -451,6 +453,13 @@ static int test_anim_slots(void) {
     rejected.x = 101;
     REQUIRE(!ui_anim_busy(&objs[4]) && same_obj(&objs[4], &rejected),
             "range animation stop did not apply custom endpoint");
+    /* 防止关键操作（如 I2C EEPROM 阻塞几毫秒）后以旧 now 调用 ui_anim_tick 导致无符号下溢瞬跳结束 */
+    objs[4].scale = 255;
+    ui_anim_play_range(UI_ANIM_ZOOM_OUT, &objs[4], 255, 0);
+    ui_anim_tick(hal_tick_ms() - 12u);
+    REQUIRE(ui_anim_busy(&objs[4]) && objs[4].scale == 255,
+            "ui_anim_tick underflowed on stale timestamp before t0");
+    ui_anim_stop(&objs[4], 0);
     printf("Animation four-slot rejection / same-object redirection / reuse PASS\n");
     return 0;
 }
@@ -497,7 +506,7 @@ static int test_arena(void) {
     }
     ui_init();
     ui_mem_get(&first, &total);
-    REQUIRE(total == 7424u + 4u * UI_W * UI_BAND_H, "declared RAM budget");
+    REQUIRE(total == 8448u + 4u * UI_W * UI_BAND_H, "declared RAM budget");
     REQUIRE(UI_BAND_H == 4, "four-row DMA buffers");
     REQUIRE(first >= 4u * UI_W * UI_BAND_H && first < total, "two buffers fit arena");
     for (pass = 0; pass < 32; pass++) {
@@ -856,7 +865,10 @@ static int test_face_snapshot_and_keys(void) {
     step(32);
     hal_host_set_keys(0);
     step(2);
-    REQUIRE(!link_media_playing(), "long enter release became short confirm");
+    REQUIRE(!link_media_playing(), "long enter entered dial edit instead of play");
+    key_tap(HAL_KEY2); /* confirm/exit dial edit mode without toggling play */
+    step(2);
+    REQUIRE(!link_media_playing(), "confirming dial edit triggered media toggle");
     key_tap(HAL_KEY2);
     REQUIRE(link_media_playing(), "short enter after long press was lost");
     printf("Unchanged face / full snapshot / rapid reversal / long press PASS\n");
@@ -902,6 +914,479 @@ static int angle_diff_deg(int a, int b) {
     if (d > 180) d -= 360;
     if (d < -180) d += 360;
     return d < 0 ? -d : d;
+}
+
+static void push_link_frame(uint8_t cmd, const uint8_t *pay, int len) {
+    uint8_t frame[180];
+    uint8_t xo = 0;
+    int i;
+    frame[0] = 0xA5;
+    frame[1] = cmd;
+    frame[2] = (uint8_t)len;
+    for (i = 0; i < len; i++) {
+        frame[3 + i] = pay[i];
+    }
+    for (i = 0; i < 3 + len; i++) {
+        xo ^= frame[i];
+    }
+    frame[3 + len] = xo;
+    hal_host_link_rx(frame, 4 + len);
+}
+
+static int test_persist_and_compressed_dials(void) {
+    uint8_t blob[512];
+    uint8_t pay[140];
+    const uint8_t *rx_cfg;
+    uint16_t rx_n = 0;
+    int tx_n = 0;
+    int y, pos, total, chunks, c;
+    const settings_t *cs;
+    sport_stats_t sp;
+    imu9_state_t s9;
+    hal_clock_t clk;
+
+    /* 1. 测试 PAL4_RLE (fmt=4) 8x8 编码写外置 Flash 并按条带无损光栅化 */
+    memset(blob, 0, sizeof blob);
+    blob[0] = (uint8_t)(UI_COL_BG & 0xFFu); blob[1] = (uint8_t)(UI_COL_BG >> 8);
+    blob[2] = (uint8_t)(UI_COL_AMBER & 0xFFu); blob[3] = (uint8_t)(UI_COL_AMBER >> 8);
+    blob[4] = (uint8_t)(UI_COL_MINT & 0xFFu); blob[5] = (uint8_t)(UI_COL_MINT >> 8);
+    pos = 32 + 8 * 2; /* header(32) + row_end[8](16) = 48 */
+    for (y = 0; y < 8; y++) {
+        if ((y & 1) == 0) {
+            /* Repeat 8 px of color index 1 (AMBER) */
+            blob[pos++] = (uint8_t)(0x80u | (8 - 2));
+            blob[pos++] = 1u;
+        } else {
+            /* Literal 8 px alternating color index 2 / 1 (MINT/AMBER) */
+            blob[pos++] = 7u; /* lit_len - 1 = 7 -> 8 px -> 4 bytes */
+            blob[pos++] = 0x21u; blob[pos++] = 0x21u;
+            blob[pos++] = 0x21u; blob[pos++] = 0x21u;
+        }
+        rx_n = (uint16_t)(pos - (32 + 16));
+        blob[32 + y * 2] = (uint8_t)(rx_n & 0xFFu);
+        blob[32 + y * 2 + 1] = (uint8_t)(rx_n >> 8);
+    }
+    REQUIRE(hal_ext_flash_write(LINK_EXT_OFF_IMG, blob, (uint32_t)pos),
+            "write PAL4_RLE test blob");
+    ui_core_init();
+    ui_draw_begin();
+    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, 255);
+    ui_ext_image_draw(20, 22, 8, 8, LINK_EXT_OFF_IMG, UI_EXT_FMT_PAL4_RLE, 0, 255);
+    ui_draw_flush();
+    REQUIRE(hal_host_pixel(20, 22) == UI_COL_AMBER &&
+            hal_host_pixel(27, 22) == UI_COL_AMBER &&
+            hal_host_pixel(20, 23) == UI_COL_MINT &&
+            hal_host_pixel(21, 23) == UI_COL_AMBER,
+            "PAL4_RLE compressed decoding pixel exact");
+
+    /* 2. 测试 RGB565_RLE (fmt=5) 8x4 真彩压缩流 */
+    memset(blob, 0, sizeof blob);
+    pos = 4 * 2; /* row_end[4] = 8 bytes */
+    for (y = 0; y < 4; y++) {
+        uint16_t col = (y == 2) ? 0xF800u : 0x07E0u;
+        blob[pos++] = (uint8_t)(0x80u | (8 - 2));
+        blob[pos++] = (uint8_t)(col & 0xFFu);
+        blob[pos++] = (uint8_t)(col >> 8);
+        rx_n = (uint16_t)(pos - 8);
+        blob[y * 2] = (uint8_t)(rx_n & 0xFFu);
+        blob[y * 2 + 1] = (uint8_t)(rx_n >> 8);
+    }
+    REQUIRE(hal_ext_flash_write(LINK_EXT_OFF_IMG, blob, (uint32_t)pos),
+            "write RGB565_RLE test blob");
+    ui_draw_begin();
+    ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, 255);
+    ui_ext_image_draw(30, 30, 8, 4, LINK_EXT_OFF_IMG, UI_EXT_FMT_RGB565_RLE, 0, 255);
+    ui_draw_flush();
+    REQUIRE(hal_host_pixel(33, 30) == 0x07E0u &&
+            hal_host_pixel(35, 32) == 0xF800u,
+            "RGB565_RLE compressed decoding pixel exact");
+
+    /* 3. 测试 0x2A App 最高优先级设置下发 -> AT24C256 持久化 -> 掉电冷启动恢复 */
+    ui_init();
+    hal_host_link_clear();
+    hal_host_set_frame_step_us(16000);
+    /* 设置日期时间 + 写入一组磁强计校准偏置 */
+    clk.year = 2026; clk.month = 11; clk.day = 16;
+    clk.hour = 10; clk.minute = 30; clk.second = 0;
+    hal_clock_set(&clk);
+    settings_record_clock(&clk);
+    imu9_load_mag_cal(-45, 75, -120);
+
+    pay[0] = 0x03u; /* save_to_i2c=1, app_override=1, use_24h=0, debug=0 */
+    pay[1] = 0u;    /* raise_wrist=0 */
+    pay[2] = 0u;    /* key_beep=0 */
+    pay[3] = 2u;    /* brightness=2 */
+    pay[4] = 2u;    /* led_mode=2 */
+    pay[5] = 3u;    /* screen_off=3 */
+    pay[6] = (uint8_t)(12345u & 0xFFu);
+    pay[7] = (uint8_t)(12345u >> 8);
+    pay[8] = 0u; pay[9] = 0u;
+    pay[10] = UI_DIAL_ANALOG;
+    pay[11] = UI_DIAL_COMP_HDG;
+    pay[12] = UI_DIAL_COMP_BAT;
+    pay[13] = UI_DIAL_FLAG_SECONDS | UI_DIAL_FLAG_SCRIM;
+    pay[14] = (uint8_t)(UI_COL_MINT & 0xFFu); pay[15] = (uint8_t)(UI_COL_MINT >> 8);
+    pay[16] = (uint8_t)(UI_COL_AMBER & 0xFFu); pay[17] = (uint8_t)(UI_COL_AMBER >> 8);
+    pay[18] = 0x08u; pay[19] = 0x00u;
+    push_link_frame(0x2Au, pay, 20);
+    step(2);
+    hal_host_link_tx_take(wire, sizeof wire, &tx_n);
+    REQUIRE(tx_n >= 40, "0x2A returned 0x1A + 0x2C");
+
+    /* 模拟彻底掉电冷启动 (仅保留 sim_ext_flash AT24C256 芯片数据！) */
+    ui_init();
+    cs = settings_get();
+    sport_get(&sp);
+    imu9_get(&s9);
+    hal_clock_get(&clk);
+    REQUIRE(cs->cfg_loaded == 1u && cs->cfg_source == UI_CFG_PRIO_APP, "cfg_loaded/prio");
+    REQUIRE(cs->brightness == 2u && cs->led_mode == 2u && cs->screen_off == 3u && cs->use_24h == 0u, "settings fields");
+    REQUIRE(cs->dial_id == UI_DIAL_ANALOG && cs->dial_top == UI_DIAL_COMP_HDG && cs->dial_bot == UI_DIAL_COMP_BAT, "dial config");
+    REQUIRE(sp.goal == 12345u, "step goal");
+    REQUIRE(s9.mag_cal == 2u && s9.mox == -45 && s9.moy == 75 && s9.moz == -120, "mag cal");
+    REQUIRE(clk.day == 16, "clock day restore");
+
+    /* 保存指针表盘截图 */
+    step(4);
+    REQUIRE(!save("shot_dial_analog.bmp"), "analog dial shot");
+
+    /* 验证长按 KEY2 缩小表盘进入编辑选择模式（左右显示 < > 提示），KEY1/KEY3 滑移切换表盘，短按 KEY2 放大选中并落盘 I2C */
+    hal_host_set_keys(HAL_KEY2);
+    step(32);
+    hal_host_set_keys(0);
+    step(22);
+    REQUIRE(!save("shot_dial_edit.bmp"), "dial edit shot");
+    key_tap(HAL_KEY3);
+    step(5);
+    REQUIRE(!save("shot_dial_slide.bmp"), "dial slide mid-anim shot");
+    step(16);
+    key_tap(HAL_KEY2);
+    step(6);
+    REQUIRE(!save("shot_dial_zoom_cover.bmp"), "dial confirm zoom occlusion shot");
+    step(16);
+    REQUIRE(settings_get()->dial_id == UI_DIAL_IMU, "dial edit KEY3+KEY2 selected IMU dial");
+    REQUIRE(!save("shot_dial_imu.bmp"), "imu dial shot");
+
+    /* 4. 上传完整 128x160 PAL4_RLE 压缩相册底图并通过 0x28(len=8)+0x29 设为持久化相册表盘 */
+    {
+        static uint8_t img128[32 + UI_H * 2 + UI_H * 4]; /* 16色纯色/渐变 128x160! */
+        uint8_t p8[8];
+        int p = 32 + UI_H * 2;
+        memset(img128, 0, sizeof img128);
+        img128[0] = (uint8_t)(UI_RGB565(12, 28, 36) & 0xFFu);
+        img128[1] = (uint8_t)(UI_RGB565(12, 28, 36) >> 8);
+        img128[2] = (uint8_t)(UI_COL_MINT & 0xFFu);
+        img128[3] = (uint8_t)(UI_COL_MINT >> 8);
+        for (y = 0; y < UI_H; y++) {
+            uint8_t ci = (y > UI_H / 2) ? 1u : 0u;
+            int w0 = UI_W <= 129 ? UI_W : 128;
+            int rem = UI_W - w0;
+            img128[p++] = (uint8_t)(0x80u | (w0 - 2));
+            img128[p++] = ci;
+            if (rem >= 2) {
+                img128[p++] = (uint8_t)(0x80u | (rem - 2));
+                img128[p++] = ci;
+            }
+            rx_n = (uint16_t)(p - (32 + UI_H * 2));
+            img128[32 + y * 2] = (uint8_t)(rx_n & 0xFFu);
+            img128[32 + y * 2 + 1] = (uint8_t)(rx_n >> 8);
+        }
+        total = p;
+        p8[0] = (uint8_t)(UI_W & 0xFFu); p8[1] = (uint8_t)(UI_W >> 8);
+        p8[2] = (uint8_t)(UI_H & 0xFFu); p8[3] = (uint8_t)(UI_H >> 8);
+        p8[4] = UI_EXT_FMT_PAL4_RLE;
+        p8[5] = (uint8_t)(total & 0xFFu); p8[6] = (uint8_t)(total >> 8);
+        p8[7] = 1u; /* apply_dial = 1 */
+        push_link_frame(0x28u, p8, 8);
+        step(1);
+
+        chunks = (total + 127) / 128;
+        for (c = 0; c < chunks; c++) {
+            int left = total - c * 128;
+            int n = left > 128 ? 128 : left;
+            pay[0] = (uint8_t)c;
+            memcpy(pay + 1, img128 + c * 128, (size_t)n);
+            push_link_frame(0x29u, pay, 1 + n);
+            step(1);
+        }
+    }
+    REQUIRE(settings_get()->dial_id == UI_DIAL_PHOTO && settings_get()->img_ready == 1u,
+            "compressed photo dial applied via 0x28/0x29");
+
+    /* 重启冷启动校验相册表盘从 AT24C256 自动恢复并渲染 */
+    ui_init();
+    REQUIRE(settings_get()->dial_id == UI_DIAL_PHOTO && settings_get()->img_ready == 1u,
+            "photo dial metadata survived cold boot");
+    step(4);
+    REQUIRE(hal_host_pixel(4, UI_H - 12) == UI_COL_MINT,
+            "restored PAL4_RLE photo dial bottom pixels drawn from AT24C256");
+    REQUIRE(!save("shot_dial_photo.bmp"), "photo dial shot");
+
+    /* 查询 0x2B -> 校验 0x2C 状态包 */
+    hal_host_link_clear();
+    push_link_frame(0x2Bu, pay, 0);
+    step(2);
+    hal_host_link_tx_take(wire, sizeof wire, &tx_n);
+    rx_cfg = NULL;
+    for (c = 0; c + 30 <= tx_n; c++) {
+        if (wire[c] == 0xA5u && wire[c + 1] == 0x2Cu && wire[c + 2] == 26u) {
+            rx_cfg = wire + c;
+            break;
+        }
+    }
+    REQUIRE(rx_cfg != NULL && (rx_cfg[23] & 0x0Fu) == 0x0Fu &&
+            rx_cfg[24] == UI_CFG_PRIO_APP && rx_cfg[28] == 0x50u,
+            "0x2C config state reflects AT24C256 present + loaded + photo + mag cal @0x50");
+
+    /* 5. 验证 AT24C256 动态内存池：在已存压缩相册表盘基础上写入 12 条消息，断电重启仍保留且可滚动/查看详情 */
+    {
+        uint32_t msg_total = 12u * 352u;
+        int msg_chunks = (int)((msg_total + 127u) / 128u);
+        uint16_t p_tot = 0, p_used = 0, p_free = 0, p_mb = 0, p_ib = 0;
+        uint8_t p_mn = 0;
+        uint32_t ram0 = 0, ram1 = 0;
+
+        pay[0] = 12u;
+        push_link_frame(0x25u, pay, 1);
+        step(1);
+        for (c = 0; c < msg_chunks; c++) {
+            int k;
+            pay[0] = (uint8_t)c;
+            for (k = 0; k < 128; k++) {
+                uint32_t gp = (uint32_t)c * 128u + (uint32_t)k;
+                uint32_t r = gp / 352u;
+                uint32_t ir = gp % 352u;
+                pay[1 + k] = (gp < msg_total && ir >= 16u && ir < 32u && (k % 16) < 8)
+                             ? (uint8_t)(0x3Cu + (r & 0x0Fu))
+                             : 0u;
+            }
+            push_link_frame(0x22u, pay, 129);
+            step(1);
+        }
+        /* 为第 10 条槽位写入一条特征详情，检验跨重启 RLE 存储与按需解压 */
+        for (c = 0; c < 20; c++) {
+            int k;
+            pay[0] = 10u;
+            pay[1] = (uint8_t)c;
+            for (k = 0; k < 128; k++) {
+                pay[2 + k] = (c == 5 && (k % 16) == 4) ? 0xFFu : 0u;
+            }
+            push_link_frame(0x23u, pay, 130);
+            step(1);
+        }
+        /* 再通过 0x2D(0x01) 头插 + 0x2D(0x02) 写入第 13 条最新消息 */
+        pay[0] = 1u;
+        push_link_frame(0x2Du, pay, 1);
+        step(1);
+        for (c = 0; c < 3; c++) {
+            int len_c = (c == 2) ? 96 : 128;
+            pay[0] = 2u;
+            pay[1] = (uint8_t)c;
+            memset(pay + 2, (c == 0) ? 0xAAu : 0x00u, (size_t)len_c);
+            push_link_frame(0x2Du, pay, 2 + len_c);
+            step(1);
+        }
+
+        /* 冷重启 ui_init() 验证断电不丢失：共 13 条消息 + 原槽10变为槽11详情 + 相册图均保留 */
+        ui_init();
+        hal_host_set_frame_step_us(16000);
+        ui_mem_get(&ram0, NULL);
+        link_ext_pool_stats(&p_tot, &p_used, &p_free, &p_mb, &p_ib, &p_mn);
+        REQUIRE(p_tot == LINK_EXT_POOL_SIZE && p_mn == 13u && p_ib > 0u && p_mb > 0u &&
+                p_used + p_free <= p_tot,
+                "dynamic ext ROM holds both photo dial and 13 compressed messages across reboot");
+        REQUIRE(link_msg_count() == 13 && settings_get()->img_ready == 1u,
+                "13 messages and dial photo survived cold boot");
+
+        /* 打开消息页（断开连接状态）并下滚至第 11 条读取压缩详情 */
+        ui_nav_goto(UI_PAGE_MSG);
+        step(2);
+        key_tap(HAL_KEY2);
+        step(26);
+        for (c = 0; c < 11; c++) {
+            key_tap(HAL_KEY3);
+            step(2);
+        }
+        step(24);
+        key_tap(HAL_KEY2); /* 进入槽 11 详情 */
+        step(18);
+        REQUIRE(link_msg_detail_ready(), "slot 11 compressed detail restored offline after reboot");
+        REQUIRE(hal_host_pixel((UI_W - 128) / 2 + 32, (UI_H - 160) / 2 + 40) != UI_COL_BG,
+                "restored detail pixel mismatch");
+        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(36);
+        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(36);
+        ui_mem_get(&ram1, NULL);
+        REQUIRE(ram1 == ram0, "dynamic RAM window/detail exited without leaking");
+
+        /* 6. 测试“通知清理开关”（设置列表第 9 项）开启即清空片外 ROM 消息并释放空间，同时保留表盘图 */
+        ui_nav_goto(UI_PAGE_SETTINGS);
+        step(2);
+        key_tap(HAL_KEY2);
+        step(24);
+        for (c = 0; c < 8; c++) {
+            key_tap(HAL_KEY3);
+            step(2);
+        }
+        step(20);
+        key_tap(HAL_KEY2); /* 切换“通知清理” 开 */
+        step(4);
+        link_ext_pool_stats(&p_tot, &p_used, &p_free, &p_mb, &p_ib, &p_mn);
+        REQUIRE(settings_get()->msg_auto_clear == 1u && link_msg_count() == 0 &&
+                p_mn == 0u && p_mb == 0u && p_ib > 0u,
+                "notification clean switch cleared dynamic ROM messages while keeping dial image");
+
+        /* 7. 验证按需页片外 ROM (0x2F 指南针 64x64 + 空消息 96x40) 下发、断电保持及按需加载/释放动态 RAM */
+        {
+            uint32_t m_base, m_comp, m_after_comp, m_msg, m_after_msg;
+            uint8_t c_asset[6 + 128];
+            int16_t aw = 0, ah = 0;
+            const uint8_t *abits;
+            int chunk;
+
+            for (chunk = 0; chunk < 4; chunk++) {
+                c_asset[0] = LINK_ASSET_COMPASS;
+                c_asset[1] = (uint8_t)chunk;
+                c_asset[2] = 64; c_asset[3] = 0;
+                c_asset[4] = 64; c_asset[5] = 0;
+                memset(c_asset + 6, (uint8_t)(0x5Au + chunk), 128);
+                push_link_frame(0x2Fu, c_asset, 6 + 128);
+                step(1);
+            }
+            for (chunk = 0; chunk < 4; chunk++) {
+                int len_c = (chunk == 3) ? 96 : 128;
+                c_asset[0] = LINK_ASSET_MSG_EMPTY;
+                c_asset[1] = (uint8_t)chunk;
+                c_asset[2] = 96; c_asset[3] = 0;
+                c_asset[4] = 40; c_asset[5] = 0;
+                memset(c_asset + 6, (uint8_t)(0xA5u ^ chunk), (size_t)len_c);
+                push_link_frame(0x2Fu, c_asset, 6 + len_c);
+                step(1);
+            }
+            ui_init();
+            hal_host_set_frame_step_us(16000);
+            ui_mem_get(&m_base, NULL);
+            link_enter_compass();
+            ui_mem_get(&m_comp, NULL);
+            abits = link_compass_asset_mask(&aw, &ah);
+            REQUIRE(link_compass_asset_ready() && aw == 64 && ah == 64 && abits != NULL &&
+                    abits[0] == 0x5Au && abits[128] == 0x5Bu && m_comp > m_base,
+                    "compass 0x2F asset persisted in AT24C256 and loaded into dynamic RAM on demand");
+            link_leave_compass();
+            ui_mem_get(&m_after_comp, NULL);
+            REQUIRE(!link_compass_asset_ready() && m_after_comp == m_base,
+                    "leaving compass freed dynamic RAM back to baseline");
+
+            /* 打开空消息页 -> 按需加载 96x40 空状态片外 ROM 资源到 RAM，关闭立即释放 */
+            ui_nav_goto(UI_PAGE_MSG);
+            step(2);
+            key_tap(HAL_KEY2);
+            step(26);
+            ui_mem_get(&m_msg, NULL);
+            abits = link_msg_empty_asset_mask(&aw, &ah);
+            REQUIRE(link_msg_empty_asset_ready() && aw == 96 && ah == 40 && abits != NULL &&
+                    abits[0] == 0xA5u && m_msg > m_base,
+                    "empty messages loaded 0x2F asset into dynamic RAM on open");
+            hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(36);
+            ui_mem_get(&m_after_msg, NULL);
+            REQUIRE(!link_msg_empty_asset_ready() && m_after_msg == m_base,
+                    "leaving empty messages freed dynamic RAM back to baseline");
+        }
+
+        /* 8. 验证 1207 转子马达震动场景（按键/长按/指南针校准提示/新消息/设置开关静音）+ “关于”彩图页 */
+        {
+            uint16_t bp = 0, bm = 0;
+            uint32_t bc0 = 0, bc1 = 0;
+            uint8_t ext1[1] = {1u};
+            int px, py, about_ink = 0;
+
+            (void)hal_ext_flash_erase(LINK_EXT_OFF_CFG, LINK_EXT_OFF_POOL);
+            ui_init();
+            hal_host_set_frame_step_us(16000);
+            /* 回到首页，短按 KEY3 进运动再长按退回 */
+            hal_host_beep_get(NULL, NULL, &bc0);
+            key_tap(HAL_KEY3);
+            hal_host_beep_get(&bp, &bm, &bc1);
+            REQUIRE(bc1 > bc0 && bp == HAL_VIB_SINGLE && bm == 38u,
+                    "short press triggers 38ms rotor single buzz");
+
+            /* 长按 KEY2 进表盘编辑 -> 130ms 长震动 */
+            ui_nav_goto(UI_PAGE_FACE);
+            step(2);
+            hal_host_set_keys(HAL_KEY2);
+            step(32);
+            hal_host_set_keys(0);
+            hal_host_beep_get(&bp, &bm, &bc1);
+            REQUIRE(bp == HAL_VIB_SINGLE && bm == 130u,
+                    "long press triggers 130ms long rotor buzz");
+            hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(22);
+
+            /* 指南针点击启动校准 -> 双震提示 */
+            ui_nav_goto(UI_PAGE_SPORT);
+            step(2);
+            key_tap(HAL_KEY2);
+            step(24);
+            key_tap(HAL_KEY3);
+            step(24);
+            key_tap(HAL_KEY2);
+            hal_host_beep_get(&bp, &bm, &bc1);
+            REQUIRE(bp == HAL_VIB_DOUBLE && bm == 65u,
+                    "compass calibration prompt triggers double buzz");
+            hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+
+            /* 新消息头插推送 0x2D [0x01] -> 经典功能机三连短信震 */
+            push_link_frame(0x2Du, ext1, 1);
+            step(1);
+            hal_host_beep_get(&bp, &bm, &bc1);
+            REQUIRE(bp == HAL_VIB_SMS && bm == 70u,
+                    "new message triggers triple SMS buzz");
+
+            /* 设置里打开“关于”（第 8 项，索引 7）：先渲染彩色插图，再显示项目说明 */
+            ui_nav_goto(UI_PAGE_SETTINGS);
+            step(2);
+            key_tap(HAL_KEY2);
+            step(24);
+            for (c = 0; c < 7; c++) {
+                key_tap(HAL_KEY3);
+                step(2);
+            }
+            step(20);
+            key_tap(HAL_KEY2);
+            step(24);
+            REQUIRE(!save("shot_about.bmp"), "about page Pinkie art shot");
+            for (py = 40; py < 95 && !about_ink; py++) {
+                for (px = UI_W / 2 - 20; px < UI_W / 2 + 20; px++) {
+                    if (hal_host_pixel(px, py) != UI_COL_BG) {
+                        about_ink = 1;
+                        break;
+                    }
+                }
+            }
+            REQUIRE(about_ink, "about page rendered Pinkie illustration pixels");
+
+            /* 从关于退出到设置列表第 3 项（索引 2 = 震动）关闭开关后，再操作/来消息均不得震动 */
+            hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(28);
+            for (c = 0; c < 5; c++) {
+                key_tap(HAL_KEY1);
+                step(2);
+            }
+            step(20);
+            key_tap(HAL_KEY2); /* 关闭震动 */
+            step(4);
+            REQUIRE(settings_get()->key_beep == 0u, "settings index 2 toggled vibration off");
+            hal_host_beep_get(NULL, NULL, &bc0);
+            key_tap(HAL_KEY3);
+            push_link_frame(0x2Du, ext1, 1);
+            step(2);
+            hal_host_beep_get(NULL, NULL, &bc1);
+            REQUIRE(bc1 == bc0, "vibration muted when switch is OFF");
+        }
+    }
+
+    /* 清空测试写入的 EEPROM 设置与目录槽位，避免干扰其他独立测试默认初值 */
+    (void)hal_ext_flash_erase(LINK_EXT_OFF_CFG, LINK_EXT_OFF_POOL);
+    ui_init();
+    printf("EEPROM persist / priority / compressed dials PASS\n");
+    return 0;
 }
 
 static int test_imu9_fusion(void) {
@@ -1003,6 +1488,7 @@ int host_render_test(const char *shots) {
     if (!result) result = test_async_and_preempt();
     if (!result) result = test_face_snapshot_and_keys();
     if (!result) result = test_ext_flash_and_stream();
+    if (!result) result = test_persist_and_compressed_dials();
     if (!result) result = test_imu9_fusion();
     ui_set_service(NULL);
     hal_host_set_keys(0);

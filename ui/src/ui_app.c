@@ -1,6 +1,7 @@
 #include "ui_internal.h"
 #include "ui_menu.h"
 #include "ui_icons.h"
+#include "about_art.h"
 
 #include "hal.h"
 #include "sport.h"
@@ -15,10 +16,10 @@
 
 enum {
     HOME_N = 5,
-    SET_N = 8,
+    SET_N = 9,
     DETAIL_N = 3,
-    ABOUT_N = 6,
-    MSG_N = 5,
+    ABOUT_N = 1,
+    MSG_N = LINK_EXT_MSG_MAX,
     M_BADGE_W = 680,
     M_BADGE_H = 220,
     M_BADGE_GAP = 16,
@@ -81,8 +82,15 @@ typedef struct app {
     uint8_t msg_was_open;
     uint8_t msg_prev_level;
     uint8_t music_was_open;
+    uint8_t compass_was_open;
     uint8_t sport_tab;
     ui_obj_t sport_scroll;
+    uint8_t prev_mag_cal;
+    uint8_t dial_edit;
+    uint8_t dial_pick;
+    int16_t dial_pick_steps;
+    ui_obj_t dial_zoom;
+    ui_obj_t dial_slide;
 } app_t;
 
 static app_t *st;
@@ -97,11 +105,17 @@ static uint16_t col_dot;
 static uint16_t col_accent;
 static uint16_t col_line;
 
-static const char *const set_name[SET_N] = {"调试模式", "抬腕亮屏", "按键音", "亮度",
-                                            "蓝牙", "状态灯", "熄屏", "关于"};
+static const char *const set_name[SET_N] = {"调试模式", "抬腕亮屏", "震动", "亮度",
+                                            "蓝牙", "状态灯", "熄屏", "关于", "通知清理"};
 static const char *const bright_name[DETAIL_N] = {"低", "中", "高"};
 static const char *const screen_off_name[5] = {"关", "30秒", "1分钟", "2分钟", "5分钟"};
 static const uint16_t screen_off_sec[5] = {0, 30, 60, 120, 300};
+
+static void vib_play(uint16_t pat, uint16_t ms) {
+    if (settings_get()->key_beep) {
+        hal_beep(pat, ms);
+    }
+}
 
 static int badge_h(void) {
     return 18;   /* 单行，只压页面点，不顶内容 */
@@ -322,24 +336,35 @@ static void draw_outer_pages(int scale, int extra_dx) {
 }
 
 static void draw_dots(uint8_t alpha) {
+    int wp = wrap_mod(st->scroll.x, HOME_N * 256);
     int selected = vis_index(st->scroll.x, HOME_N);
     int gap = UI_MX(M_DOT_GAP);
     int h = dot_h();
+    int dx = 0;
     int x0;
     int i;
 
     if (alpha == 0) {
         return;
     }
+    if (wp < 256) {
+        dx = (256 - wp) * UI_W / 256;
+    } else if (wp > (HOME_N - 1) * 256) {
+        dx = ((HOME_N - 1) * 256 - wp) * UI_W / 256;
+    }
+    if (dx <= -UI_W || dx >= UI_W) {
+        return;
+    }
     if (gap < 8) {
         gap = 8;
     }
-    x0 = (UI_W - (HOME_N - 1) * gap) / 2;
-    for (i = 0; i < HOME_N; i++) {
-        int delta = i * 256 - st->scroll.x;
-        int hot = i == selected;
+    /* 表盘(页0)为特殊页，不计入页面数点；只显示 4 个功能页并随功能页滑出/滑入屏幕。 */
+    x0 = (UI_W - (HOME_N - 2) * gap) / 2 + dx;
+    for (i = 0; i < HOME_N - 1; i++) {
+        int page = i + 1;
+        int delta = page * 256 - wp;
+        int hot = (page == selected) || (page == 1 && wp < 256) || (page == HOME_N - 1 && wp > (HOME_N - 1) * 256);
         int w, x;
-        delta = wrap_mod(delta + HOME_N * 128, HOME_N * 256) - HOME_N * 128;
         if (delta < 0) {
             delta = -delta;
         }
@@ -711,10 +736,60 @@ static int face_weekday(int y, int m, int d) {
     return (y + y / 4 - y / 100 + y / 400 + t[m - 1] + d) % 7;
 }
 
-static void draw_face_app(uint8_t a) {
+static void poll_imu9_now(imu9_state_t *out, uint32_t now);
+static void compass_vec(int deg_cw, int *dx_q8, int *dy_q8);
+static void compass_disc(int cx, int cy, int r, uint16_t col, uint8_t a);
+static const char *compass_dir(uint16_t heading);
+
+static void face_comp_text(uint8_t kind, const hal_clock_t *clk,
+                           const sport_stats_t *sp, const imu9_state_t *s9,
+                           int allow_media, char *out, int cap) {
     static const char *const wd[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-    hal_clock_t clock;
-    sport_stats_t sport;
+    out[0] = 0;
+    if (allow_media && link_media_lyric()[0]) {
+        snprintf(out, (size_t)cap, "%s %s",
+                 link_media_playing() ? "Play" : "Pause", link_media_lyric());
+        return;
+    }
+    switch (kind) {
+    case UI_DIAL_COMP_DATE:
+        snprintf(out, (size_t)cap, "%s  %02u.%02u",
+                 wd[face_weekday(clk->year, clk->month, clk->day)],
+                 clk->month, clk->day);
+        break;
+    case UI_DIAL_COMP_STEP:
+        snprintf(out, (size_t)cap, "%lu/%lu 步",
+                 (unsigned long)sp->steps, (unsigned long)(sp->goal ? sp->goal : 8000u));
+        break;
+    case UI_DIAL_COMP_HDG:
+        if (s9 && s9->fused_axes) {
+            snprintf(out, (size_t)cap, "%03u度 %s",
+                     (unsigned)s9->heading_deg, compass_dir(s9->heading_deg));
+        } else {
+            snprintf(out, (size_t)cap, "---度 --");
+        }
+        break;
+    case UI_DIAL_COMP_BAT: {
+        uint8_t pct = hal_battery_pct();
+        uint16_t mv = hal_battery_mv();
+        if (pct != 0xFFu) {
+            snprintf(out, (size_t)cap, "BAT %u%%", (unsigned)pct);
+        } else if (mv > 0u) {
+            snprintf(out, (size_t)cap, "%u.%02uV", (unsigned)(mv / 1000u),
+                     (unsigned)((mv % 1000u) / 10u));
+        } else {
+            snprintf(out, (size_t)cap, "USB PWR");
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void draw_face_digital(const settings_t *s, const hal_clock_t *clock,
+                              const sport_stats_t *sport, const imu9_state_t *s9,
+                              uint16_t fg, uint16_t ac, uint16_t bg, uint8_t a) {
     int row_w = ui_song_width(UI_SONG_CLOCK, "00");
     int row_h = ui_song_height(UI_SONG_CLOCK);
     int gap_y = UI_MY(45);
@@ -726,52 +801,320 @@ static void draw_face_app(uint8_t a) {
     int bar_x = UI_MX(M_MARGIN);
     int bar_w = UI_W - bar_x * 2;
     int bar_y = UI_MY(875);
+    int disp_hr = s->use_24h ? (int)clock->hour
+                             : (((int)clock->hour % 12) ? ((int)clock->hour % 12) : 12);
     int percent;
     uint8_t colon_a;
     char line[40];
     char fitted[40];
-    char value[16];
+    char value[20];
 
     if (gap_y < 5) gap_y = 5;
     if (dot < 2) dot = 2;
+    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
+
+    face_comp_text(s->dial_top, clock, sport, s9, 1, line, (int)sizeof line);
+    if (line[0]) {
+        ui_text_fit(fitted, sizeof fitted, line,
+                    (int16_t)((battery_icon_x() - UI_W / 2) * 2 - UI_MX(16)), 1);
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(60), fitted, col_dim, a, 1);
+    }
+
+    draw_face_pair(x0, y0, disp_hr, fg, a);
+    draw_face_pair(x0, y0 + row_h + gap_y, clock->minute, ac, a);
+    if (!s->use_24h) {
+        ui_draw_text((int16_t)bar_x, (int16_t)(y0 + 2),
+                     clock->hour >= 12 ? "PM" : "AM", col_dim, a, 1);
+    }
+    colon_a = (s->dial_flags & UI_DIAL_FLAG_SECONDS)
+              ? (uint8_t)((100 + ui_anim_pulse(hal_tick_ms(), 2000u) * 155 / 255) * a / 255)
+              : a;
+    ui_draw_round((int16_t)cx, (int16_t)(mid - dot), (int16_t)dot, (int16_t)dot,
+                  (int16_t)(dot / 2), ac, colon_a);
+    ui_draw_round((int16_t)cx, (int16_t)(mid + dot / 2), (int16_t)dot, (int16_t)dot,
+                  (int16_t)(dot / 2), ac, colon_a);
+
+    if (s->dial_bot == UI_DIAL_COMP_STEP) {
+        percent = sport->goal ? (int)(sport->steps * 100u / sport->goal) : 0;
+        if (percent > 100) percent = 100;
+        ui_draw_round((int16_t)bar_x, (int16_t)bar_y, (int16_t)bar_w,
+                      (int16_t)UI_MY(16), 1, col_blue_dim, a);
+        if (percent > 0) {
+            int fill = bar_w * percent / 100;
+            if (fill < 2) fill = 2;
+            ui_draw_round((int16_t)bar_x, (int16_t)bar_y, (int16_t)fill,
+                          (int16_t)UI_MY(16), 1, ac, a);
+        }
+        snprintf(value, sizeof value, "%d%%", percent);
+        ui_draw_text((int16_t)bar_x, (int16_t)UI_MY(890), "STEPS", col_dim, a, 1);
+        ui_text_draw_right((int16_t)(bar_x + bar_w), (int16_t)UI_MY(890),
+                           value, fg, a, 1);
+    } else {
+        face_comp_text(s->dial_bot, clock, sport, s9, 0, line, (int)sizeof line);
+        if (line[0]) {
+            ui_text_fit(fitted, sizeof fitted, line, (int16_t)bar_w, 1);
+            ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(880),
+                                fitted, fg, a, 1);
+        }
+    }
+}
+
+static void draw_face_analog(const settings_t *s, const hal_clock_t *clock,
+                             const sport_stats_t *sport, const imu9_state_t *s9,
+                             uint16_t fg, uint16_t ac, uint16_t bg, uint8_t a) {
+    int cx = UI_W / 2;
+    int cy = UI_H / 2 - UI_MY(15);
+    int r = (UI_W < UI_H ? UI_W : UI_H) * 34 / 100;
+    int k, vx, vy, hr_deg, min_deg, sec_deg;
+    char line[36];
+    char fitted[36];
+
+    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
+    face_comp_text(s->dial_top, clock, sport, s9, 1, line, (int)sizeof line);
+    if (line[0]) {
+        ui_text_fit(fitted, sizeof fitted, line,
+                    (int16_t)((battery_icon_x() - UI_W / 2) * 2 - UI_MX(16)), 1);
+        ui_text_draw_center((int16_t)cx, (int16_t)UI_MY(50), fitted, col_dim, a, 1);
+    }
+
+    compass_disc(cx, cy, r, col_line, a);
+    compass_disc(cx, cy, r - 2, bg, a);
+    for (k = 0; k < 12; k++) {
+        int r0 = r - ((k % 3 == 0) ? 7 : 4);
+        int r1 = r - 3;
+        compass_vec(k * 30, &vx, &vy);
+        ui_draw_line((int16_t)(cx + ((vx * r0) >> 8)), (int16_t)(cy + ((vy * r0) >> 8)),
+                     (int16_t)(cx + ((vx * r1) >> 8)), (int16_t)(cy + ((vy * r1) >> 8)),
+                     (k % 3 == 0) ? ac : col_dim, a);
+    }
+
+    hr_deg = (clock->hour % 12) * 30 + clock->minute / 2;
+    min_deg = clock->minute * 6;
+    compass_vec(hr_deg, &vx, &vy);
+    ui_draw_line((int16_t)cx, (int16_t)cy,
+                 (int16_t)(cx + ((vx * (r * 52 / 100)) >> 8)),
+                 (int16_t)(cy + ((vy * (r * 52 / 100)) >> 8)), fg, a);
+    compass_vec(min_deg, &vx, &vy);
+    ui_draw_line((int16_t)cx, (int16_t)cy,
+                 (int16_t)(cx + ((vx * (r * 76 / 100)) >> 8)),
+                 (int16_t)(cy + ((vy * (r * 76 / 100)) >> 8)), ac, a);
+    if (s->dial_flags & UI_DIAL_FLAG_SECONDS) {
+        sec_deg = clock->second * 6;
+        compass_vec(sec_deg, &vx, &vy);
+        ui_draw_line((int16_t)cx, (int16_t)cy,
+                     (int16_t)(cx + ((vx * (r * 84 / 100)) >> 8)),
+                     (int16_t)(cy + ((vy * (r * 84 / 100)) >> 8)), col_accent, a);
+    }
+    compass_disc(cx, cy, 4, ac, a);
+    compass_disc(cx, cy, 2, bg, a);
+
+    face_comp_text(s->dial_bot, clock, sport, s9, 0, line, (int)sizeof line);
+    if (line[0]) {
+        ui_text_fit(fitted, sizeof fitted, line, (int16_t)(UI_W - UI_MX(140)), 1);
+        ui_text_draw_center((int16_t)cx, (int16_t)UI_MY(885), fitted, fg, a, 1);
+    }
+}
+
+static void draw_face_imu(const settings_t *s, const hal_clock_t *clock,
+                          const sport_stats_t *sport, const imu9_state_t *s9,
+                          uint16_t fg, uint16_t ac, uint16_t bg, uint8_t a) {
+    int margin = UI_MX(M_MARGIN);
+    int w = UI_W - margin * 2;
+    int sc = UI_W >= 200 ? 3 : 2;
+    int disp_hr = s->use_24h ? (int)clock->hour
+                             : (((int)clock->hour % 12) ? ((int)clock->hour % 12) : 12);
+    int pct = sport->goal ? (int)(sport->steps * 100u / sport->goal) : 0;
+    int horizon_y = UI_MY(540);
+    int tilt, fill;
+    char tbuf[16];
+    char line[36];
+
+    if (pct > 100) pct = 100;
+    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
+    snprintf(line, sizeof line, "%s %03u度",
+             s9->fused_axes == 9 ? "9DOF" : (s9->fused_axes == 6 ? "6DOF" : "IMU"),
+             (unsigned)s9->heading_deg);
+    ui_draw_text((int16_t)margin, (int16_t)UI_MY(55), line, ac, a, 1);
+
+    snprintf(tbuf, sizeof tbuf,
+             (s->dial_flags & UI_DIAL_FLAG_SECONDS) ? "%02d:%02u:%02u" : "%02d:%02u",
+             disp_hr, clock->minute, clock->second);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(240), tbuf, fg, a, (uint8_t)sc);
+
+    ui_draw_round((int16_t)margin, (int16_t)horizon_y, (int16_t)w,
+                  (int16_t)UI_MY(150), 6, col_blue_dim, a);
+    tilt = (int)s9->roll_d10 / 25;
+    if (tilt > 14) tilt = 14;
+    if (tilt < -14) tilt = -14;
+    ui_draw_line((int16_t)(margin + 8), (int16_t)(horizon_y + UI_MY(75) - tilt),
+                 (int16_t)(margin + w - 8), (int16_t)(horizon_y + UI_MY(75) + tilt),
+                 ac, a);
+    snprintf(line, sizeof line, "R %+d  P %+d",
+             (int)(s9->roll_d10 / 10), (int)(s9->pitch_d10 / 10));
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(horizon_y + UI_MY(95)), line, fg, a, 1);
+
+    ui_draw_round((int16_t)margin, (int16_t)UI_MY(770), (int16_t)w,
+                  (int16_t)UI_MY(20), 2, col_blue_dim, a);
+    if (pct > 0) {
+        fill = w * pct / 100;
+        if (fill < 2) fill = 2;
+        ui_draw_round((int16_t)margin, (int16_t)UI_MY(770), (int16_t)fill,
+                      (int16_t)UI_MY(20), 2, ac, a);
+    }
+    face_comp_text(s->dial_bot == UI_DIAL_COMP_HDG ? UI_DIAL_COMP_STEP : s->dial_bot,
+                   clock, sport, s9, 0, line, (int)sizeof line);
+    if (line[0]) {
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(840), line, col_dim, a, 1);
+    }
+}
+
+static void draw_face_photo(const settings_t *s, const hal_clock_t *clock,
+                            const sport_stats_t *sport, const imu9_state_t *s9,
+                            uint16_t fg, uint16_t ac, uint16_t bg, uint8_t a) {
+    int pos = (s->dial_flags & UI_DIAL_FLAG_POS_MASK) >> 1;
+    int disp_hr = s->use_24h ? (int)clock->hour
+                             : (((int)clock->hour % 12) ? ((int)clock->hour % 12) : 12);
+    int sc = UI_W >= 200 ? 3 : 2;
+    int th = ui_text_height("0", (uint8_t)sc);
+    int cap_h = th + ui_text_height("0", 1) + 14;
+    int cap_y = pos == 1 ? UI_MY(90) : (pos == 2 ? UI_H - cap_h - UI_MY(70) : (UI_H - cap_h) / 2);
+    char tbuf[12];
+    char line[36];
+    char fitted[36];
+
+    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
+    if (s->img_ready && hal_ext_flash_present() && s->img_w > 0 && s->img_h > 0) {
+        ui_ext_image_draw((int16_t)((UI_W - s->img_w) / 2),
+                          (int16_t)((UI_H - s->img_h) / 2),
+                          s->img_w, s->img_h, link_ext_img_offset(), s->img_fmt, ac, a);
+    } else {
+        ui_draw_round((int16_t)UI_MX(120), (int16_t)UI_MY(140),
+                      (int16_t)(UI_W - UI_MX(240)), (int16_t)(UI_H - UI_MY(280)),
+                      12, col_blue_dim, a);
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(860),
+                            "APP 同步", col_dim, a, 1);
+    }
+    if (s->dial_flags & UI_DIAL_FLAG_SCRIM) {
+        ui_draw_round((int16_t)UI_MX(80), (int16_t)cap_y,
+                      (int16_t)(UI_W - UI_MX(160)), (int16_t)cap_h,
+                      8, UI_COL_BG, (uint8_t)((int)a * 170 / 255));
+    }
+    snprintf(tbuf, sizeof tbuf, "%02d:%02u", disp_hr, clock->minute);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(cap_y + 6), tbuf, fg, a, (uint8_t)sc);
+    face_comp_text(s->dial_top == UI_DIAL_COMP_NONE ? s->dial_bot : s->dial_top,
+                   clock, sport, s9, 1, line, (int)sizeof line);
+    if (line[0]) {
+        ui_text_fit(fitted, sizeof fitted, line, (int16_t)(UI_W - UI_MX(200)), 1);
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(cap_y + th + 9),
+                            fitted, ac, a, 1);
+    }
+}
+
+static void draw_face_content(uint8_t dial_id, uint8_t a) {
+    const settings_t *s = settings_get();
+    hal_clock_t clock;
+    sport_stats_t sport;
+    imu9_state_t s9;
+    uint16_t fg = (s->dial_text || s->cfg_loaded) ? s->dial_text : col_text;
+    uint16_t ac = (s->dial_accent || s->cfg_loaded) ? s->dial_accent : col_ring;
+    uint16_t bg = s->cfg_loaded ? s->dial_bg : col_bg;
+
     hal_clock_get(&clock);
     sport_get(&sport);
-    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-
-    if (link_media_lyric()[0]) {
-        snprintf(line, sizeof line, "%s %s",
-                 link_media_playing() ? "Play" : "Pause", link_media_lyric());
+    if (dial_id == UI_DIAL_IMU || s->dial_top == UI_DIAL_COMP_HDG ||
+        s->dial_bot == UI_DIAL_COMP_HDG) {
+        poll_imu9_now(&s9, hal_tick_ms());
     } else {
-        snprintf(line, sizeof line, "%s  %02u.%02u",
-                 wd[face_weekday(clock.year, clock.month, clock.day)],
-                 clock.month, clock.day);
+        imu9_get(&s9);
     }
-    ui_text_fit(fitted, sizeof fitted, line,
-                (int16_t)((battery_icon_x() - UI_W / 2) * 2 - UI_MX(16)), 1);
-    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(60), fitted, col_dim, a, 1);
 
-    draw_face_pair(x0, y0, clock.hour, col_text, a);
-    draw_face_pair(x0, y0 + row_h + gap_y, clock.minute, col_ring, a);
-    colon_a = (uint8_t)((100 + ui_anim_pulse(hal_tick_ms(), 2000u) * 155 / 255) * a / 255);
-    ui_draw_round((int16_t)cx, (int16_t)(mid - dot), (int16_t)dot, (int16_t)dot,
-                  (int16_t)(dot / 2), col_ring, colon_a);
-    ui_draw_round((int16_t)cx, (int16_t)(mid + dot / 2), (int16_t)dot, (int16_t)dot,
-                  (int16_t)(dot / 2), col_ring, colon_a);
-
-    percent = sport.goal ? (int)(sport.steps * 100u / sport.goal) : 0;
-    if (percent > 100) percent = 100;
-    ui_draw_round((int16_t)bar_x, (int16_t)bar_y, (int16_t)bar_w,
-                  (int16_t)UI_MY(16), 1, col_blue_dim, a);
-    if (percent > 0) {
-        int fill = bar_w * percent / 100;
-        if (fill < 2) fill = 2;
-        ui_draw_round((int16_t)bar_x, (int16_t)bar_y, (int16_t)fill,
-                      (int16_t)UI_MY(16), 1, col_ring, a);
+    switch (dial_id) {
+    case UI_DIAL_ANALOG:
+        draw_face_analog(s, &clock, &sport, &s9, fg, ac, bg, a);
+        break;
+    case UI_DIAL_IMU:
+        draw_face_imu(s, &clock, &sport, &s9, fg, ac, bg, a);
+        break;
+    case UI_DIAL_PHOTO:
+        draw_face_photo(s, &clock, &sport, &s9, fg, ac, bg, a);
+        break;
+    default:
+        draw_face_digital(s, &clock, &sport, &s9, fg, ac, bg, a);
+        break;
     }
-    snprintf(value, sizeof value, "%d%%", percent);
-    ui_draw_text((int16_t)bar_x, (int16_t)UI_MY(890), "STEPS", col_dim, a, 1);
-    ui_text_draw_right((int16_t)(bar_x + bar_w), (int16_t)UI_MY(890),
-                       value, col_text, a, 1);
+}
+
+static void draw_face_app(uint8_t a) {
+    static const char *const dial_toast_name[UI_DIAL_COUNT] = {
+        "数字表盘", "指针表盘", "9DOF 表盘", "自定义表"
+    };
+    const settings_t *s = settings_get();
+    int zoom_t = st->dial_zoom.scale;
+    int active = st->dial_edit || zoom_t > 0;
+    int os = 256, ox = 0, oy = 0;
+    int sc = 256, pw = UI_W, ph = UI_H, px = 0, py = 0, frac = 0;
+    uint8_t left_id = s->dial_id, right_id = s->dial_id;
+    int pass;
+
+    if (active) {
+        int wp = wrap_mod(st->dial_slide.x, UI_DIAL_COUNT * 256);
+        int sc_edit = 256 - 90;
+        int pw_edit = UI_W * sc_edit / 256;
+        int ph_edit = UI_H * sc_edit / 256;
+        int px_edit = (UI_W - pw_edit) / 2;
+        int cy_edit = 22 + ph_edit / 2 - 6;
+        int tw = UI_MX(680);
+        int ty = UI_H - 22;
+        char hdr[4];
+        const char *title = dial_toast_name[st->dial_pick % UI_DIAL_COUNT];
+
+        sc = 256 - 90 * zoom_t / 255;
+        pw = UI_W * sc / 256;
+        ph = UI_H * sc / 256;
+        px = (UI_W - pw) / 2;
+        py = 22 * zoom_t / 255;
+        frac = wp & 255;
+        left_id = (uint8_t)(wp >> 8);
+        right_id = (uint8_t)((left_id + 1) % UI_DIAL_COUNT);
+        ui_draw_get_xform(&os, &ox, &oy);
+
+        /* 底层 Chrome：序号 / 左右提示 / 表盘名称置底，选中放大或滑动时由上层表盘自然覆盖遮挡。 */
+        ui_draw_fill(0, 0, UI_W, UI_H, UI_COL_BG, a);
+        hdr[0] = (char)('1' + (st->dial_pick % UI_DIAL_COUNT));
+        hdr[1] = '/';
+        hdr[2] = '4';
+        hdr[3] = 0;
+        ui_text_draw_center((int16_t)(UI_W / 2), 4, hdr, col_ring, a, 1);
+        if (px_edit >= 8) {
+            ui_text_draw_center((int16_t)(px_edit / 2), (int16_t)cy_edit, "<", col_ring, a, 1);
+            ui_text_draw_center((int16_t)(px_edit + pw_edit + (UI_W - px_edit - pw_edit) / 2),
+                                (int16_t)cy_edit, ">", col_ring, a, 1);
+        }
+        ui_draw_round((int16_t)((UI_W - tw) / 2), (int16_t)ty,
+                      (int16_t)tw, 16, 8, col_badge, a);
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(ty + 2), title, col_text, a, 1);
+    }
+    for (pass = 0; pass < (active && frac > 0 ? 2 : 1); pass++) {
+        uint8_t card_id = pass == 0 ? left_id : right_id;
+        if (active) {
+            int dx = pass == 0 ? (-frac * UI_W / 256) : ((256 - frac) * UI_W / 256);
+            int cx = px + dx;
+            if (zoom_t > 0) {
+                ui_draw_xform(os, ox, oy);
+                ui_draw_fill((int16_t)(cx - 2), (int16_t)(py - 2), (int16_t)(pw + 4), 2, col_ring, a);
+                ui_draw_fill((int16_t)(cx - 2), (int16_t)(py + ph), (int16_t)(pw + 4), 2, col_ring, a);
+                ui_draw_fill((int16_t)(cx - 2), (int16_t)py, 2, (int16_t)ph, col_ring, a);
+                ui_draw_fill((int16_t)(cx + pw), (int16_t)py, 2, (int16_t)ph, col_ring, a);
+            }
+            ui_draw_xform(sc * os / 256,
+                          ox + cx * os / 256,
+                          oy + py * os / 256);
+        }
+        draw_face_content(card_id, a);
+    }
+    if (active) {
+        ui_draw_xform(os, ox, oy);
+    }
 }
 
 /* 跑步采用外部 AI 按 ui/ICON_SVG_PROMPT.md 产出的关键帧（已人工预览验收）。
@@ -1017,10 +1360,28 @@ static void draw_sport_compass(uint8_t a, int clear_bg) {
     ui_draw_text((int16_t)(margin + sc + 5), (int16_t)title_y,
                  "指南针", col_text, a, 1);
 
-    compass_disc(cx, cy, r, col_line, a);
-    compass_disc(cx, cy, r_in, col_bg, a);
-    ui_draw_fill((int16_t)(cx - sc), (int16_t)(cy - r - sc * 2 - 1),
-                 (int16_t)(sc * 2), (int16_t)(sc * 2 + 2), col_ring, a);
+    if (link_compass_asset_ready()) {
+        int16_t aw = 0, ah = 0;
+        const uint8_t *abits = link_compass_asset_mask(&aw, &ah);
+        if (abits && aw > 0 && ah > 0) {
+            ui_mask1_draw((int16_t)(cx - aw / 2), (int16_t)(cy - ah / 2),
+                          aw, ah, abits, col_line, a);
+            if (UI_W >= 200) {
+                compass_disc(cx, cy, r, col_line, a);
+                compass_disc(cx, cy, r_in, col_bg, a);
+                ui_mask1_draw((int16_t)(cx - aw / 2), (int16_t)(cy - ah / 2),
+                              aw, ah, abits, col_line, a);
+            } else {
+                r = 30;
+                r_in = 27;
+            }
+        }
+    } else {
+        compass_disc(cx, cy, r, col_line, a);
+        compass_disc(cx, cy, r_in, col_bg, a);
+        ui_draw_fill((int16_t)(cx - sc), (int16_t)(cy - r - sc * 2 - 1),
+                     (int16_t)(sc * 2), (int16_t)(sc * 2 + 2), col_ring, a);
+    }
 
     for (k = 0; k < 8; k++) {
         int vx, vy, r_tick0, r_tick1 = r_in - 1;
@@ -1311,10 +1672,13 @@ static void draw_msg_card(int scroll, int count, int i, int hot,
                        (int16_t)(y + (h - 8) / 2), ">", col_dim, a, 1);
     clip_w = w - pad - right_pad - arrow_w;
     if (clip_w > 8) {
-        ui_mask1_draw_clip((int16_t)(x + pad), (int16_t)(y + (h - 22) / 2),
-                           (int16_t)clip_w, 22, 128,
-                           link_msg_list_mask() + i * 22 * (128 / 8),
-                           hot ? col_text : col_dim, a);
+        const uint8_t *row_bits = link_msg_row_mask(i);
+        if (row_bits) {
+            ui_mask1_draw_clip((int16_t)(x + pad), (int16_t)(y + (h - 22) / 2),
+                               (int16_t)clip_w, 22, 128,
+                               row_bits,
+                               hot ? col_text : col_dim, a);
+        }
     }
 }
 
@@ -1346,11 +1710,22 @@ static void draw_msg_app(uint8_t a) {
         }
     } else if (!link_connected() || link_msg_list_empty() || st->messages.count == 0 ||
                (uint32_t)(hal_tick_ms() - st->reveal_ms) >= 1000u) {
-        int tw = ui_song_width(UI_SONG_TITLE, "无消息");
-        int th = ui_song_height(UI_SONG_TITLE);
-        ui_song_draw(UI_SONG_TITLE, (int16_t)((UI_W - tw) / 2),
-                     (int16_t)(band + (UI_H - band - th) / 2),
-                     "无消息", UI_COL_MUTED_LIGHT, a);
+        if (link_msg_empty_asset_ready()) {
+            int16_t aw = 0, ah = 0;
+            const uint8_t *abits = link_msg_empty_asset_mask(&aw, &ah);
+            if (abits && aw > 0 && ah > 0) {
+                int my = band + (UI_H - band - ah - 20) / 2;
+                ui_mask1_draw((int16_t)((UI_W - aw) / 2), (int16_t)my,
+                              aw, ah, abits, UI_COL_MUTED_LIGHT, a);
+                ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(my + ah + 4),
+                                    link_connected() ? "暂无消息" : "无连接",
+                                    UI_COL_MUTED_LIGHT, a, 1);
+            }
+        } else {
+            ui_text_draw_center((int16_t)(UI_W / 2),
+                                (int16_t)(band + (UI_H - band - 16) / 2),
+                                "无消息", UI_COL_MUTED_LIGHT, a, 1);
+        }
     }
     /* 其余情况是列表正在加载：保持空白，避免“无消息”闪一下。 */
     draw_header_anim("消息", scroll, a);
@@ -1368,6 +1743,7 @@ static void settings_side(int idx, char *buf, int cap) {
     case 4: v = s->bluetooth ? "开" : "关"; break;
     case 5: v = s->led_mode == 0 ? "关闭" : (s->led_mode == 2 ? "闪烁" : "常亮"); break;
     case 6: v = screen_off_name[s->screen_off <= 4 ? s->screen_off : 0]; break;
+    case 8: v = s->msg_auto_clear ? "开" : "关"; break;
     default: break;
     }
     if (v) {
@@ -1406,41 +1782,27 @@ static void draw_message_page(uint8_t a) {
         return;
     }
     if (link_msg_detail_ready()) {
-        /* 详情页不要标题，整屏都是手机渲染好的正文。 */
-        ui_mask1_draw(0, 0, UI_W, UI_H, link_msg_detail_mask(), col_text, a);
+        /* 详情页不要标题，整屏都是手机渲染好的 128x160 1bpp 正文。 */
+        ui_mask1_draw((int16_t)((UI_W - 128) / 2), (int16_t)((UI_H - 160) / 2),
+                      128, 160, link_msg_detail_mask(), col_text, a);
     }
     /* 加载中保持空白，避免每次进来先闪“无消息”。 */
 }
 
 static void draw_about_page(uint8_t a) {
-    about_info_t info;
-    hal_imu_t imu;
-    char lines[ABOUT_N][24];
-    const char *names[ABOUT_N];
     int scroll = st->settings.child_scroll.x;
-    int vis = vis_index(scroll, ABOUT_N);
-    int i;
+    int top = header_band_h(0);
+    int y_img = top + UI_MY(20);
+    int y_t0 = y_img + ABOUT_ART_H + UI_MY(24);
+    int dy = UI_MY(125);
 
-    about_fill(&info);
-    snprintf(lines[0], sizeof lines[0], "版本 %s", info.version);
-    snprintf(lines[1], sizeof lines[1], "%s", info.mcu);
-    snprintf(lines[2], sizeof lines[2], "%s", info.clock_src);
-    if (info.battery_pct == 0xFF) {
-        snprintf(lines[3], sizeof lines[3], "USB 供电");
-    } else {
-        /* 只显示到 10mV，末位 mV 抖动不展示。 */
-        snprintf(lines[3], sizeof lines[3], "%u.%02uV",
-                 (unsigned)(info.battery_mv / 1000u),
-                 (unsigned)((info.battery_mv % 1000u) / 10u));
-    }
-    snprintf(lines[4], sizeof lines[4], "%.11s", info.build);
-    snprintf(lines[5], sizeof lines[5], "MPU6050 %s", hal_imu_read(&imu) ? "OK" : "--");
-    for (i = 0; i < ABOUT_N; i++) {
-        names[i] = lines[i];
-    }
-
+    if (dy < 18) dy = 18;
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    draw_stack(&st->settings, UI_MENU_CHILD, scroll, ABOUT_N, vis, names, 0, a);
+    ui_mem_image_draw((int16_t)((UI_W - ABOUT_ART_W) / 2), (int16_t)y_img,
+                      ABOUT_ART_W, ABOUT_ART_H, about_art_pal4_rle, 1u, a);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)y_t0, "AT32极客手表", col_ring, a, 1);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(y_t0 + dy), "9轴+32K+1207马达", col_text, a, 1);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(y_t0 + dy * 2), "Vibe神力大作业", col_dim, a, 1);
     draw_header_anim("关于", scroll, a);
 }
 
@@ -1572,7 +1934,9 @@ static void on_confirm(ui_menu_t *menu) {
         if (!st->screen_asleep) {
             hal_backlight_set(backlight_level());
         }
+        (void)settings_save_ext(UI_CFG_PRIO_I2C);
         link_notify_settings();
+        link_notify_config();
         ui_menu_back(menu);
         return;
     }
@@ -1621,6 +1985,9 @@ static void on_confirm(ui_menu_t *menu) {
             break;
         case 2:
             s->key_beep = (uint8_t)!s->key_beep;
+            if (!s->key_beep) {
+                hal_beep(HAL_VIB_STOP, 0u);
+            }
             break;
         case 3:
             ui_menu_enter_child(menu, DETAIL_N);
@@ -1641,10 +2008,18 @@ static void on_confirm(ui_menu_t *menu) {
         case 7:
             ui_menu_enter_child(menu, ABOUT_N);
             break;
+        case 8:
+            s->msg_auto_clear = (uint8_t)!s->msg_auto_clear;
+            if (s->msg_auto_clear) {
+                link_clear_ext_messages();
+            }
+            break;
         default:
             break;
         }
+        (void)settings_save_ext(UI_CFG_PRIO_I2C);
         link_notify_settings();
+        link_notify_config();
         return;
     }
     if (menu == &st->sport) {
@@ -1669,6 +2044,20 @@ static void on_confirm(ui_menu_t *menu) {
     ui_trace_emit("ui_nav_goto(message)");
 }
 
+static void dial_edit_sync_slide(uint8_t id) {
+    st->dial_pick = (uint8_t)(id % UI_DIAL_COUNT);
+    st->dial_pick_steps = st->dial_pick;
+    ui_anim_stop(&st->dial_slide, 0);
+    st->dial_slide.x = (int16_t)(st->dial_pick_steps * 256);
+}
+
+static void dial_edit_reset(void) {
+    st->dial_edit = 0;
+    ui_anim_stop(&st->dial_zoom, 0);
+    st->dial_zoom.scale = 0;
+    dial_edit_sync_slide(settings_get()->dial_id);
+}
+
 static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
     ui_menu_t *menu;
     uint8_t step_keys = (uint8_t)(pressed | repeat_keys);
@@ -1682,14 +2071,21 @@ static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
     menu = live_menu();
     if (st->sensor_open && menu == &st->sport) {
         if (long_enter || (pressed & HAL_KEY1)) {
+            if (long_enter) {
+                vib_play(HAL_VIB_SINGLE, 130u);
+            } else {
+                vib_play(HAL_VIB_SINGLE, 38u);
+            }
             st->sensor_open = 0;
             return;
         }
         if (pressed & HAL_KEY2) {
+            vib_play(HAL_VIB_DOUBLE, 65u);
             imu9_cal_start();
             return;
         }
         if (pressed & HAL_KEY3) {
+            vib_play(HAL_VIB_SINGLE, 38u);
             imu9_reset();
             return;
         }
@@ -1699,16 +2095,54 @@ static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
     }
     if (long_enter) {
         if (menu && ui_menu_level(menu) > UI_MENU_ICON) {
+            vib_play(HAL_VIB_SINGLE, 130u);
             st->rip_mode = RIP_NONE;
             ui_menu_back(menu);
+        } else if (!menu && st->focus == UI_PAGE_FACE) {
+            vib_play(HAL_VIB_SINGLE, 130u);
+            if (st->dial_edit) {
+                st->dial_edit = 0;
+                dial_edit_sync_slide(settings_get()->dial_id);
+                ui_anim_play_range(UI_ANIM_ZOOM_OUT, &st->dial_zoom, st->dial_zoom.scale, 0);
+            } else {
+                st->dial_edit = 1;
+                dial_edit_sync_slide(settings_get()->dial_id);
+                ui_anim_play_range(UI_ANIM_ZOOM_IN, &st->dial_zoom, st->dial_zoom.scale, 255);
+            }
+            ui_draw_invalidate();
         }
         return;
     }
     if (!step_keys) {
         return;
     }
-    if ((pressed != 0) && settings_get()->key_beep) {
-        hal_beep(2000, 30);
+    if (pressed != 0) {
+        vib_play(HAL_VIB_SINGLE, 38u);
+    }
+    if (st->dial_edit && !menu && st->focus == UI_PAGE_FACE) {
+        settings_t *s = settings_get();
+        int dir = 0;
+        if (step_keys & HAL_KEY1) {
+            dir--;
+        }
+        if (step_keys & HAL_KEY3) {
+            dir++;
+        }
+        if (dir != 0) {
+            st->dial_pick_steps = (int16_t)(st->dial_pick_steps + dir);
+            st->dial_pick = (uint8_t)wrap_mod(st->dial_pick_steps, UI_DIAL_COUNT);
+            ui_anim_play_range(UI_ANIM_STACK, &st->dial_slide,
+                               st->dial_slide.x, (int16_t)(st->dial_pick_steps * 256));
+        }
+        if (pressed & HAL_KEY2) {
+            s->dial_id = st->dial_pick;
+            st->dial_edit = 0;
+            (void)settings_save_ext(UI_CFG_PRIO_I2C);
+            link_notify_config();
+            ui_anim_play_range(UI_ANIM_ZOOM_OUT, &st->dial_zoom, st->dial_zoom.scale, 0);
+        }
+        ui_draw_invalidate();
+        return;
     }
     if (menu == &st->music && ui_menu_level(menu) > UI_MENU_ICON) {
         if (pressed) {
@@ -1737,6 +2171,7 @@ static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
                 }
             } else if (pressed & HAL_KEY2) {
                 if (st->sport_tab == 1) {
+                    vib_play(HAL_VIB_DOUBLE, 65u);
                     imu9_cal_start();
                 } else {
                     on_confirm(menu);
@@ -1790,9 +2225,11 @@ static void on_key(uint8_t pressed, uint8_t repeat_keys, int long_enter) {
         return;
     }
     if (step_keys & HAL_KEY1) {
+        ui_anim_stop(&st->dial_zoom, 1);
         slide_to(&st->scroll, &st->focus, -1, HOME_N);
     }
     if (step_keys & HAL_KEY3) {
+        ui_anim_stop(&st->dial_zoom, 1);
         slide_to(&st->scroll, &st->focus, 1, HOME_N);
     }
     if ((pressed & HAL_KEY2) && !menu && st->focus == UI_PAGE_FACE) {
@@ -1830,6 +2267,18 @@ void ui_init(void) {
     sport_init();
     imu9_init();
     settings_init();
+    if (settings_load_ext()) {
+        settings_t *s = settings_get();
+        imu9_state_t s9;
+        st->debug = s->debug ? 1 : 0;
+        if (st->debug) {
+            st->overlay.opacity = 255;
+        }
+        imu9_get(&s9);
+        st->prev_mag_cal = s9.mag_cal;
+    }
+    link_load_ext();
+    dial_edit_reset();
     st->screen_asleep = 0;
     st->active_ms = hal_tick_ms();
     hal_backlight_set(backlight_level());
@@ -1846,6 +2295,7 @@ void ui_nav_goto(ui_page_id_t page) {
         return;
     }
     ui_anim_stop(&st->scroll, 0);
+    dial_edit_reset();
     st->focus = (int)page;
     st->scroll.x = (int16_t)((int)page * 256);
 }
@@ -2068,6 +2518,9 @@ static void msg_link_sync(void) {
     int level = st->messages.level;
     int open = level != UI_MENU_ICON;
     int music_open = st->music.level != UI_MENU_ICON;
+    int compass_open = (st->focus == UI_PAGE_SPORT &&
+                        ui_menu_level(&st->sport) == UI_MENU_LIST &&
+                        (st->sport_tab == 1 || st->sport_scroll.x > 0));
 
     /* 从详情返回列表时：若有外置 Flash 缓存将立即恢复列表缓冲，并通知手机刷新。 */
     if (st->msg_prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
@@ -2081,6 +2534,20 @@ static void msg_link_sync(void) {
         /* 离开音乐应用：释放媒体点阵动态 RAM 缓冲。 */
         link_leave_music();
     }
+    if (!st->compass_was_open && compass_open) {
+        /* 打开运动指南针：按需从 AT24C256 外部 ROM 加载 64x64 刻盘底图到动态 RAM；
+           未校准地磁时伴随双脉冲震动提醒用户校准。 */
+        imu9_state_t s9;
+        link_enter_compass();
+        imu9_get(&s9);
+        if (s9.mag_cal != 2u) {
+            vib_play(HAL_VIB_DOUBLE, 65u);
+        }
+    } else if (st->compass_was_open && !compass_open) {
+        /* 离开指南针：立刻释放动态 RAM。 */
+        link_leave_compass();
+    }
+    st->compass_was_open = (uint8_t)compass_open;
     st->msg_was_open = (uint8_t)open;
     st->msg_prev_level = (uint8_t)level;
     st->music_was_open = (uint8_t)music_open;
@@ -2095,7 +2562,7 @@ static int dot_alpha(uint32_t now) {
         st->dot_ms = now;
         st->dot_page = page;
     }
-    if (!moving && page == UI_PAGE_FACE) {
+    if (st->dial_edit || st->dial_zoom.scale > 0) {
         return 0;
     }
     idle = now - st->dot_ms;
@@ -2269,15 +2736,36 @@ void ui_frame(void) {
             hal_backlight_set(0);
         }
     }
+    /* on_key() 内 EEPROM/外部读写可能耗时数毫秒，刷新当前毫秒后再步进动画。 */
+    now = hal_tick_ms();
     ui_anim_tick(now);
     if (!ui_anim_busy(&st->scroll)) {
         st->scroll.x = (int16_t)wrap_mod(st->scroll.x, HOME_N * 256);
+    }
+    if (!ui_anim_busy(&st->dial_slide)) {
+        st->dial_slide.x = (int16_t)wrap_mod(st->dial_slide.x, UI_DIAL_COUNT * 256);
+        st->dial_pick_steps = (int16_t)(st->dial_slide.x >> 8);
     }
     ui_menu_tick(&st->settings);
     ui_menu_tick(&st->messages);
     msg_link_sync();
     ui_menu_tick(&st->sport);
     ui_menu_tick(&st->music);
+    {
+        imu9_state_t s9;
+        imu9_get(&s9);
+        if (s9.mag_cal == 2u && st->prev_mag_cal != 2u) {
+            settings_t *cfg = settings_get();
+            st->prev_mag_cal = 2u;
+            vib_play(HAL_VIB_DOUBLE, 65u);
+            (void)settings_save_ext(cfg->cfg_source == UI_CFG_PRIO_APP
+                                        ? UI_CFG_PRIO_APP
+                                        : UI_CFG_PRIO_I2C);
+            link_notify_config();
+        } else if (s9.mag_cal != 2u) {
+            st->prev_mag_cal = s9.mag_cal;
+        }
+    }
 
     menu = 0;
     if (ui_menu_level(&st->settings) > UI_MENU_ICON || st->settings.zoom.scale > 0) {
@@ -2349,6 +2837,7 @@ void ui_app_go_home(void) {
     st->msg_prev_level = UI_MENU_ICON;
     st->music_was_open = 0;
     st->sensor_open = 0;
+    dial_edit_reset();
     st->sport_tab = 0;
     ui_anim_stop(&st->sport_scroll, 0);
     st->sport_scroll.x = 0;

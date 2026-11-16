@@ -97,7 +97,13 @@ const char *hal_mag_name(void);
 /* 蓝牙连接状态：1 已连，0 未连，-1 未知。 */
 int hal_ble_connected(void);
 
-/* 蜂鸣器。freq_hz=0 立即停；有源蜂鸣器忽略频率只开关。ms 为持续时间。 */
+/* 1207 转子马达震动驱动（复用 PA8 接口）。pattern=0/ms=0 立即停；1 单震(按键/长震)；2 双震(指南针提示)；3 三连震(新消息)。 */
+enum {
+    HAL_VIB_STOP   = 0u,
+    HAL_VIB_SINGLE = 1u,
+    HAL_VIB_DOUBLE = 2u,
+    HAL_VIB_SMS    = 3u
+};
 void hal_beep(uint16_t freq_hz, uint16_t ms);
 /* 状态灯。 */
 void hal_led_set(int on);
@@ -113,6 +119,7 @@ void hal_ram_get(uint32_t *used, uint32_t *total);
    成功返回 1，设备未接或越界返回 0。 */
 #define HAL_EXT_FLASH_SIZE (32u * 1024u)
 int hal_ext_flash_present(void);
+uint8_t hal_ext_flash_addr(void);
 int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len);
 int hal_ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len);
 int hal_ext_flash_erase(uint32_t offset, uint32_t len);
