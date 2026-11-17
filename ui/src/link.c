@@ -9,6 +9,7 @@
 #include <string.h>
 
 static void font_cache_flush(void);
+static void font_cache_free(void);
 
 /* 蓝牙透传串口。
    手机 -> 手表：
@@ -1713,7 +1714,7 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
             EXT_BLK_ASSET_MUSIC
         };
         static const uint16_t max_map[8] = {
-            4096u, 8192u, 6144u, 4608u, 3072u, 4096u, 4096u, 2048u
+            4096u, 8192u, 6144u, 4608u, 3072u, 4096u, 4096u, 4096u
         };
         int idx = (int)(id - LINK_ASSET_COMPASS3D);
         int blk_idx = blk_map[idx];
@@ -2793,7 +2794,13 @@ void link_begin_pic_sys(void) {
         lk.pic_entry >= 12u) {
         return;
     }
-    (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
+    if (!begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u)) {
+        /* 主菜单图标 2.7KB 是最大的一次性块：退掉非必要的标题/字模缓存再试，
+           否则页面来回进出后内存碎片会让 SYS1 永久载不进来。 */
+        free_hdr_buf();
+        font_cache_free();
+        (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
+    }
 }
 
 int link_pic_sys_ready(void) {
@@ -2820,7 +2827,7 @@ void link_begin_pic_music(void) {
     if (lk.mus_buf && lk.mus_total >= 16u && lk.mus_entry >= 12u) {
         return;
     }
-    (void)begin_pic_load(EXT_BLK_ASSET_MUSIC, PIC_MAGIC_MUSIC, DYN_MUSIC, 2048u);
+    (void)begin_pic_load(EXT_BLK_ASSET_MUSIC, PIC_MAGIC_MUSIC, DYN_MUSIC, 4096u);
 }
 
 void link_leave_pic_music(void) {
@@ -2850,6 +2857,19 @@ static void font_cache_flush(void) {
     for (i = 0; i < FONT_EXT_SLOTS; i++) {
         font_cache[i].off = 0xFFFFu;
     }
+}
+
+static void font_cache_free(void) {
+    int i;
+
+    if (font_cache[0].buf) {
+        ui_mem_free(font_cache[0].buf);
+    }
+    for (i = 0; i < FONT_EXT_SLOTS; i++) {
+        font_cache[i].buf = 0;
+        font_cache[i].off = 0xFFFFu;
+    }
+    font_cache_next = 0u;
 }
 
 const uint8_t *link_font_ext_bits(uint16_t off) {

@@ -78,6 +78,23 @@ static void music_mod_impl(const pic_mod_api_t *api, uint8_t mode, uint8_t a, in
     if (clear_bg && a == 255u) {
         api->fill(0, 0, (int16_t)w, (int16_t)h, api->col_bg, a);
     }
+    /* 静态底图：用矢量圆盘画黑胶纹样（和运动页同一套 PIC 绘制方式），
+       只占下半屏，不挡歌词点阵和均衡器。 */
+    api->round((int16_t)(cx - w * 460 / 1000), (int16_t)(by - w * 460 / 1000),
+               (int16_t)(w * 920 / 1000), (int16_t)(w * 920 / 1000),
+               (int16_t)(w * 460 / 1000), api->col_surface, a);
+    api->round((int16_t)(cx - w * 390 / 1000), (int16_t)(by - w * 390 / 1000),
+               (int16_t)(w * 780 / 1000), (int16_t)(w * 780 / 1000),
+               (int16_t)(w * 390 / 1000), api->col_line, a);
+    api->round((int16_t)(cx - w * 382 / 1000), (int16_t)(by - w * 382 / 1000),
+               (int16_t)(w * 764 / 1000), (int16_t)(w * 764 / 1000),
+               (int16_t)(w * 382 / 1000), api->col_surface, a);
+    api->round((int16_t)(cx - w * 310 / 1000), (int16_t)(by - w * 310 / 1000),
+               (int16_t)(w * 620 / 1000), (int16_t)(w * 620 / 1000),
+               (int16_t)(w * 310 / 1000), api->col_line, a);
+    api->round((int16_t)(cx - w * 302 / 1000), (int16_t)(by - w * 302 / 1000),
+               (int16_t)(w * 604 / 1000), (int16_t)(w * 604 / 1000),
+               (int16_t)(w * 302 / 1000), api->col_surface, a);
 
     if (mode & 2u) {
         static const char off[] = "\xe6\x97\xa0\xe8\xbf\x9e\xe6\x8e\xa5"; /* 无连接 */
