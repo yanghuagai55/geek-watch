@@ -1465,8 +1465,12 @@ static void raster_text(const draw_item_t *it, int band_y) {
         const void *bmp_data = 0;
 
         if (g) {
-            bmp_data = ui_font_bits() + g->offset;
-            if (rle) {
+            if (g->offset & 0x8000u) {
+                bmp_data = link_font_ext_bits((uint16_t)(g->offset & 0x7FFFu));
+            } else {
+                bmp_data = ui_font_bits() + g->offset;
+            }
+            if (bmp_data && rle) {
                 int bpr = (gw + 7) >> 3;
                 int need = bpr * gh;
                 if (need > (int)sizeof raw) {

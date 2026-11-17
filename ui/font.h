@@ -14,6 +14,7 @@ typedef struct ui_glyph {
 
 const ui_glyph_t *ui_font_find(uint32_t cp);
 const uint8_t *ui_font_bits(void);
+uint16_t ui_font_ext_total(void);
 int ui_font_is_rle(void);
 
 #endif

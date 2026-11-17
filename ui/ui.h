@@ -260,7 +260,8 @@ enum {
     LINK_ASSET_HEADERS   = 5u, /* 片外 13 枚华文琥珀中文标题包 ('SHD1') */
     LINK_ASSET_SPORT     = 6u, /* 片外 运动步数 + 传感器诊断 PIC 包 ('SPR1') */
     LINK_ASSET_ANALOG    = 7u, /* 片外 墨竹指针表盘 + IMU 水平仪 PIC 包 ('ANL1') */
-    LINK_ASSET_SYS       = 8u  /* 片外 主菜单动态图标 PIC 包 ('SYS1') */
+    LINK_ASSET_SYS       = 8u, /* 片外 主菜单动态图标 PIC 包 ('SYS1') */
+    LINK_ASSET_FONT      = 9u  /* 片外 中文点阵字模尾包（非设置常用字） */
 };
 void link_enter_compass(void);
 void link_begin_compass(void);
@@ -291,6 +292,7 @@ void link_begin_pic_sys(void);
 void link_leave_pic_sys(void);
 int link_pic_sys_ready(void);
 const uint8_t *link_pic_sys_blob(uint16_t *entry_off);
+const uint8_t *link_font_ext_bits(uint16_t off);
 uint16_t link_img_gen(void);
 void link_asset_pump(uint16_t max_bytes);
 void link_asset_finish(void);

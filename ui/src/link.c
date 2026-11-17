@@ -4,8 +4,11 @@
 #include "sport.h"
 #include "compass3d.h"
 #include "pic_mod.h"
+#include "font.h"
 
 #include <string.h>
+
+static void font_cache_flush(void);
 
 /* 蓝牙透传串口。
    手机 -> 手表：
@@ -135,7 +138,8 @@ enum {
     EXT_BLK_ASSET_SPORT = EXT_BLK_ASSET0 + 5,
     EXT_BLK_ASSET_ANALOG = EXT_BLK_ASSET0 + 6,
     EXT_BLK_ASSET_SYS = EXT_BLK_ASSET0 + 7,
-    EXT_BLK_TOTAL = EXT_BLK_ASSET0 + 8
+    EXT_BLK_ASSET_FONT = EXT_BLK_ASSET0 + 8,
+    EXT_BLK_TOTAL = EXT_BLK_ASSET0 + 9
 };
 
 typedef struct {
@@ -1645,16 +1649,17 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
     a0 = u16_get(p + 2);
     a1 = u16_get(p + 4);
 
-    if (id >= LINK_ASSET_COMPASS3D && id <= LINK_ASSET_SYS) {
-        static const uint8_t blk_map[6] = {
+    if (id >= LINK_ASSET_COMPASS3D && id <= LINK_ASSET_FONT) {
+        static const uint8_t blk_map[7] = {
             EXT_BLK_ASSET_COMPASS3D,
             EXT_BLK_ASSET_ABOUT,
             EXT_BLK_ASSET_HEADERS,
             EXT_BLK_ASSET_SPORT,
             EXT_BLK_ASSET_ANALOG,
-            EXT_BLK_ASSET_SYS
+            EXT_BLK_ASSET_SYS,
+            EXT_BLK_ASSET_FONT
         };
-        static const uint16_t max_map[6] = { 4096u, 8192u, 6144u, 4608u, 3072u, 4096u };
+        static const uint16_t max_map[7] = { 4096u, 8192u, 6144u, 4608u, 3072u, 4096u, 4096u };
         int idx = (int)(id - LINK_ASSET_COMPASS3D);
         int blk_idx = blk_map[idx];
         uint16_t max_sz = max_map[idx];
@@ -1724,6 +1729,8 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
                 } else if (id == LINK_ASSET_HEADERS) {
                     load_hdr_meta();
                     free_hdr_buf();
+                } else if (id == LINK_ASSET_FONT) {
+                    font_cache_flush();
                 }
             } else {
                 lk.ack_bad++;
@@ -2727,6 +2734,65 @@ void link_leave_pic_sys(void) {
     if (lk.dyn_kind == DYN_SYS) {
         free_dyn_buf();
     }
+}
+
+/* 片外中文点阵字模：按字形偏移读 40B（单字 RLE 最大 34B），6 槽环形缓存。 */
+enum { FONT_EXT_SLOTS = 6, FONT_EXT_BYTES = 40 };
+static struct {
+    uint16_t off;
+    uint8_t *buf;
+} font_cache[FONT_EXT_SLOTS];
+static uint8_t font_cache_next;
+
+static void font_cache_flush(void) {
+    int i;
+    for (i = 0; i < FONT_EXT_SLOTS; i++) {
+        font_cache[i].off = 0xFFFFu;
+    }
+}
+
+const uint8_t *link_font_ext_bits(uint16_t off) {
+    const ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_FONT];
+    uint16_t total = ui_font_ext_total();
+    uint16_t n;
+    int i, slot = -1;
+
+    if (b->len == 0u || off >= total || total > b->len) {
+        return 0;
+    }
+    for (i = 0; i < FONT_EXT_SLOTS; i++) {
+        if (font_cache[i].buf && font_cache[i].off == off) {
+            return font_cache[i].buf;
+        }
+        if (!font_cache[i].buf && slot < 0) {
+            slot = i;
+        }
+    }
+    if (!font_cache[0].buf) {
+        uint8_t *mem = (uint8_t *)ui_mem_alloc(FONT_EXT_SLOTS * FONT_EXT_BYTES, 4);
+        if (!mem) {
+            return 0;
+        }
+        for (i = 0; i < FONT_EXT_SLOTS; i++) {
+            font_cache[i].buf = mem + (uint16_t)i * FONT_EXT_BYTES;
+            font_cache[i].off = 0xFFFFu;
+        }
+        slot = 0;
+    } else if (slot < 0) {
+        slot = font_cache_next;
+        font_cache_next = (uint8_t)((font_cache_next + 1u) % FONT_EXT_SLOTS);
+    }
+    n = (uint16_t)(total - off);
+    if (n > FONT_EXT_BYTES) {
+        n = FONT_EXT_BYTES;
+    }
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off + off,
+                            font_cache[slot].buf, n)) {
+        font_cache[slot].off = 0xFFFFu;
+        return 0;
+    }
+    font_cache[slot].off = off;
+    return font_cache[slot].buf;
 }
 
 uint16_t link_img_gen(void) {
