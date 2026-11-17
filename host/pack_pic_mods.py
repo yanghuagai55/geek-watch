@@ -110,6 +110,7 @@ def main() -> None:
     sport_blob = build_pic("sport_mod.c", "sport_mod_entry", 0x31525053, "sport_mod_m4.bin")
     analog_blob = build_pic("analog_mod.c", "analog_mod_entry", 0x314C4E41, "analog_mod_m4.bin")
     sys_blob = build_pic("sys_mod.c", "sys_mod_entry", 0x31535953, "sys_mod_m4.bin")
+    music_blob = build_pic("music_mod.c", "music_mod_entry", 0x3153554D, "music_mod_m4.bin")
 
     out_h = os.path.join(ROOT, "host", "pic_mods_test.h")
     with open(out_h, "w", encoding="utf-8") as f:
@@ -119,6 +120,7 @@ def main() -> None:
             ("sport_mod_m4_blob", sport_blob),
             ("analog_mod_m4_blob", analog_blob),
             ("sys_mod_m4_blob", sys_blob),
+            ("music_mod_m4_blob", music_blob),
         ]:
             f.write(f"static const uint8_t {name}[{len(blob)}] = {{\n")
             for i in range(0, len(blob), 16):

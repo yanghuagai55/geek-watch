@@ -10,6 +10,7 @@ enum {
     PIC_MAGIC_SPORT  = 0x31525053u, /* 'SPR1' */
     PIC_MAGIC_ANALOG = 0x314C4E41u, /* 'ANL1' */
     PIC_MAGIC_SYS    = 0x31535953u, /* 'SYS1' */
+    PIC_MAGIC_MUSIC  = 0x3153554Du, /* 'MUS1' */
     PIC_MOD_ABI_VER  = 1u
 };
 
@@ -80,5 +81,6 @@ typedef void (*pic_mod_entry_t)(const pic_mod_api_t *api, uint8_t mode, uint8_t 
 void sport_mod_render_c(const pic_mod_api_t *api, uint8_t mode, uint8_t alpha, int clear_bg);
 void analog_mod_render_c(const pic_mod_api_t *api, uint8_t mode, uint8_t alpha, int clear_bg);
 void sys_mod_render_c(const pic_mod_api_t *api, uint8_t mode, uint8_t alpha, int clear_bg);
+void music_mod_render_c(const pic_mod_api_t *api, uint8_t mode, uint8_t alpha, int clear_bg);
 
 #endif

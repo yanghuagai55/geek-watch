@@ -103,6 +103,7 @@ enum {
     DYN_SPORT = 7,
     DYN_ANALOG = 8,
     DYN_SYS = 9,
+    DYN_MUSIC = 10,
     ST_MARK = 0,
     ST_CMD = 1,
     ST_LEN = 2,
@@ -139,7 +140,8 @@ enum {
     EXT_BLK_ASSET_ANALOG = EXT_BLK_ASSET0 + 6,
     EXT_BLK_ASSET_SYS = EXT_BLK_ASSET0 + 7,
     EXT_BLK_ASSET_FONT = EXT_BLK_ASSET0 + 8,
-    EXT_BLK_TOTAL = EXT_BLK_ASSET0 + 9
+    EXT_BLK_ASSET_MUSIC = EXT_BLK_ASSET0 + 9,
+    EXT_BLK_TOTAL = EXT_BLK_ASSET0 + 10
 };
 
 typedef struct {
@@ -177,6 +179,9 @@ static struct {
     uint8_t *c3d_buf;
     uint16_t c3d_entry;
     uint16_t c3d_total;
+    uint8_t *mus_buf;
+    uint16_t mus_entry;
+    uint16_t mus_total;
     uint8_t pic_ready_kind;
     uint16_t pic_entry;
     uint8_t about_ready;
@@ -764,6 +769,33 @@ static void free_c3d_buf(void) {
     lk.c3d_total = 0u;
 }
 
+/* 音乐页模块走独立缓冲：媒体点阵同时占用 dyn_buf。 */
+static void free_music_buf(void) {
+    if (lk.load_kind == DYN_MUSIC) {
+        lk.load_need = 0u;
+        lk.load_pos = 0u;
+        lk.load_kind = DYN_NONE;
+        lk.load_crc = 0u;
+        lk.load_entry = 0u;
+    }
+    if (lk.mus_buf) {
+        ui_mem_free(lk.mus_buf);
+        lk.mus_buf = 0;
+    }
+    lk.mus_entry = 0u;
+    lk.mus_total = 0u;
+}
+
+static uint8_t *pic_load_dst(uint8_t kind) {
+    if (kind == DYN_COMPASS3D) {
+        return lk.c3d_buf;
+    }
+    if (kind == DYN_MUSIC) {
+        return lk.mus_buf;
+    }
+    return lk.dyn_buf;
+}
+
 static void free_dyn_buf(void) {
     if (lk.dyn_buf) {
         ui_mem_free(lk.dyn_buf);
@@ -1071,6 +1103,13 @@ static int begin_pic_load(int blk_idx, uint32_t magic, uint8_t dyn_kind, uint16_
             buf = (uint8_t *)ui_mem_alloc(total, 4);
         }
         lk.c3d_buf = buf;
+    } else if (dyn_kind == DYN_MUSIC) {
+        if (lk.mus_buf) {
+            ui_mem_free(lk.mus_buf);
+            lk.mus_buf = 0;
+        }
+        buf = (uint8_t *)ui_mem_alloc(total, 4);
+        lk.mus_buf = buf;
     } else {
         buf = ensure_dyn_buf(dyn_kind, total);
     }
@@ -1158,9 +1197,10 @@ static void finish_dyn_load(void) {
     uint16_t total = lk.load_need;
     uint16_t crc = lk.load_crc;
     uint16_t entry = lk.load_entry;
-    uint8_t *buf = (kind == DYN_COMPASS3D) ? lk.c3d_buf : lk.dyn_buf;
+    uint8_t *buf = pic_load_dst(kind);
 
-    if ((kind == DYN_COMPASS3D || kind == DYN_SPORT || kind == DYN_ANALOG || kind == DYN_SYS) &&
+    if ((kind == DYN_COMPASS3D || kind == DYN_SPORT || kind == DYN_ANALOG ||
+         kind == DYN_SYS || kind == DYN_MUSIC) &&
         buf && total >= 16u &&
         settings_crc16(buf + 12u, (uint32_t)(total - 12u)) == crc) {
         lk.load_need = 0u;
@@ -1169,6 +1209,9 @@ static void finish_dyn_load(void) {
         if (kind == DYN_COMPASS3D) {
             lk.c3d_entry = entry;
             lk.c3d_total = total;
+        } else if (kind == DYN_MUSIC) {
+            lk.mus_entry = entry;
+            lk.mus_total = total;
         } else {
             lk.pic_ready_kind = kind;
             lk.pic_entry = entry;
@@ -1204,6 +1247,8 @@ static void finish_dyn_load(void) {
     }
     if (kind == DYN_COMPASS3D) {
         compass_fallback_load();
+    } else if (kind == DYN_MUSIC) {
+        free_music_buf();
     } else {
         free_dyn_buf();
     }
@@ -1218,11 +1263,12 @@ void link_asset_pump(uint16_t max_bytes) {
     if (lk.load_need == 0u) {
         return;
     }
-    dst = (kind == DYN_COMPASS3D) ? lk.c3d_buf : lk.dyn_buf;
-    if (!dst || (kind != DYN_COMPASS3D &&
+    dst = pic_load_dst(kind);
+    if (!dst || (kind != DYN_COMPASS3D && kind != DYN_MUSIC &&
                  (lk.dyn_kind != kind || lk.dyn_cap < lk.load_need)) ||
         !hal_ext_flash_present()) {
         if (kind == DYN_COMPASS3D) free_c3d_buf();
+        else if (kind == DYN_MUSIC) free_music_buf();
         else free_dyn_buf();
         return;
     }
@@ -1233,6 +1279,8 @@ void link_asset_pump(uint16_t max_bytes) {
         !hal_ext_flash_read(lk.load_ext_off + lk.load_pos, dst + lk.load_pos, take)) {
         if (kind == DYN_COMPASS3D) {
             compass_fallback_load();
+        } else if (kind == DYN_MUSIC) {
+            free_music_buf();
         } else {
             free_dyn_buf();
         }
@@ -1649,17 +1697,20 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
     a0 = u16_get(p + 2);
     a1 = u16_get(p + 4);
 
-    if (id >= LINK_ASSET_COMPASS3D && id <= LINK_ASSET_FONT) {
-        static const uint8_t blk_map[7] = {
+    if (id >= LINK_ASSET_COMPASS3D && id <= LINK_ASSET_MUSIC) {
+        static const uint8_t blk_map[8] = {
             EXT_BLK_ASSET_COMPASS3D,
             EXT_BLK_ASSET_ABOUT,
             EXT_BLK_ASSET_HEADERS,
             EXT_BLK_ASSET_SPORT,
             EXT_BLK_ASSET_ANALOG,
             EXT_BLK_ASSET_SYS,
-            EXT_BLK_ASSET_FONT
+            EXT_BLK_ASSET_FONT,
+            EXT_BLK_ASSET_MUSIC
         };
-        static const uint16_t max_map[7] = { 4096u, 8192u, 6144u, 4608u, 3072u, 4096u, 4096u };
+        static const uint16_t max_map[8] = {
+            4096u, 8192u, 6144u, 4608u, 3072u, 4096u, 4096u, 2048u
+        };
         int idx = (int)(id - LINK_ASSET_COMPASS3D);
         int blk_idx = blk_map[idx];
         uint16_t max_sz = max_map[idx];
@@ -1683,6 +1734,8 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
                        (id == LINK_ASSET_ANALOG && lk.dyn_kind == DYN_ANALOG) ||
                        (id == LINK_ASSET_SYS && lk.dyn_kind == DYN_SYS)) {
                 free_dyn_buf();
+            } else if (id == LINK_ASSET_MUSIC) {
+                free_music_buf();
             }
             if (!ext_pool_alloc(a0, 0, &lk.rx_asset_off)) {
                 lk.rx_asset_id = 0u;
@@ -2734,6 +2787,30 @@ void link_leave_pic_sys(void) {
     if (lk.dyn_kind == DYN_SYS) {
         free_dyn_buf();
     }
+}
+
+void link_begin_pic_music(void) {
+    if (lk.load_kind == DYN_MUSIC && lk.load_need > 0u) {
+        return;
+    }
+    if (lk.mus_buf && lk.mus_total >= 16u && lk.mus_entry >= 12u) {
+        return;
+    }
+    (void)begin_pic_load(EXT_BLK_ASSET_MUSIC, PIC_MAGIC_MUSIC, DYN_MUSIC, 2048u);
+}
+
+void link_leave_pic_music(void) {
+    free_music_buf();
+}
+
+int link_pic_music_ready(void) {
+    return lk.mus_buf != 0 && lk.mus_total >= 16u && lk.mus_entry >= 12u;
+}
+
+const uint8_t *link_pic_music_blob(uint16_t *entry_off) {
+    if (!link_pic_music_ready()) return 0;
+    if (entry_off) *entry_off = lk.mus_entry;
+    return lk.mus_buf;
 }
 
 /* 片外中文点阵字模：按字形偏移读 40B（单字 RLE 最大 34B），6 槽环形缓存。 */

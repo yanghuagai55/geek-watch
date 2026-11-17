@@ -2781,13 +2781,44 @@ void ui_settings_apply(int key, int value) {
     }
 }
 
+#ifdef AT32_SLIM_ROM
+/* 音乐页主体在片外 MUS1 模块里：固件只保留底色、媒体点阵贴图和载入占位，
+   mode bit0=点阵已贴（模块跳过文字歌词） bit1=未连接（模块画“无连接”）。 */
+static void draw_music_app(uint8_t a) {
+    uint16_t entry_off = 0u;
+    const uint8_t *blob = link_pic_music_blob(&entry_off);
+    uint8_t mode;
+
+    if (a == 255u) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
+    if (!blob) {
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2),
+                            "...", col_dim, a, 1);
+        return;
+    }
+    mode = (uint8_t)((link_media_mask_ready() ? 1u : 0u) |
+                     (link_connected() ? 0u : 2u));
+    if (mode & 1u) {
+        ui_mask_draw(0, (int16_t)UI_MY(120), (int16_t)UI_W, 32,
+                     link_media_mask(), col_text, a);
+    }
+    pic_mod_exec(blob, entry_off, settings_get(), col_text, col_accent, col_bg,
+                 0, 0, 0, UI_PAGE_MUSIC, mode, a, 0);
+}
+#endif
+
 static void draw_app_content(ui_menu_t *menu, uint8_t a) {
     if (menu == &st->settings) {
         draw_settings_app(a);
     } else if (menu == &st->sport) {
         draw_sport_app(a);
     } else if (menu == &st->music) {
+#ifdef AT32_SLIM_ROM
+        draw_music_app(a);
+#else
         music_page_draw(a);
+#endif
     } else {
         draw_msg_app(a);
     }
@@ -2928,8 +2959,9 @@ static void msg_link_sync(void) {
         link_leave_messages();
     }
     if (st->music_was_open && !music_open) {
-        /* 离开音乐应用：释放媒体点阵动态 RAM 缓冲。 */
+        /* 离开音乐应用：释放媒体点阵动态 RAM 缓冲和 MUS1 模块缓冲。 */
         link_leave_music();
+        link_leave_pic_music();
     }
     if (st->compass_was_open && !compass_open) {
         /* 离开指南针：先释放 C3D1 动态 RAM 再允许重新加载 SHD1 标题池。 */
@@ -2963,6 +2995,9 @@ static void msg_link_sync(void) {
     if (sport_open && (!st->sport_open_was ||
                        (!link_pic_sport_ready() && !compass_open && !link_compass_loading()))) {
         link_begin_pic_sport();
+    }
+    if (music_open && (!st->music_was_open || !link_pic_music_ready())) {
+        link_begin_pic_music();
     }
     sport_pic_ready = link_pic_sport_ready();
     if (sport_open && sport_pic_ready && !st->sport_pic_was) {

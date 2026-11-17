@@ -1,7 +1,9 @@
 #include "music.h"
 #include "ui.h"
 
-#include <stdio.h>
+/* 固件把整页绘制放在片外 MUS1 模块里（ui/src/music_mod.c），这里只给 Host
+   回归保留同一份 C 实现；AT32 构建下整段不参与链接。 */
+#if !defined(AT32_SLIM_ROM)
 
 /* Two line-drawn skip marks: dir=-1 previous / +1 next. */
 static void skip_icon(int cx, int cy, int s, int dir, uint16_t col, uint8_t a) {
@@ -97,6 +99,8 @@ void music_page_draw(uint8_t a) {
         ui_draw_line((int16_t)x1, (int16_t)by, (int16_t)x0, (int16_t)y0, UI_COL_BG, a);
     }
 }
+
+#endif /* !AT32_SLIM_ROM */
 
 int music_page_key(uint8_t pressed) {
     if (pressed & HAL_KEY1) {
