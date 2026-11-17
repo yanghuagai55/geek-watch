@@ -40,7 +40,7 @@ FULL_PATH = os.path.join(UI_SRC, "font_data_full.c")
 SUBSET_PATH = os.path.join(UI_SRC, "font_data.c")
 
 # Static-UI CJK that must survive subsetting (sanity check only).
-REQUIRED_CJK = "运动消息设置调试模式亮度关于版本表盘低中高开关状态灯闪烁传感器数值指南针东南西北"
+REQUIRED_CJK = "运动消息设置调试模式亮度关于表盘低中高开关状态灯闪烁传感器数值指南针东南西北"
 
 HEX = "0123456789abcdefABCDEF"
 GLYPH_STRUCT_SIZE = 6  # uint16 cp + uint16 offset + uint8 w + uint8 h
@@ -268,10 +268,7 @@ def collect_string_codepoints(text):
 
 def build_whitelist():
     whitelist = set(range(0x20, 0x7F)) | {ord(c) for c in REQUIRED_CJK}
-    files = sorted(glob.glob(os.path.join(UI_SRC, "*.c"))) + [
-        os.path.join(HOST_DIR, "self_test.c"),
-        os.path.join(HOST_DIR, "render_test.c"),
-    ]
+    files = sorted(glob.glob(os.path.join(UI_SRC, "*.c")))
     files = [p for p in files if os.path.exists(p)]
     for path in files:
         with open(path, "r", encoding="utf-8") as f:

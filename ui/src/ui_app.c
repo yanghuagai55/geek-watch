@@ -953,7 +953,7 @@ static int pic_mod_exec_std(const uint8_t *blob, uint16_t entry_off,
             ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
         }
         ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2),
-                            "加载中", col_dim, a, 1);
+                            "...", col_dim, a, 1);
     }
     return ok;
 }
@@ -1160,7 +1160,7 @@ static void draw_face_photo(const settings_t *s, const hal_clock_t *clock,
                       (int16_t)(UI_W - UI_MX(240)), (int16_t)(UI_H - UI_MY(280)),
                       12, col_blue_dim, a);
         ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(860),
-                            "加载中", col_dim, a, 1);
+                            "...", col_dim, a, 1);
     }
     if (s->dial_flags & UI_DIAL_FLAG_SCRIM) {
         ui_draw_round((int16_t)UI_MX(80), (int16_t)cap_y,
@@ -1366,6 +1366,35 @@ static const char *compass_dir_zh(uint16_t heading) {
         "北", "东北", "东", "东南", "南", "西南", "西", "西北"
     };
     return dirs[((heading + 22u) % 360u) / 45u];
+}
+#endif
+
+#ifdef AT32_SLIM_ROM
+/* SYS1 运动图标首帧的等值矢量缓存：坐标/颜色直接取自 sys_mod.c 的 run_svg[0]，
+   用于 SYS1 尚未载入的短暂窗口，避免退出运动页时图标区空白。 */
+static void draw_sport_icon_frame(int x, int y, int w, int h, uint8_t a) {
+    static const int8_t sv[10][5] = {
+        {21, 13, 14, 24, 0x00}, {14, 24, 21, 32, 0x00}, {21, 32, 23, 42, 0x00},
+        {14, 24, 7, 28, 0x02},  {7, 28, 2, 21, 0x02},   {20, 15, 25, 21, 0x02},
+        {25, 21, 29, 15, 0x11}, {20, 15, 13, 20, 0x00}, {13, 20, 17, 26, 0x01},
+        {24, 8, 0, 0, 0x31}
+    };
+    int ox = x + (w - 32) / 2;
+    int oy = y + (h - 42) / 2;
+    int i;
+
+    for (i = 0; i < 10; i++) {
+        const int8_t *c = sv[i];
+        uint16_t col = ((c[4] >> 4) == 1) ? col_text : col_accent;
+        int r = c[4] & 15;
+        if (r > 0) {
+            ui_draw_round((int16_t)(ox + c[0] - r), (int16_t)(oy + c[1] - r),
+                          (int16_t)(r * 2), (int16_t)(r * 2), (int16_t)r, col, a);
+        } else {
+            ui_draw_line_w((int16_t)(ox + c[0]), (int16_t)(oy + c[1]),
+                           (int16_t)(ox + c[2]), (int16_t)(oy + c[3]), 4u, col, a);
+        }
+    }
 }
 #endif
 
@@ -1735,6 +1764,11 @@ static void draw_home_art(int page, uint8_t a) {
     if (pic_mod_exec(blob, entry_off, settings_get(), col_text, col_accent, col_bg,
                      0, 0, 0, (uint8_t)page, 0u, a, 0)) {
         return;
+    }
+    if (page == UI_PAGE_SPORT) {
+        int x, y, w, h;
+        home_icon_rect(&x, &y, &w, &h);
+        draw_sport_icon_frame(x, y, w, h, a);
     }
 #else
     int x, y, w, h;
