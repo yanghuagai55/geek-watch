@@ -273,7 +273,8 @@ const uint8_t *link_compass_asset_mask(int16_t *w, int16_t *h);
 int link_compass3d_ready(void);
 const uint8_t *link_compass3d_blob(uint16_t *entry_off, uint16_t *total_size);
 int link_about_asset_ready(void);
-/* 关于页彩图直接从片外流式贴图（固件不再缓存整包）；返回彩图包绝对地址与总长。 */
+/* 关于页彩图：进页前优先整段读入 RAM 缓存（翻页动画里内存贴图），
+   抢不到连续块时回退片外流式；返回彩图包绝对地址与总长。 */
 int link_about_ext(uint32_t *abs_off, uint16_t *total_size);
 #ifndef AT32_SLIM_ROM
 void link_enter_about(void);

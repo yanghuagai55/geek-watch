@@ -592,9 +592,13 @@ uint16_t hal_cpu_tenths(void) {
 
 void hal_display_set_clock(uint8_t mhz) {
     uint32_t div = (mhz >= 30u) ? SPI_MCLK_DIV_4 : SPI_MCLK_DIV_8;
-    /* 分频位在 SPI 使能时也可写，避免重新初始化整条总线。 */
+    /* MDIV 分频位必须在 SPIEN=0 时写，使能状态下写会被硬件忽略，
+       表现就是设置里切 15/30MHz 没有效果。 */
+    spi_wait();
+    spi_enable(SPI1, FALSE);
     SPI1->ctrl2_bit.mdiv_h = 0;
     SPI1->ctrl1_bit.mdiv_l = div;
+    spi_enable(SPI1, TRUE);
 }
 
 void hal_frame_pace(void) {

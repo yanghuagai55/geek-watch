@@ -71,18 +71,14 @@ def encode_pal4_rle(w: int, h: int, pal_rgb: list[tuple[int, int, int]], rows: l
     return pal_bytes + tbl + bytes(rle_data)
 
 
-def build_pinkie_img(target_w: int = 128, target_h: int = 88) -> tuple[int, int, bytes, Image.Image]:
+def build_pinkie_img(max_w: int, max_h: int) -> tuple[int, int, bytes, Image.Image]:
+    """整幅等比缩进 max_w×max_h（contain），不裁切，保证 Pinkie/Gummy 全身都在。"""
     im = Image.open(SRC_IMG).convert("RGBA")
     im = im.crop(im.getbbox())
-    # 铺满屏幕：按 cover 比例放大后居中裁切，不再保留上下留白。
-    scale = max(target_w / im.width, target_h / im.height)
-    nw = max(target_w, int(round(im.width * scale)))
-    nh = max(target_h, int(round(im.height * scale)))
+    scale = min(max_w / im.width, max_h / im.height)
+    nw = max(1, int(round(im.width * scale)))
+    nh = max(1, int(round(im.height * scale)))
     im = im.resize((nw, nh), Image.LANCZOS)
-    left = (nw - target_w) // 2
-    top = (nh - target_h) // 2
-    im = im.crop((left, top, left + target_w, top + target_h))
-    nw, nh = target_w, target_h
 
     opaque_pixels = []
     rgba_comp = Image.new("RGBA", (nw, nh), (0, 0, 0, 0))
@@ -102,9 +98,10 @@ def build_pinkie_img(target_w: int = 128, target_h: int = 88) -> tuple[int, int,
 
     strip = Image.new("RGB", (len(opaque_pixels), 1))
     strip.putdata(opaque_pixels)
-    q = strip.quantize(colors=14, method=Image.MEDIANCUT)
-    raw_pal = q.getpalette()[: 14 * 3]
-    pal_rgb = [(0, 0, 0)] + [(raw_pal[i * 3], raw_pal[i * 3 + 1], raw_pal[i * 3 + 2]) for i in range(14)] + [(0, 0, 0)]
+    # 0 号索引留给透明，1..15 共 15 色（卡通原图色块少，15 色足够且比 14 色更干净）。
+    q = strip.quantize(colors=15, method=Image.MEDIANCUT)
+    raw_pal = q.getpalette()[: 15 * 3]
+    pal_rgb = [(0, 0, 0)] + [(raw_pal[i * 3], raw_pal[i * 3 + 1], raw_pal[i * 3 + 2]) for i in range(15)]
 
     rows = [[0] * nw for _ in range(nh)]
     preview = Image.new("RGBA", (nw, nh), (0, 0, 0, 0))
@@ -115,7 +112,7 @@ def build_pinkie_img(target_w: int = 128, target_h: int = 88) -> tuple[int, int,
             r, g, b, _ = rgba_comp.getpixel((x, y))
             best_i = 1
             best_d = 1 << 30
-            for idx in range(1, 15):
+            for idx in range(1, 16):
                 pr, pg, pb = pal_rgb[idx]
                 d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
                 if d < best_d:
@@ -219,9 +216,19 @@ def render_intro_lines():
 
 def main() -> None:
     os.makedirs(os.path.dirname(OUT_BIN), exist_ok=True)
-    w0, h0, data0, pv0 = build_pinkie_img(128, 88)
     lines = render_intro_lines()
     assert len(lines) == 3
+
+    # 与固件 ui_app.c:draw_about_page 的布局常量保持一致：
+    # header_band_h(256) = 28（华文琥珀标题 136/256 缩放），内容从 band+1 开始。
+    screen_w, screen_h = 128, 160
+    content_y0 = 28 + 1
+    image_gap = 2
+    line_gap = 2
+    text_h = sum(l[1] for l in lines) + line_gap * (len(lines) - 1)
+    img_max_h = screen_h - content_y0 - image_gap - text_h
+    # contain：整幅等比缩进 128×img_max_h，不裁头不裁尾。
+    w0, h0, data0, pv0 = build_pinkie_img(screen_w, img_max_h)
 
     # ABT2 binary header:
     # 0..3   magic 'ABT2' (0x32544241)
@@ -263,24 +270,23 @@ def main() -> None:
             f.write(f"    {chunk},\n")
         f.write("};\n\n#endif\n")
 
-    canvas = Image.new("RGB", (128, 160), (0, 0, 0))
+    canvas = Image.new("RGB", (screen_w, screen_h), (0, 0, 0))
     dc = ImageDraw.Draw(canvas)
     dc.rounded_rectangle((6, 5, 8, 20), radius=1, fill=(255, 177, 94))
     dc.line((6, 26, 122, 26), fill=(49, 65, 60))
     f_hdr = ImageFont.truetype(FONT_PATH, 18)
     dc.text((15, 2), "关于", fill=(240, 241, 228), font=f_hdr)
-    y0 = 29
-    canvas.paste(pv0, ((128 - w0) // 2, y0), pv0)
-    ty = y0 + h0 + 3
+    canvas.paste(pv0, ((screen_w - w0) // 2, content_y0), pv0)
+    ty = content_y0 + h0 + image_gap
     for gw, gh, wl, col_idx, b_l, b_r, pv in lines:
-        canvas.paste(pv, ((128 - gw) // 2, ty), pv)
-        ty += gh + 3
-    canvas.resize((128 * 3, 160 * 3), Image.NEAREST).save(PREVIEW_PNG)
+        canvas.paste(pv, ((screen_w - gw) // 2, ty), pv)
+        ty += gh + line_gap
+    canvas.resize((screen_w * 3, screen_h * 3), Image.NEAREST).save(PREVIEW_PNG)
 
     print(
-        f"Generated ABT2 SRAM-cacheable blob: img0={w0}x{h0} ({len(data0)} B), "
+        f"Generated ABT2 blob: img0={w0}x{h0} ({len(data0)} B), "
         f"3 STHupo lines ({sum(len(l[4])+len(l[5]) for l in lines)} B), "
-        f"total={total} B (fits ui_mem 3744 B free!), crc16=0x{crc:04X}"
+        f"total={total} B, crc16=0x{crc:04X}"
     )
 
 

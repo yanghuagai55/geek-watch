@@ -100,8 +100,11 @@ typedef struct app {
     ui_obj_t dial_zoom;
     ui_obj_t dial_slide;
 #ifdef AT32_SLIM_ROM
-    /* 关于页：彩图从片外流式贴，只缓存 3 行简介 RLE（约 1.3KB）。 */
+    /* 关于页：彩图整段缓存到 RAM（约 2.8KB），平移动画里直接从内存贴，
+       不再每帧走 I2C；缓存失败时退回片外流式贴图。3 行简介约 1.3KB。 */
     uint8_t *about_lines;
+    uint8_t *about_img;
+    uint16_t about_first;   /* 彩图结束 / 3 行简介起始的绝对偏移 */
     uint32_t about_ext;
     uint16_t about_total;
     uint8_t about_loaded;
@@ -2288,12 +2291,26 @@ static void draw_message_page(uint8_t a) {
 }
 
 #ifdef AT32_SLIM_ROM
-/* 彩图 3.7KB 直接按行从片外流式贴图，只把 3 行简介 RLE（约 1.3KB）缓存下来。
-   平移动画期间不读片外，避免每帧上百毫秒的 I2C 读取拖慢动画。 */
+/* 彩图约 2.8KB、3 行简介约 1.3KB。进入关于页前一次性读入 RAM：
+   之后 push 平移的每一帧都直接从内存贴图，静态时只走脏条带局部刷新，
+   不再让每帧几十毫秒的 I2C 读取拖慢翻页。缓存失败时彩图退回片外流式。 */
+static void about_cache_free(void) {
+    if (st->about_lines) {
+        ui_mem_free(st->about_lines);
+        st->about_lines = 0;
+    }
+    if (st->about_img) {
+        ui_mem_free(st->about_img);
+        st->about_img = 0;
+    }
+    st->about_loaded = 0u;
+}
+
 static int about_prepare(void) {
     uint32_t base = 0u;
     uint16_t tot = 0u;
     uint16_t first = 0xFFFFu;
+    uint16_t off0;
     int i;
 
     if (!link_about_ext(&base, &tot) || tot < 40u) {
@@ -2302,11 +2319,7 @@ static int about_prepare(void) {
     if (st->about_loaded && st->about_ext == base && st->about_total == tot) {
         return 1;
     }
-    if (st->about_lines) {
-        ui_mem_free(st->about_lines);
-        st->about_lines = 0;
-    }
-    st->about_loaded = 0u;
+    about_cache_free();
     if (!hal_ext_flash_read(base, st->about_hdr, sizeof st->about_hdr)) {
         return 0;
     }
@@ -2315,6 +2328,19 @@ static int about_prepare(void) {
                                  ((uint16_t)st->about_hdr[17 + i * 8] << 8));
         if (ol < first) {
             first = ol;
+        }
+    }
+    off0 = (uint16_t)(st->about_hdr[8] | ((uint16_t)st->about_hdr[9] << 8));
+    if (first > off0 && first <= tot) {
+        uint16_t len = (uint16_t)(first - off0);
+        uint8_t *img = (uint8_t *)ui_mem_alloc(len, 4);
+
+        if (img) {
+            if (hal_ext_flash_read(base + off0, img, len)) {
+                st->about_img = img;
+            } else {
+                ui_mem_free(img);
+            }
         }
     }
     if (first >= 40u && first < tot) {
@@ -2331,6 +2357,7 @@ static int about_prepare(void) {
     }
     st->about_ext = base;
     st->about_total = tot;
+    st->about_first = first;
     st->about_loaded = 1u;
     return 1;
 }
@@ -2340,11 +2367,11 @@ static void draw_about_page(uint8_t a) {
     int y0 = band + 1;
     int cy, i;
     uint16_t line_cols[3];
-    uint16_t off0, first = 0xFFFFu;
+    uint16_t off0;
     uint8_t w0, h0;
 
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    if (st->settings.push.x < 256 || !about_prepare()) {
+    if (!about_prepare()) {
         draw_header_anim("关于", 256, a);
         return;
     }
@@ -2354,18 +2381,18 @@ static void draw_about_page(uint8_t a) {
     w0 = st->about_hdr[4];
     h0 = st->about_hdr[5];
     off0 = (uint16_t)(st->about_hdr[8] | ((uint16_t)st->about_hdr[9] << 8));
-    for (i = 0; i < 3; i++) {
-        uint16_t ol = (uint16_t)(st->about_hdr[16 + i * 8] |
-                                 ((uint16_t)st->about_hdr[17 + i * 8] << 8));
-        if (ol < first) {
-            first = ol;
-        }
+    if (st->about_img) {
+        /* 已缓存：平移动画每一帧都从 RAM 贴，脏条带只刷真正变化的区域。 */
+        ui_mem_image_draw((int16_t)((UI_W - (int)w0) / 2), (int16_t)y0,
+                          (int16_t)w0, (int16_t)h0, st->about_img, 1u, a);
+    } else if (st->settings.push.x >= 256) {
+        /* 没抢到连续块：等平移动画结束再走片外，避免每帧 I2C。 */
+        ui_ext_image_draw((int16_t)((UI_W - (int)w0) / 2), (int16_t)y0,
+                          (int16_t)w0, (int16_t)h0, st->about_ext + off0,
+                          UI_EXT_FMT_PAL4_RLE, 1u, a);
     }
-    ui_ext_image_draw((int16_t)((UI_W - (int)w0) / 2), (int16_t)y0,
-                      (int16_t)w0, (int16_t)h0, st->about_ext + off0,
-                      UI_EXT_FMT_PAL4_RLE, 1u, a);
     cy = y0 + (int)h0 + 2;
-    if (st->about_lines && first < st->about_total) {
+    if (st->about_lines) {
         for (i = 0; i < 3; i++) {
             const uint8_t *d = st->about_hdr + 16 + i * 8;
             uint16_t ol = (uint16_t)(d[0] | ((uint16_t)d[1] << 8));
@@ -2376,11 +2403,11 @@ static void draw_about_page(uint8_t a) {
             int lx = (UI_W - (int)gw) / 2;
 
             ui_mask_rle_draw((int16_t)lx, (int16_t)cy, (int16_t)wl, (int16_t)gh,
-                             st->about_lines + (ol - first), c, a);
+                             st->about_lines + (ol - st->about_first), c, a);
             if (wr > 0u) {
                 ui_mask_rle_draw((int16_t)(lx + wl), (int16_t)cy,
                                  (int16_t)wr, (int16_t)gh,
-                                 st->about_lines + (orr - first), c, a);
+                                 st->about_lines + (orr - st->about_first), c, a);
             }
             cy += (int)gh + 2;
         }
@@ -2467,6 +2494,11 @@ static int draw_badge(void) {
         if (st) {
             st->badge_op = 0;
         }
+        return 0;
+    }
+    /* 关于页整屏是彩图 + 三行简介，角标会盖住下面两行；这一页不画角标。 */
+    if (st->settings.level == UI_MENU_CHILD && st->settings.child == 8) {
+        st->badge_op = 0;
         return 0;
     }
     hal_ram_get(&ram_used, &ram_total);
@@ -2651,6 +2683,10 @@ static void on_confirm(ui_menu_t *menu) {
             hal_display_set_clock(s->spi_mhz);
             break;
         case 8:
+#ifdef AT32_SLIM_ROM
+            /* 翻页动画开始前先把彩图/简介读进 RAM，push 期间即可内存贴图。 */
+            (void)about_prepare();
+#endif
             ui_menu_enter_child(menu, ABOUT_N);
             break;
         default:
@@ -3245,13 +3281,9 @@ static void msg_link_sync(void) {
         link_leave_compass();
     }
     if (st->about_was_open && !about_open) {
-        /* 离开关于页：释放简介行缓存（彩图本来就是流式贴图，不占 RAM）。 */
+        /* 离开关于页：释放彩图与简介行缓存。 */
 #ifdef AT32_SLIM_ROM
-        if (st->about_lines) {
-            ui_mem_free(st->about_lines);
-            st->about_lines = 0;
-        }
-        st->about_loaded = 0u;
+        about_cache_free();
 #else
         link_leave_about();
 #endif
@@ -3579,11 +3611,7 @@ void ui_app_go_home(void) {
     }
     link_leave_compass();
 #ifdef AT32_SLIM_ROM
-    if (st->about_lines) {
-        ui_mem_free(st->about_lines);
-        st->about_lines = 0;
-    }
-    st->about_loaded = 0u;
+    about_cache_free();
 #else
     link_leave_about();
 #endif
