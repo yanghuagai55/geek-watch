@@ -1404,6 +1404,93 @@ static void draw_sport_icon_frame(int x, int y, int w, int h, uint8_t a) {
         }
     }
 }
+
+/* 消息/设置/音乐图标首帧的静态兜底：SYS1 还没载入的窗口先用它顶着，
+   避免从一级页面退回 0 级时图标区空白。 */
+static void draw_mail_icon_frame(int x, int y, int w, int h, uint8_t a) {
+    int t = w / 14;
+    int bw, bh, bx, by;
+
+    if (t < 2) t = 2;
+    bw = w - 6 * t;
+    bh = h * 3 / 5;
+    bx = x + (w - bw) / 2;
+    by = y + h / 4;
+    ui_draw_round((int16_t)bx, (int16_t)by, (int16_t)bw, (int16_t)bh,
+                  (int16_t)(bh / 5), col_ring, a);
+    ui_draw_round((int16_t)(bx + t), (int16_t)(by + t),
+                  (int16_t)(bw - 2 * t), (int16_t)(bh - 2 * t),
+                  (int16_t)(bh / 5 > t ? bh / 5 - t : 1), col_blue_dim, a);
+    ui_draw_line_w((int16_t)(bx + t), (int16_t)(by + t),
+                   (int16_t)(x + w / 2), (int16_t)(by + bh / 2),
+                   (uint8_t)t, col_ring, a);
+    ui_draw_line_w((int16_t)(x + w / 2), (int16_t)(by + bh / 2),
+                   (int16_t)(bx + bw - t), (int16_t)(by + t),
+                   (uint8_t)t, col_ring, a);
+}
+
+static void draw_gear_icon_frame(int x, int y, int w, int h, uint8_t a) {
+    static const int8_t dir8[8][2] = {
+        {0, -100}, {71, -71}, {100, 0}, {71, 71},
+        {0, 100}, {-71, 71}, {-100, 0}, {-71, -71}
+    };
+    int m = w < h ? w : h;
+    int cx = x + w / 2;
+    int cy = y + h / 2;
+    int tr = m / 10;
+    int r = m / 2 - m / 10;
+    int i;
+
+    if (tr < 2) tr = 2;
+    if (r < tr + 2) r = tr + 2;
+    for (i = 0; i < 8; i++) {
+        int tx = cx + r * dir8[i][0] / 100;
+        int ty = cy + r * dir8[i][1] / 100;
+        ui_draw_round((int16_t)(tx - tr), (int16_t)(ty - tr),
+                      (int16_t)(tr * 2), (int16_t)(tr * 2), (int16_t)tr, col_ring, a);
+    }
+    ui_draw_round((int16_t)(cx - r), (int16_t)(cy - r),
+                  (int16_t)(r * 2), (int16_t)(r * 2), (int16_t)r, col_ring, a);
+    ui_draw_round((int16_t)(cx - r + tr), (int16_t)(cy - r + tr),
+                  (int16_t)((r - tr) * 2), (int16_t)((r - tr) * 2),
+                  (int16_t)(r - tr), col_blue_dim, a);
+}
+
+static void draw_music_icon_frame(int x, int y, int w, int h, uint8_t a) {
+    int m = w < h ? w : h;
+    int cx = x + w / 2;
+    int nr = m / 10;
+    int fw = m / 14;
+    int x1 = cx - m / 7;
+    int x2 = cx + m / 9;
+    int y1 = y + h * 62 / 100;
+    int y2 = y + h * 52 / 100;
+    int t1 = y1 - h * 34 / 100;
+    int t2 = y2 - h * 34 / 100;
+    int i;
+
+    if (nr < 2) nr = 2;
+    if (fw < 2) fw = 2;
+    ui_draw_fill((int16_t)(x1 + nr - fw / 2), (int16_t)t1,
+                 (int16_t)fw, (int16_t)(y1 - t1), col_ring, a);
+    ui_draw_fill((int16_t)(x2 + nr - fw / 2), (int16_t)t2,
+                 (int16_t)fw, (int16_t)(y2 - t2), col_ring, a);
+    ui_draw_fill((int16_t)(x1 + nr - fw / 2), (int16_t)t1,
+                 (int16_t)(x2 - x1), (int16_t)(fw * 2), col_ring, a);
+    ui_draw_round((int16_t)(x1 - nr), (int16_t)(y1 - nr * 4 / 5),
+                  (int16_t)(nr * 2 + 1), (int16_t)(nr * 2 - 1),
+                  (int16_t)nr, col_accent, a);
+    ui_draw_round((int16_t)(x2 - nr), (int16_t)(y2 - nr * 4 / 5),
+                  (int16_t)(nr * 2 + 1), (int16_t)(nr * 2 - 1),
+                  (int16_t)nr, col_accent, a);
+    for (i = 0; i < 3; i++) {
+        int bx = cx - m / 6 + i * m / 6;
+        int bh = h * (i == 1 ? 18 : 12) / 100;
+        ui_draw_round((int16_t)bx, (int16_t)(y + h * 18 / 100 - bh / 2),
+                      (int16_t)(m / 14 > 2 ? m / 14 : 2), (int16_t)bh,
+                      (int16_t)(m / 28), i == 1 ? col_accent : col_ring, a);
+    }
+}
 #endif
 
 static void draw_sport_pager(int tab, uint8_t a) {
@@ -1773,10 +1860,18 @@ static void draw_home_art(int page, uint8_t a) {
                      0, 0, 0, (uint8_t)page, 0u, a, 0)) {
         return;
     }
-    if (page == UI_PAGE_SPORT) {
+    {
         int x, y, w, h;
         home_icon_rect(&x, &y, &w, &h);
-        draw_sport_icon_frame(x, y, w, h, a);
+        if (page == UI_PAGE_SPORT) {
+            draw_sport_icon_frame(x, y, w, h, a);
+        } else if (page == UI_PAGE_MSG) {
+            draw_mail_icon_frame(x, y, w, h, a);
+        } else if (page == UI_PAGE_SETTINGS) {
+            draw_gear_icon_frame(x, y, w, h, a);
+        } else {
+            draw_music_icon_frame(x, y, w, h, a);
+        }
     }
 #else
     int x, y, w, h;
@@ -3115,12 +3210,12 @@ static void msg_link_sync(void) {
     if (st->sys_open_was && !sys_open) {
         link_leave_pic_sys();
     }
-    link_hdr_active(hdr_need);
     if (sys_open) {
-        /* 退出一级页面时让 SYS1 按帧后台载入，不再同步阻塞收尾动画；
-           未就绪的短暂窗口显示“加载中”。 */
+        /* 先让 SYS1 抢连续块，再给 SHD1 标题缓存分配；否则 1.6KB 标题缓存
+           会把 2.7KB 图标模块挤碎，退回主菜单时图标只能走静态兜底。 */
         link_begin_pic_sys();
     }
+    link_hdr_active(hdr_need);
     if (analog_open && (!st->analog_open_was || !link_pic_analog_ready())) {
         link_begin_pic_analog();
     }

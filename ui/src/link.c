@@ -2612,13 +2612,9 @@ void link_media_prev(void) {
     send_ctrl(ACT_PREV);
 }
 
-void link_hdr_active(int active) {
-    if (!active) {
-        lk.hdr_active = 0u;
-        free_hdr_buf();
-        return;
-    }
-    lk.hdr_active = 1u;
+/* SHD1 标题缓存按需分配：只有真的查到片外标题字时才占 1.6KB，
+   避免它常驻把主菜单 SYS1（2.7KB）和运动 SPR1（3.4KB）挤碎。 */
+static void hdr_ensure(void) {
     if (!lk.hdr_ready || !hal_ext_flash_present()) {
         return;
     }
@@ -2646,6 +2642,15 @@ void link_hdr_active(int active) {
     }
 }
 
+void link_hdr_active(int active) {
+    if (!active) {
+        lk.hdr_active = 0u;
+        free_hdr_buf();
+        return;
+    }
+    lk.hdr_active = 1u;
+}
+
 int link_hdr_lookup(uint32_t cp, int16_t *w, int16_t *h, int16_t *adv,
                     int8_t *ox, int8_t *oy, const uint8_t **rle_out) {
     ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_HEADERS];
@@ -2657,7 +2662,7 @@ int link_hdr_lookup(uint32_t cp, int16_t *w, int16_t *h, int16_t *adv,
         return 0;
     }
     if (!lk.hdr_buf || !lk.hdr_loaded) {
-        link_hdr_active(1);
+        hdr_ensure();
     }
     if (!lk.hdr_buf || !lk.hdr_loaded) {
         return 0;
@@ -2741,7 +2746,12 @@ void link_begin_pic_sport(void) {
         (lk.load_need > 0u || lk.pic_ready_kind == DYN_SPORT)) {
         return;
     }
-    (void)begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
+    if (!begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u)) {
+        /* SPR1 需要 3.4KB 连续块；碎片化时先退掉标题/字模缓存再试。 */
+        free_hdr_buf();
+        font_cache_free();
+        (void)begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
+    }
 }
 
 void link_leave_pic_sport(void) {
@@ -2794,13 +2804,7 @@ void link_begin_pic_sys(void) {
         lk.pic_entry >= 12u) {
         return;
     }
-    if (!begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u)) {
-        /* 主菜单图标 2.7KB 是最大的一次性块：退掉非必要的标题/字模缓存再试，
-           否则页面来回进出后内存碎片会让 SYS1 永久载不进来。 */
-        free_hdr_buf();
-        font_cache_free();
-        (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
-    }
+    (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
 }
 
 int link_pic_sys_ready(void) {
