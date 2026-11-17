@@ -1369,21 +1369,6 @@ static const char *compass_dir_zh(uint16_t heading) {
 }
 #endif
 
-static void draw_sport_stub(int x, int y, int w, int h, uint8_t a) {
-    int cx = x + w / 2;
-    int cy = y + h / 2;
-    int r = (w < h ? w : h) / 10;
-    if (r < 2) r = 2;
-    ui_draw_round((int16_t)(cx - r), (int16_t)(cy - h / 4 - r),
-                  (int16_t)(r * 2), (int16_t)(r * 2), (int16_t)r, col_accent, a);
-    ui_draw_line((int16_t)cx, (int16_t)(cy - h / 4 + r),
-                 (int16_t)(cx - w / 10), (int16_t)(cy + h / 6), col_accent, a);
-    ui_draw_line((int16_t)(cx - w / 10), (int16_t)(cy + h / 6),
-                 (int16_t)(cx - w / 5), (int16_t)(cy + h / 3), col_accent, a);
-    ui_draw_line((int16_t)(cx - w / 10), (int16_t)(cy + h / 6),
-                 (int16_t)(cx + w / 12), (int16_t)(cy + h / 3), col_accent, a);
-}
-
 static void draw_sport_pager(int tab, uint8_t a) {
     int y = UI_MY(24);
     int w_on = UI_MX(85);
@@ -1750,11 +1735,6 @@ static void draw_home_art(int page, uint8_t a) {
     if (pic_mod_exec(blob, entry_off, settings_get(), col_text, col_accent, col_bg,
                      0, 0, 0, (uint8_t)page, 0u, a, 0)) {
         return;
-    }
-    if (page == UI_PAGE_SPORT) {
-        int x, y, w, h;
-        home_icon_rect(&x, &y, &w, &h);
-        draw_sport_stub(x, y, w, h, a);
     }
 #else
     int x, y, w, h;
