@@ -2183,7 +2183,7 @@ static void draw_detail(uint8_t a) {
         draw_message_page(a);
         return;
     }
-    if (kind == 7) {
+    if (kind == 8) {
         draw_about_page(a);
         return;
     }
