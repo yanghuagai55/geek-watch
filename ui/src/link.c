@@ -544,7 +544,7 @@ void link_ext_pool_stats(uint16_t *total, uint16_t *used, uint16_t *free_max,
 static void send_ext_pool_state(void) {
     uint16_t tot = 0u, used = 0u, fm = 0u, mb = 0u, ib = 0u;
     uint8_t mn = 0u;
-    uint8_t frame[17];
+    uint8_t frame[18];
 
     link_ext_pool_stats(&tot, &used, &fm, &mb, &ib, &mn);
     frame[1] = LINK_EXT_POOL_STATE;
@@ -563,7 +563,9 @@ static void send_ext_pool_state(void) {
                           (lk.hdr_ready ? 0x20u : 0u) |
                           (lk.ext_dir.blks[EXT_BLK_ASSET_SPORT].len > 12u ? 0x40u : 0u) |
                           (lk.ext_dir.blks[EXT_BLK_ASSET_ANALOG].len > 12u ? 0x80u : 0u));
-    send_frame_buf(frame, 13u);
+    /* 第 14 字节：0x2E 的资源位已占满，MUS1 等后续资源放这里。 */
+    frame[16] = (uint8_t)(lk.ext_dir.blks[EXT_BLK_ASSET_MUSIC].len > 12u ? 0x01u : 0u);
+    send_frame_buf(frame, 14u);
 }
 
 typedef struct {
@@ -1130,6 +1132,7 @@ static int begin_compass3d_load(void) {
     return begin_pic_load(EXT_BLK_ASSET_COMPASS3D, COMPASS3D_MAGIC, DYN_COMPASS3D, 4096u);
 }
 
+#if !defined(AT32_SLIM_ROM)
 static int begin_about_load(void) {
     ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_ABOUT];
     uint8_t *buf;
@@ -1149,6 +1152,7 @@ static int begin_about_load(void) {
     lk.load_need = lk.about_total;
     return 1;
 }
+#endif
 
 #if !defined(AT32_SLIM_ROM)
 static int load_asset_blk(int blk_idx, uint16_t raw_len, uint8_t dyn_kind,
@@ -1776,9 +1780,11 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
                     link_begin_compass();
                 } else if (id == LINK_ASSET_ABOUT) {
                     load_about_meta();
+#if !defined(AT32_SLIM_ROM)
                     if (lk.about_want) {
                         link_begin_about();
                     }
+#endif
                 } else if (id == LINK_ASSET_HEADERS) {
                     load_hdr_meta();
                     free_hdr_buf();
@@ -2396,6 +2402,23 @@ int link_about_asset_ready(void) {
     return lk.about_ready != 0u;
 }
 
+int link_about_ext(uint32_t *abs_off, uint16_t *total_size) {
+    ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_ABOUT];
+
+    if (!lk.about_ready || !hal_ext_flash_present() ||
+        lk.about_total < 40u || lk.about_total > b->len) {
+        return 0;
+    }
+    if (abs_off) {
+        *abs_off = LINK_EXT_OFF_POOL + (uint32_t)b->off;
+    }
+    if (total_size) {
+        *total_size = lk.about_total;
+    }
+    return 1;
+}
+
+#if !defined(AT32_SLIM_ROM)
 int link_about_loading(void) {
     return lk.dyn_kind == DYN_ABOUT && lk.load_need > 0u;
 }
@@ -2436,6 +2459,7 @@ const uint8_t *link_about_blob(uint16_t *total_size) {
     }
     return lk.dyn_buf;
 }
+#endif /* !AT32_SLIM_ROM */
 
 int link_msg_list_ready(void) {
     return lk.msg_list_ready && lk.dyn_buf && lk.dyn_kind == DYN_MSG_LIST;

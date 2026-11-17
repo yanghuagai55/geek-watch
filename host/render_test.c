@@ -1484,7 +1484,7 @@ static int test_persist_and_compressed_dials(void) {
                 step(2);
                 hal_host_link_tx_take(wire, sizeof wire, &tx_n);
                 for (c = 0; c + 16 <= tx_n; c++) {
-                    if (wire[c] == 0xA5u && wire[c + 1] == 0x2Eu && wire[c + 2] == 13u) {
+                    if (wire[c] == 0xA5u && wire[c + 1] == 0x2Eu && wire[c + 2] == 14u) {
                         rx_ep = wire + c;
                     }
                 }
@@ -1503,7 +1503,7 @@ static int test_persist_and_compressed_dials(void) {
                 hal_host_link_tx_take(wire, sizeof wire, &tx_n);
                 rx_ep = NULL;
                 for (c = 0; c + 16 <= tx_n; c++) {
-                    if (wire[c] == 0xA5u && wire[c + 1] == 0x2Eu && wire[c + 2] == 13u) {
+                    if (wire[c] == 0xA5u && wire[c + 1] == 0x2Eu && wire[c + 2] == 14u) {
                         rx_ep = wire + c;
                     }
                 }

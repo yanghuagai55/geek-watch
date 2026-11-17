@@ -99,6 +99,14 @@ typedef struct app {
     int16_t dial_pick_steps;
     ui_obj_t dial_zoom;
     ui_obj_t dial_slide;
+#ifdef AT32_SLIM_ROM
+    /* 关于页：彩图从片外流式贴，只缓存 3 行简介 RLE（约 1.3KB）。 */
+    uint8_t *about_lines;
+    uint32_t about_ext;
+    uint16_t about_total;
+    uint8_t about_loaded;
+    uint8_t about_hdr[40];
+#endif
 } app_t;
 
 static app_t *st;
@@ -2129,6 +2137,107 @@ static void draw_message_page(uint8_t a) {
     /* 加载中保持空白，避免每次进来先闪“无消息”。 */
 }
 
+#ifdef AT32_SLIM_ROM
+/* 彩图 3.7KB 直接按行从片外流式贴图，只把 3 行简介 RLE（约 1.3KB）缓存下来。
+   平移动画期间不读片外，避免每帧上百毫秒的 I2C 读取拖慢动画。 */
+static int about_prepare(void) {
+    uint32_t base = 0u;
+    uint16_t tot = 0u;
+    uint16_t first = 0xFFFFu;
+    int i;
+
+    if (!link_about_ext(&base, &tot) || tot < 40u) {
+        return 0;
+    }
+    if (st->about_loaded && st->about_ext == base && st->about_total == tot) {
+        return 1;
+    }
+    if (st->about_lines) {
+        ui_mem_free(st->about_lines);
+        st->about_lines = 0;
+    }
+    st->about_loaded = 0u;
+    if (!hal_ext_flash_read(base, st->about_hdr, sizeof st->about_hdr)) {
+        return 0;
+    }
+    for (i = 0; i < 3; i++) {
+        uint16_t ol = (uint16_t)(st->about_hdr[16 + i * 8] |
+                                 ((uint16_t)st->about_hdr[17 + i * 8] << 8));
+        if (ol < first) {
+            first = ol;
+        }
+    }
+    if (first >= 40u && first < tot) {
+        uint16_t span = (uint16_t)(tot - first);
+        uint8_t *buf = (uint8_t *)ui_mem_alloc(span, 4);
+
+        if (buf) {
+            if (hal_ext_flash_read(base + first, buf, span)) {
+                st->about_lines = buf;
+            } else {
+                ui_mem_free(buf);
+            }
+        }
+    }
+    st->about_ext = base;
+    st->about_total = tot;
+    st->about_loaded = 1u;
+    return 1;
+}
+
+static void draw_about_page(uint8_t a) {
+    int band = header_band_h(256);
+    int y0 = band + 1;
+    int cy, i;
+    uint16_t line_cols[3];
+    uint16_t off0, first = 0xFFFFu;
+    uint8_t w0, h0;
+
+    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    if (st->settings.push.x < 256 || !about_prepare()) {
+        draw_header_anim("关于", 256, a);
+        return;
+    }
+    line_cols[0] = col_ring;
+    line_cols[1] = col_text;
+    line_cols[2] = col_dim;
+    w0 = st->about_hdr[4];
+    h0 = st->about_hdr[5];
+    off0 = (uint16_t)(st->about_hdr[8] | ((uint16_t)st->about_hdr[9] << 8));
+    for (i = 0; i < 3; i++) {
+        uint16_t ol = (uint16_t)(st->about_hdr[16 + i * 8] |
+                                 ((uint16_t)st->about_hdr[17 + i * 8] << 8));
+        if (ol < first) {
+            first = ol;
+        }
+    }
+    ui_ext_image_draw((int16_t)((UI_W - (int)w0) / 2), (int16_t)y0,
+                      (int16_t)w0, (int16_t)h0, st->about_ext + off0,
+                      UI_EXT_FMT_PAL4_RLE, 1u, a);
+    cy = y0 + (int)h0 + 2;
+    if (st->about_lines && first < st->about_total) {
+        for (i = 0; i < 3; i++) {
+            const uint8_t *d = st->about_hdr + 16 + i * 8;
+            uint16_t ol = (uint16_t)(d[0] | ((uint16_t)d[1] << 8));
+            uint16_t orr = (uint16_t)(d[2] | ((uint16_t)d[3] << 8));
+            uint8_t gw = d[4], gh = d[5], wl = d[6];
+            uint8_t wr = (uint8_t)(gw - wl);
+            uint16_t c = line_cols[d[7] < 3u ? d[7] : 1u];
+            int lx = (UI_W - (int)gw) / 2;
+
+            ui_mask_rle_draw((int16_t)lx, (int16_t)cy, (int16_t)wl, (int16_t)gh,
+                             st->about_lines + (ol - first), c, a);
+            if (wr > 0u) {
+                ui_mask_rle_draw((int16_t)(lx + wl), (int16_t)cy,
+                                 (int16_t)wr, (int16_t)gh,
+                                 st->about_lines + (orr - first), c, a);
+            }
+            cy += (int)gh + 2;
+        }
+    }
+    draw_header_anim("关于", 256, a);
+}
+#else
 static void draw_about_page(uint8_t a) {
     int band = header_band_h(256);
     uint16_t tot = 0u;
@@ -2171,6 +2280,7 @@ static void draw_about_page(uint8_t a) {
     /* “关于”按 0.5x 折叠比例以华文琥珀显示，腾出纵向空间给放大彩图与简介 */
     draw_header_anim("关于", 256, a);
 }
+#endif
 
 static void draw_detail(uint8_t a) {
     int kind = st->settings.level == UI_MENU_CHILD ? st->settings.child : -1;
@@ -2229,14 +2339,31 @@ static int draw_badge(void) {
     y = (int16_t)badge_y();
     {
         int bx = UI_MX(16);
-        int bw = ui_text_width(ram, 1) + 10;
+        int tw = ui_text_width(ram, 1);
+        int th = ui_text_height(ram, 1);
+        int bh = badge_h();
+        int bw = tw + 10;
         int maxw = UI_W - 2 * bx;
+        int tx, ty;
+
         if (bw > maxw) {
             bw = maxw;
         }
-        ui_draw_round((int16_t)bx, y, (int16_t)bw, (int16_t)badge_h(),
+        /* 文字在圆角底里上下左右都居中，别贴着圆角边。 */
+        tx = bx + (bw - tw) / 2;
+        if (tx < bx) {
+            tx = bx;
+        }
+        ty = y + (bh - th) / 2;
+        if (ty > y) {
+            ty--; /* 点阵字模底部留白比顶部少，上提 1px 视觉才居中 */
+        }
+        if (ty < y) {
+            ty = y;
+        }
+        ui_draw_round((int16_t)bx, y, (int16_t)bw, (int16_t)bh,
                       5, col_badge, st->overlay.opacity);
-        ui_draw_text((int16_t)(bx + 5), (int16_t)(y + 5), ram,
+        ui_draw_text((int16_t)tx, (int16_t)ty, ram,
                      col_ring, st->overlay.opacity, 1);
     }
     return badge_tick;
@@ -2968,8 +3095,16 @@ static void msg_link_sync(void) {
         link_leave_compass();
     }
     if (st->about_was_open && !about_open) {
-        /* 离开关于页：释放 ABT2 动态 RAM 缓冲。 */
+        /* 离开关于页：释放简介行缓存（彩图本来就是流式贴图，不占 RAM）。 */
+#ifdef AT32_SLIM_ROM
+        if (st->about_lines) {
+            ui_mem_free(st->about_lines);
+            st->about_lines = 0;
+        }
+        st->about_loaded = 0u;
+#else
         link_leave_about();
+#endif
     }
     if (st->sport_open_was && !sport_open) {
         link_leave_pic_sport();
@@ -2989,9 +3124,11 @@ static void msg_link_sync(void) {
     if (analog_open && (!st->analog_open_was || !link_pic_analog_ready())) {
         link_begin_pic_analog();
     }
+#ifndef AT32_SLIM_ROM
     if (about_open && (!st->about_was_open || !link_about_blob(0))) {
         link_begin_about();
     }
+#endif
     if (sport_open && (!st->sport_open_was ||
                        (!link_pic_sport_ready() && !compass_open && !link_compass_loading()))) {
         link_begin_pic_sport();
@@ -3291,7 +3428,15 @@ void ui_app_go_home(void) {
         link_leave_music();
     }
     link_leave_compass();
+#ifdef AT32_SLIM_ROM
+    if (st->about_lines) {
+        ui_mem_free(st->about_lines);
+        st->about_lines = 0;
+    }
+    st->about_loaded = 0u;
+#else
     link_leave_about();
+#endif
     link_leave_pic_sport();
     link_leave_pic_analog();
     link_hdr_active(0);

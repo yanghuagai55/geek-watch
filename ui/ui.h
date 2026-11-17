@@ -273,11 +273,15 @@ const uint8_t *link_compass_asset_mask(int16_t *w, int16_t *h);
 int link_compass3d_ready(void);
 const uint8_t *link_compass3d_blob(uint16_t *entry_off, uint16_t *total_size);
 int link_about_asset_ready(void);
+/* 关于页彩图直接从片外流式贴图（固件不再缓存整包）；返回彩图包绝对地址与总长。 */
+int link_about_ext(uint32_t *abs_off, uint16_t *total_size);
+#ifndef AT32_SLIM_ROM
 void link_enter_about(void);
 void link_begin_about(void);
 int link_about_loading(void);
 void link_leave_about(void);
 const uint8_t *link_about_blob(uint16_t *total_size);
+#endif
 int link_hdr_lookup(uint32_t cp, int16_t *w, int16_t *h, int16_t *adv,
                     int8_t *ox, int8_t *oy, const uint8_t **rle_out);
 void link_hdr_active(int active);
