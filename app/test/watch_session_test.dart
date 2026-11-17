@@ -139,6 +139,7 @@ void main() {
       enableTelemetry: false,
     );
     await session.connect(type: TransportType.spp, address: 'TEST');
+    await pumpEventQueue();
     fake.sent.clear();
 
     final ok = await session.sendMessage(1, '你好世界你好世界你好世界');
@@ -160,6 +161,7 @@ void main() {
       enableTelemetry: false,
     );
     await session.connect(type: TransportType.spp, address: 'TEST');
+    await pumpEventQueue();
     fake.sent.clear();
 
     final bits = Uint8List(512);

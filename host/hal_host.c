@@ -309,6 +309,10 @@ void hal_host_set_async_delay_us(uint32_t us) {
     async_delay_us = us;
 }
 
+void hal_display_set_clock(uint8_t mhz) {
+    (void)mhz;
+}
+
 void hal_host_display_reset_stats(void) {
     memset(&display_stats, 0, sizeof display_stats);
     display_stats.min_x = FB_W;

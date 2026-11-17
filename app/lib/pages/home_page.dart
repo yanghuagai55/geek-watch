@@ -226,9 +226,18 @@ class _HeroCard extends StatelessWidget {
           if (showDualInline) {
             final compactDual = constraints.maxWidth < 860;
             return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(child: intro),
-                const SizedBox(width: 24),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 460),
+                      child: intro,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 20),
                 _DualWatchShowcase(
                   controller: controller,
                   onNavigate: onNavigate,
@@ -1039,17 +1048,11 @@ class _QuickActions extends StatelessWidget {
       builder: (context, constraints) {
         final columns = constraints.maxWidth >= 900 ? 4 : 2;
         const gap = 12.0;
-        final itemWidth =
-            (constraints.maxWidth - gap * (columns - 1)) / columns;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final item in items)
-              SizedBox(
-                width: itemWidth,
-                height: 116,
-                child: AppCard(
+        Widget tile(int index) {
+          final item = items[index];
+          return SizedBox(
+            height: 116,
+            child: AppCard(
                   onTap: item.$4,
                   padding: const EdgeInsets.all(16),
                   child: Column(
@@ -1084,8 +1087,31 @@ class _QuickActions extends StatelessWidget {
                     ],
                   ),
                 ),
-              ),
-          ],
+          );
+        }
+
+        final rows = <Widget>[];
+        for (var start = 0; start < items.length; start += columns) {
+          if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
+          rows.add(
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < columns; i++) ...[
+                  if (i > 0) const SizedBox(width: gap),
+                  Expanded(
+                    child: start + i < items.length
+                        ? tile(start + i)
+                        : const SizedBox(height: 116),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: rows,
         );
       },
     );

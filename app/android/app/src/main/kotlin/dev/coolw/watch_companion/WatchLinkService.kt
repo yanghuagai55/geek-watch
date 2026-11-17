@@ -202,7 +202,9 @@ class WatchLinkService : Service() {
         mainHandler.post {
             if (enabled) {
                 pushMediaNow(force = true)
+                if (watchMusicActive) startMediaSyncPoll()
             } else {
+                stopMediaSyncPoll()
                 mediaRunnable?.let { mainHandler.removeCallbacks(it) }
                 mediaRunnable = null
             }
@@ -544,21 +546,26 @@ class WatchLinkService : Service() {
     }
 
     private var mediaPollRunnable: Runnable? = null
+    private var mediaPollGeneration = 0
 
     private fun startMediaSyncPoll() {
-        mediaPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        val generation = ++mediaPollGeneration
         val runnable = object : Runnable {
             override fun run() {
-                if (!connected.get() || !watchMusicActive || !mediaFollow) return
-                MediaBridge.refresh(applicationContext)
+                if (generation != mediaPollGeneration) return
+                // 音乐页还开着时，短暂掉线不能把轮询掐死；关掉跟随或离开音乐页才停。
+                if (!watchMusicActive || !mediaFollow) return
+                if (connected.get()) MediaBridge.refresh(applicationContext)
                 mainHandler.postDelayed(this, 2_000)
             }
         }
+        mediaPollRunnable?.let { mainHandler.removeCallbacks(it) }
         mediaPollRunnable = runnable
         mainHandler.postDelayed(runnable, 2_000)
     }
 
     private fun stopMediaSyncPoll() {
+        mediaPollGeneration++
         mediaPollRunnable?.let { mainHandler.removeCallbacks(it) }
         mediaPollRunnable = null
     }

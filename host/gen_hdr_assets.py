@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract the 13 Chinese STHupo header glyphs from ui/src/song_data.c into:
+"""Extract the 15 Chinese STHupo header glyphs from ui/src/song_data.c into:
   - app/assets/blobs/headers_sthupo.bin ('SHD1' pack for AT24C256 0x2F id=5)
   - Guard ui/src/song_data.c with #ifndef AT32_SLIM_ROM so AT32 build links
     ONLY digits '0'..'9' (~1.8 KB Flash) while Host keeps the full table or
@@ -48,15 +48,15 @@ def main() -> None:
         face, w, h, adv, x, y, off = [int(v, 0) for v in parts[1:8]]
         entries.append((cp, face, w, h, adv, x, y, off))
 
-    # Split face==0 (13 CJK glyphs) vs face==1 (digits '0'..'9')
+    # Split face==0 (15 CJK glyphs) vs face==1 (digits '0'..'9')
     hdr_entries = [e for e in entries if e[1] == 0]
     dig_entries = [e for e in entries if e[1] == 1]
-    assert len(hdr_entries) == 13 and len(dig_entries) == 10
+    assert len(hdr_entries) == 15 and len(dig_entries) == 10
     split_off = dig_entries[0][7]
     assert all(e[7] < split_off for e in hdr_entries)
     assert all(e[7] >= split_off for e in dig_entries)
 
-    # Pack BOTH face==0 (13 CJK headers) and face==1 (10 STHupo digits '0'..'9')
+    # Pack BOTH face==0 (15 CJK headers) and face==1 (10 STHupo digits '0'..'9')
     # into headers_sthupo.bin ('SHD1'), leaving 0 B bitmap tables in AT32 Flash.
     all_entries = hdr_entries + dig_entries
     base_off = all_entries[0][7]

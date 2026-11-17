@@ -31,7 +31,7 @@ class NowPlaying {
   static NowPlaying? fromMap(Object? raw) {
     if (raw is! Map) return null;
     String text(Object? value) => value is String ? value : '';
-    int number(Object? value) => value is int ? value : 0;
+    int number(Object? value) => value is num ? value.round() : 0;
     return NowPlaying(
       hasSession: raw['hasSession'] == true,
       title: text(raw['title']),

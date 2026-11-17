@@ -18,10 +18,7 @@ SRC_IMG = r"D:\下载\2089417230228.png"
 FONT_PATH = r"C:\Windows\Fonts\STHUPO.TTF"
 OUT_BIN = os.path.join(ROOT, "app", "assets", "blobs", "about_art.bin")
 OUT_H = os.path.join(ROOT, "host", "about_asset_test.h")
-PREVIEW_PNG = (
-    r"C:\Users\coolw\.gemini\antigravity\brain\b54e9a64-ced1-4194-82d6-c6d696276ed6"
-    r"\scratch\preview_about_final.png"
-)
+PREVIEW_PNG = os.path.join(ROOT, "host", "obj", "about_preview.png")
 
 
 def rgb565(r: int, g: int, b: int) -> int:
@@ -74,13 +71,18 @@ def encode_pal4_rle(w: int, h: int, pal_rgb: list[tuple[int, int, int]], rows: l
     return pal_bytes + tbl + bytes(rle_data)
 
 
-def build_pinkie_img(target_w: int = 68, target_h: int = 72) -> tuple[int, int, bytes, Image.Image]:
+def build_pinkie_img(target_w: int = 128, target_h: int = 88) -> tuple[int, int, bytes, Image.Image]:
     im = Image.open(SRC_IMG).convert("RGBA")
     im = im.crop(im.getbbox())
-    scale = min(target_w / im.width, target_h / im.height)
-    nw = max(1, int(round(im.width * scale)))
-    nh = max(1, int(round(im.height * scale)))
+    # 铺满屏幕：按 cover 比例放大后居中裁切，不再保留上下留白。
+    scale = max(target_w / im.width, target_h / im.height)
+    nw = max(target_w, int(round(im.width * scale)))
+    nh = max(target_h, int(round(im.height * scale)))
     im = im.resize((nw, nh), Image.LANCZOS)
+    left = (nw - target_w) // 2
+    top = (nh - target_h) // 2
+    im = im.crop((left, top, left + target_w, top + target_h))
+    nw, nh = target_w, target_h
 
     opaque_pixels = []
     rgba_comp = Image.new("RGBA", (nw, nh), (0, 0, 0, 0))
@@ -217,7 +219,7 @@ def render_intro_lines():
 
 def main() -> None:
     os.makedirs(os.path.dirname(OUT_BIN), exist_ok=True)
-    w0, h0, data0, pv0 = build_pinkie_img(66, 70)
+    w0, h0, data0, pv0 = build_pinkie_img(128, 88)
     lines = render_intro_lines()
     assert len(lines) == 3
 

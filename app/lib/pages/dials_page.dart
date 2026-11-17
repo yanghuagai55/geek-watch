@@ -517,9 +517,18 @@ class _DialsPageState extends State<DialsPage> {
         .toUpperCase()
         .padLeft(2, '0');
 
-    return PageScroll(
-      children: [
-        PageHeader(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final screen = MediaQuery.sizeOf(context);
+        final pad = screen.width < 560 ? 16.0 : 28.0;
+        final portraitPhone = screen.width < 760 && screen.height > screen.width;
+        final bottom = portraitPhone ? 112.0 : 20.0;
+        final wide = constraints.maxWidth >= 900;
+        final innerWidth = math.max(
+          0.0,
+          math.min(constraints.maxWidth - pad * 2, 1180.0),
+        );
+        final header = PageHeader(
           title: '表盘工作台',
           subtitle: '9KB 片内 Flash 热交换槽 + AT24C256 32KB 按需动态库 · 导入即见实时预览',
           trailing: StatusPill(
@@ -532,12 +541,8 @@ class _DialsPageState extends State<DialsPage> {
                 ? AppPalette.mint
                 : _dialAmber,
           ),
-        ),
-        const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 900;
-            final preview = _DialStageCard(
+        );
+        final preview = _DialStageCard(
               spec: current,
               controller: controller,
               photoImage: _previewImage,
@@ -549,6 +554,39 @@ class _DialsPageState extends State<DialsPage> {
               onPushConfig: _pushDialConfig,
               onUploadPhoto: _uploadPhotoDial,
               onApplyProfile: _applyRecommendedProfile,
+              screenScale: 2,
+            );
+            final phoneScale = innerWidth >= 256 ? 2.0 : 1.0;
+            final phoneFace = _DialStageCard(
+              spec: current,
+              controller: controller,
+              photoImage: _previewImage,
+              encoded: _encoded,
+              profile: _profile,
+              uploading: _uploading,
+              sentChunks: _sentChunks,
+              totalChunks: _totalChunks,
+              onPushConfig: _pushDialConfig,
+              onUploadPhoto: _uploadPhotoDial,
+              onApplyProfile: _applyRecommendedProfile,
+              screenScale: phoneScale,
+              showTitle: false,
+              showControls: false,
+            );
+            final phoneActions = _DialStageCard(
+              spec: current,
+              controller: controller,
+              photoImage: _previewImage,
+              encoded: _encoded,
+              profile: _profile,
+              uploading: _uploading,
+              sentChunks: _sentChunks,
+              totalChunks: _totalChunks,
+              onPushConfig: _pushDialConfig,
+              onUploadPhoto: _uploadPhotoDial,
+              onApplyProfile: _applyRecommendedProfile,
+              showTitle: false,
+              showFace: false,
             );
             final imageStudio = _ImageCompressionCard(
               wallpaperId: _wallpaperId,
@@ -615,68 +653,155 @@ class _DialsPageState extends State<DialsPage> {
               },
             );
             final memoryMap = _FlashPartitionCard(scheme: scheme, controller: controller);
-
-            return Column(
+            final presets = _buildPresetGrid(controller, wide ? innerWidth : innerWidth);
+            final editorColumn = Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _buildPresetGrid(controller, constraints.maxWidth),
-                const SizedBox(height: 16),
-                if (wide) ...[
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 5,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 490),
-                          child: preview,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        flex: 7,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 490),
-                          child: imageStudio,
-                        ),
-                      ),
-                    ],
-                  ),
+                if (!wide) ...[
+                  header,
                   const SizedBox(height: 16),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 5,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 410),
-                          child: customization,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        flex: 7,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 410),
-                          child: memoryMap,
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  preview,
-                  const SizedBox(height: 16),
-                  imageStudio,
-                  const SizedBox(height: 16),
-                  customization,
-                  const SizedBox(height: 16),
-                  memoryMap,
                 ],
+                presets,
+                const SizedBox(height: 16),
+                customization,
+                const SizedBox(height: 16),
+                imageStudio,
+                const SizedBox(height: 16),
+                memoryMap,
               ],
             );
+
+            final Widget workspace;
+            if (wide) {
+              workspace = Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  header,
+                  const SizedBox(height: 16),
+                  presets,
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 128 * 2 + 72,
+                          child: SingleChildScrollView(
+                            primary: false,
+                            child: preview,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            primary: false,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                customization,
+                                const SizedBox(height: 16),
+                                imageStudio,
+                                const SizedBox(height: 16),
+                                memoryMap,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            } else {
+              final innerH = math.max(0.0, constraints.maxHeight - 16 - bottom);
+              final faceBlock = 160 * phoneScale + 72;
+              final phoneEditors = Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  phoneActions,
+                  const SizedBox(height: 12),
+                  editorColumn,
+                ],
+              );
+              if (innerH < faceBlock + 140) {
+                workspace = SingleChildScrollView(
+                  primary: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      phoneFace,
+                      const SizedBox(height: 12),
+                      phoneEditors,
+                    ],
+                  ),
+                );
+              } else {
+                workspace = Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    phoneFace,
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        primary: false,
+                        child: phoneEditors,
+                      ),
+                    ),
+                  ],
+                );
+              }
+            }
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(pad, 16, pad, bottom),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: SizedBox(width: innerWidth, child: workspace),
+              ),
+            );
           },
+    );
+  }
+}
+
+/// 表盘画面按实机 128×160 排好，再整块放大。放大不会改字号和留白。
+class _NativeDialScreen extends StatelessWidget {
+  const _NativeDialScreen({
+    required this.width,
+    required this.height,
+    required this.bgColor,
+    required this.child,
+  });
+
+  final double width;
+  final double height;
+  final Color bgColor;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0D0C),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppPalette.line, width: 1.5),
+      ),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: FittedBox(
+          fit: BoxFit.fill,
+          child: SizedBox(
+            width: 176,
+            height: 220,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: ColoredBox(color: bgColor, child: child),
+            ),
+          ),
         ),
-      ],
+      ),
     );
   }
 }
@@ -694,6 +819,10 @@ class _DialStageCard extends StatelessWidget {
     required this.onPushConfig,
     required this.onUploadPhoto,
     required this.onApplyProfile,
+    this.screenScale = 2,
+    this.showTitle = true,
+    this.showFace = true,
+    this.showControls = true,
   });
 
   final _DialSpec spec;
@@ -707,6 +836,10 @@ class _DialStageCard extends StatelessWidget {
   final VoidCallback onPushConfig;
   final VoidCallback onUploadPhoto;
   final VoidCallback onApplyProfile;
+  final double screenScale;
+  final bool showTitle;
+  final bool showFace;
+  final bool showControls;
 
   @override
   Widget build(BuildContext context) {
@@ -726,50 +859,34 @@ class _DialStageCard extends StatelessWidget {
 
     return AppCard(
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SectionHeader(
-            title: spec.name,
-            subtitle: spec.subtitle,
-            trailing: StatusPill(
-              label: spec.tag,
-              color: spec.id == 3 ? _dialAmber : AppPalette.mint,
-            ),
-          ),
-          const SizedBox(height: 18),
-          Center(
-            child: Container(
-              width: 196,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0A0D0C),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: AppPalette.line, width: 1.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: acColor.withValues(alpha: 0.18),
-                    blurRadius: 24,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
+          if (showTitle) ...[
+            SectionHeader(
+              title: spec.name,
+              subtitle: spec.subtitle,
+              trailing: StatusPill(
+                label: spec.tag,
+                color: spec.id == 3 ? _dialAmber : AppPalette.mint,
               ),
-              child: AspectRatio(
-                aspectRatio: 128 / 160,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: Container(
-                    color: bgColor,
-                    child: _buildDialCanvas(
-                      hh,
-                      mm,
-                      ss,
-                      pct,
-                      fgColor,
-                      acColor,
-                      bgColor,
-                    ),
-                  ),
-                ),
+            ),
+            const SizedBox(height: 18),
+          ],
+          if (showFace) ...[
+          Center(
+            child: _NativeDialScreen(
+              width: 128 * screenScale,
+              height: 160 * screenScale,
+              bgColor: bgColor,
+              child: _buildDialCanvas(
+                hh,
+                mm,
+                ss,
+                pct,
+                fgColor,
+                acColor,
+                bgColor,
               ),
             ),
           ),
@@ -787,7 +904,8 @@ class _DialStageCard extends StatelessWidget {
               ),
             ),
           ),
-          if (profile != null && spec.id == 3) ...[
+          ],
+          if (showControls && profile != null && spec.id == 3) ...[
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -852,7 +970,7 @@ class _DialStageCard extends StatelessWidget {
               ),
             ),
           ],
-          if (uploading && totalChunks > 0) ...[
+          if (showControls && uploading && totalChunks > 0) ...[
             const SizedBox(height: 12),
             LinearProgressIndicator(value: sentChunks / totalChunks),
             const SizedBox(height: 4),
@@ -864,6 +982,7 @@ class _DialStageCard extends StatelessWidget {
               style: const TextStyle(fontSize: 11),
             ),
           ],
+          if (showControls) ...[
           const SizedBox(height: 14),
           Wrap(
             spacing: 10,
@@ -890,6 +1009,7 @@ class _DialStageCard extends StatelessWidget {
                 ),
             ],
           ),
+          ],
         ],
       ),
     );
@@ -1468,7 +1588,7 @@ class _ImageCompressionCard extends StatelessWidget {
             title: '128×160 相册裁切选区与抗噪压缩工作台',
             subtitle: pickedImageName != null
                 ? '源图 $pickedImageName ($srcWidth×$srcHeight) · 拖拽选框平移、拖拽四角缩放大区域'
-                : '选择本地图片后可直接框选任意 4:5 局部区域，左侧实时预览刷新效果',
+                : '选择本地图片后可直接框选任意 4:5 局部区域，表盘预览会跟着刷新',
             trailing: encoding
                 ? const StatusPill(label: '编码中…')
                 : StatusPill(

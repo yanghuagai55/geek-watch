@@ -129,6 +129,7 @@ void settings_init(void) {
     st.brightness = 1;
     st.raise_wrist = 1;
     st.key_beep = 0;
+    st.spi_mhz = 30;
     st.bluetooth = 1;
     st.led_mode = 1;
     st.use_24h = 1;
@@ -190,6 +191,7 @@ int settings_load_ext(void) {
     }
 
     settings_unpack_wire(best + 9);
+    st.spi_mhz = (best[50] == 15u) ? 15u : 30u;
     st.cfg_loaded = 1u;
 
     st.img_w = (int16_t)get_u16(best + 29);
@@ -263,6 +265,7 @@ int settings_save_ext(uint8_t source_prio) {
     buf[33] = st.img_fmt;
     buf[34] = st.img_ready ? (st.img_on_chip ? 2u : 1u) : 0u;
     put_u16(buf + 35, st.img_bytes);
+    buf[50] = (st.spi_mhz == 15u) ? 15u : 30u;
 
     if (s9.mag_cal == 2u) {
         buf[37] = 1u;

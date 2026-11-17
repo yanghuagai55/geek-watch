@@ -1595,7 +1595,7 @@ static int test_persist_and_compressed_dials(void) {
             step(2);
             key_tap(HAL_KEY2);
             step(24);
-            for (c = 0; c < 7; c++) {
+            for (c = 0; c < 8; c++) {
                 key_tap(HAL_KEY3);
                 step(2);
             }
@@ -1650,7 +1650,7 @@ static int test_persist_and_compressed_dials(void) {
                             "leaving about page freed ABT2 SRAM buffer");
                 }
             }
-            for (c = 0; c < 5; c++) {
+            for (c = 0; c < 6; c++) {
                 key_tap(HAL_KEY1);
                 step(2);
             }

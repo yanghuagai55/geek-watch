@@ -43,8 +43,9 @@
 #define SRC_TX   GPIO_PINS_SOURCE2
 #define SRC_RX   GPIO_PINS_SOURCE3
 
-/* SPI1 在 APB2=120MHz。DIV_8 -> 15MHz 先求稳；跑通后可换 DIV_4(30MHz)。 */
-#define SPI_CLK_DIV SPI_MCLK_DIV_8
+/* SPI1 在 APB2=120MHz。官方建议 15MHz；这里实验 DIV_4(30MHz)，
+   若屏幕出现花屏/偏色立即回退 DIV_8。 */
+#define SPI_CLK_DIV SPI_MCLK_DIV_4
 
 #define STK_CTRL   (*(volatile uint32_t *)0xE000E010u)
 #define STK_LOAD   (*(volatile uint32_t *)0xE000E014u)
@@ -589,12 +590,21 @@ uint16_t hal_cpu_tenths(void) {
     return (uint16_t)cpu_shown;
 }
 
+void hal_display_set_clock(uint8_t mhz) {
+    uint32_t div = (mhz >= 30u) ? SPI_MCLK_DIV_4 : SPI_MCLK_DIV_8;
+    /* 分频位在 SPI 使能时也可写，避免重新初始化整条总线。 */
+    SPI1->ctrl2_bit.mdiv_h = 0;
+    SPI1->ctrl1_bit.mdiv_l = div;
+}
+
 void hal_frame_pace(void) {
     for(;;) {
         ui_service();
         if((tick_ms - pace_ms) >= 16u) {
             break;
         }
+        /* 片外 Flash 资源只吃帧间空闲：64B 约 1.6ms，不会把动画帧拉长。 */
+        link_asset_pump(64u);
         hal_idle();
     }
     pace_ms = tick_ms;

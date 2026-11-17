@@ -146,7 +146,7 @@ typedef struct {
 } ext_dir_t;
 
 enum {
-    HDR_IDX_BYTES = 240u,
+    HDR_IDX_BYTES = 280u,
     HDR_RING_BYTES = 1360u,
     HDR_BUF_BYTES = HDR_IDX_BYTES + HDR_RING_BYTES,
     HDR_SLOTS = 10
@@ -828,7 +828,7 @@ static void load_about_meta(void) {
     total = u16_get(hdr + 10);
     crc = u16_get(hdr + 12);
     if (!hdr[4] || !hdr[5] || hdr[6] != 3u ||
-        off0 != 40u || total <= off0 || total > 3712u || total > b->len) {
+        off0 != 40u || total <= off0 || total > 8192u || total > b->len) {
         return;
     }
     lk.about_total = total;
@@ -857,7 +857,7 @@ static void load_hdr_meta(void) {
     cnt = u16_get(hdr + 4);
     cov = u16_get(hdr + 6);
     total = u16_get(hdr + 8);
-    if (cnt == 0u || cnt > 24u || cov < 12u + cnt * 10u ||
+    if (cnt == 0u || cnt > 32u || cov < 12u + cnt * 10u ||
         cov - 12u > HDR_IDX_BYTES || total <= cov || total > b->len) {
         return;
     }
@@ -1215,16 +1215,15 @@ void link_asset_pump(uint16_t max_bytes) {
         return;
     }
     dst = (kind == DYN_COMPASS3D) ? lk.c3d_buf : lk.dyn_buf;
-    if (!dst || (kind != DYN_COMPASS3D && (lk.dyn_kind != kind || lk.dyn_cap < lk.load_need)) ||
+    if (!dst || (kind != DYN_COMPASS3D &&
+                 (lk.dyn_kind != kind || lk.dyn_cap < lk.load_need)) ||
         !hal_ext_flash_present()) {
         if (kind == DYN_COMPASS3D) free_c3d_buf();
         else free_dyn_buf();
         return;
     }
     rem = (uint16_t)(lk.load_need - lk.load_pos);
-    if ((kind == DYN_SYS || kind == DYN_SPORT || kind == DYN_ANALOG) && max_bytes > 0u && max_bytes < 1024u) {
-        max_bytes = 1024u;
-    }
+    /* 由调用方按帧预算决定单次载入量，避免 1KB 阻塞把动画帧拉长。 */
     take = (max_bytes > 0u && rem > max_bytes) ? max_bytes : rem;
     if (take > 0u &&
         !hal_ext_flash_read(lk.load_ext_off + lk.load_pos, dst + lk.load_pos, take)) {
@@ -2703,17 +2702,14 @@ const uint8_t *link_pic_analog_blob(uint16_t *entry_off) {
 }
 
 void link_begin_pic_sys(void) {
-    if (lk.dyn_kind == DYN_SYS && lk.dyn_buf &&
-        (lk.load_need > 0u || lk.pic_ready_kind == DYN_SYS)) {
+    if (lk.load_kind == DYN_SYS && lk.load_need > 0u) {
+        return;
+    }
+    if (lk.dyn_kind == DYN_SYS && lk.dyn_buf && lk.pic_ready_kind == DYN_SYS &&
+        lk.pic_entry >= 12u) {
         return;
     }
     (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
-}
-
-void link_leave_pic_sys(void) {
-    if (lk.dyn_kind == DYN_SYS) {
-        free_dyn_buf();
-    }
 }
 
 int link_pic_sys_ready(void) {
@@ -2725,6 +2721,12 @@ const uint8_t *link_pic_sys_blob(uint16_t *entry_off) {
     if (!link_pic_sys_ready()) return 0;
     if (entry_off) *entry_off = lk.pic_entry;
     return lk.dyn_buf;
+}
+
+void link_leave_pic_sys(void) {
+    if (lk.dyn_kind == DYN_SYS) {
+        free_dyn_buf();
+    }
 }
 
 uint16_t link_img_gen(void) {

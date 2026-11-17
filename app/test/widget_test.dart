@@ -54,7 +54,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('连接偏好'), findsOneWidget);
     expect(find.text('外观与动效'), findsOneWidget);
-    expect(find.text('手表显示'), findsOneWidget);
+    expect(find.text('手表设置'), findsOneWidget);
 
     await tester.tap(find.byTooltip('切换到暖白主题'));
     await tester.pumpAndSettle();

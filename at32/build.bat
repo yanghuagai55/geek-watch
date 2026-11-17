@@ -39,7 +39,7 @@ for %%S in (i2c_bus mpu6050 qmc5883l ext_flash adc_bat beep led_bl) do (
 if errorlevel 1 exit /b 1
 
 if exist "%OUT%\libui.a" del "%OUT%\libui.a"
-for %%S in (ui_mem ui_anim ui_draw ui_menu ui_trace ui_app ui_icons song_draw song_data font_data link sport imu9 music settings) do (
+for %%S in (ui_mem ui_anim ui_draw ui_menu ui_trace ui_app song_draw song_data font_data link sport imu9 music settings) do (
     "%GCC%" %CFLAGS% -I "%ROOT%\ui" -c "%ROOT%\ui\src\%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
     "%AR%" rcs "%OUT%\libui.a" "%OUT%\%%S.o"

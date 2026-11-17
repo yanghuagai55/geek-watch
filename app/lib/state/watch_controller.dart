@@ -1248,9 +1248,17 @@ class WatchController extends ChangeNotifier {
     _pollingMedia = true;
     try {
       final media = await _mediaMonitor.nowPlaying();
+      if (_disposed) return;
       if (media == null || !media.hasSession || media.title.trim().isEmpty) {
         return;
       }
+      final nextPos = media.positionMs.toDouble();
+      final nextDur = media.durationMs.toDouble();
+      final progressChanged =
+          (mediaPosition - nextPos).abs() >= 400 ||
+          (mediaDuration - nextDur).abs() >= 400;
+      mediaPosition = nextPos;
+      mediaDuration = nextDur;
       if (media.title != mediaTitle || media.artist != mediaArtist) {
         mediaTitle = media.title;
         mediaArtist = media.artist;
@@ -1259,6 +1267,8 @@ class WatchController extends ChangeNotifier {
       if (playing != media.playing) {
         playing = media.playing;
         await session?.setPlayState(media.playing);
+        notifyListeners();
+      } else if (progressChanged && !_disposed) {
         notifyListeners();
       }
       await _updateMediaCue(media);
@@ -1409,7 +1419,7 @@ class WatchController extends ChangeNotifier {
     _pollingAndroidMedia = true;
     try {
       final info = await AndroidWatchBridge.nowPlaying();
-      if (info == null) return;
+      if (_disposed || info == null) return;
       final title = (info['title'] as String?)?.trim() ?? '';
       final artist = (info['artist'] as String?)?.trim() ?? '';
       final isPlaying = info['playing'] == true;

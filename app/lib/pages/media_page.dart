@@ -294,26 +294,30 @@ class _MediaPageState extends State<MediaPage> {
                 children: [_composer(context)],
               ),
             );
-            if (constraints.maxWidth >= 850) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+            if (constraints.maxWidth >= 900) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(flex: 5, child: player),
-                      const SizedBox(width: 16),
-                      Expanded(flex: 6, child: lyrics),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        player,
+                        const SizedBox(height: 16),
+                        composerCard,
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(flex: 6, child: rules),
-                      const SizedBox(width: 16),
-                      Expanded(flex: 5, child: composerCard),
-                    ],
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        lyrics,
+                        const SizedBox(height: 16),
+                        rules,
+                      ],
+                    ),
                   ),
                 ],
               );
@@ -392,11 +396,13 @@ class _PlayerCardState extends State<_PlayerCard> {
         : (controller.connected ? '在手机上打开音乐 App 播放' : '手表未连接');
 
     return AppCard(
-      child: Column(
-        children: [
-          Container(
-            width: 174,
-            height: 174,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final sideBySide = constraints.maxWidth >= 480;
+          final artSize = sideBySide ? 132.0 : 174.0;
+          final art = Container(
+            width: artSize,
+            height: artSize,
             decoration: BoxDecoration(
               gradient: const RadialGradient(
                 colors: [
@@ -437,13 +443,17 @@ class _PlayerCardState extends State<_PlayerCard> {
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 22),
+          );
+          final controls = Column(
+            crossAxisAlignment: sideBySide
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.center,
+            children: [
           Text(
             hasMedia ? controller.mediaTitle : '未检测到播放',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
+            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
             style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 5),
@@ -451,7 +461,7 @@ class _PlayerCardState extends State<_PlayerCard> {
             subtitle,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
+            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 18),
@@ -488,7 +498,9 @@ class _PlayerCardState extends State<_PlayerCard> {
           ),
           const SizedBox(height: 10),
           Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisAlignment: sideBySide
+                ? MainAxisAlignment.start
+                : MainAxisAlignment.center,
             children: [
               IconButton(
                 onPressed: hasMedia
@@ -530,7 +542,26 @@ class _PlayerCardState extends State<_PlayerCard> {
                 : '未检测到系统媒体',
             color: hasMedia ? scheme.primary : scheme.onSurfaceVariant,
           ),
-        ],
+            ],
+          );
+          if (sideBySide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                art,
+                const SizedBox(width: 18),
+                Expanded(child: controls),
+              ],
+            );
+          }
+          return Column(
+            children: [
+              art,
+              const SizedBox(height: 22),
+              controls,
+            ],
+          );
+        },
       ),
     );
   }

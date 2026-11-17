@@ -536,15 +536,11 @@ class SettingsPage extends StatelessWidget {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: Container(
+                    child: Image.asset(
+                      'assets/images/about_logo.png',
                       width: 72,
                       height: 72,
-                      color: const Color(0xFF141B24),
-                      padding: const EdgeInsets.all(6),
-                      child: Image.asset(
-                        'assets/images/about_logo.png',
-                        fit: BoxFit.contain,
-                      ),
+                      fit: BoxFit.contain,
                     ),
                   ),
                   const SizedBox(width: 14),

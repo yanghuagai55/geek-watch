@@ -325,6 +325,9 @@ static int write_song(const char *path,
     fprintf(fp, "/* 华文琥珀。时钟数字和中文标题都从这套字来。\n");
     fprintf(fp, "   在电脑上光栅进 Flash，表上按 1:1 画。 */\n");
     fprintf(fp, "#include \"song_data.h\"\n\n");
+    fprintf(fp, "#ifdef AT32_SLIM_ROM\n");
+    fprintf(fp, "#include \"song_data_slim.inc\"\n");
+    fprintf(fp, "#else\n");
     fprintf(fp, "const int song_line_h[2] = {%d, %d};\n\n", title_h, clock_h);
     fprintf(fp, "const uint8_t song_cover[] = {\n");
     off = 0;
@@ -342,6 +345,7 @@ static int write_song(const char *path,
     }
     fprintf(fp, "};\n\n");
     fprintf(fp, "const int song_glyph_n = %d;\n", title_n + 10);
+    fprintf(fp, "#endif\n");
     fclose(fp);
     printf("song cover %d bytes, titles %d clock row %d\n", bytes, title_n, clock_h);
     return 1;
@@ -492,7 +496,7 @@ int main(int argc, char **argv) {
         static const uint32_t title_cp[] = {
             0x8FD0, 0x52A8, 0x6D88, 0x606F, 0x8BBE, 0x7F6E,
             0x97F3, 0x4E50, 0x5173, 0x4E8E, 0x4EAE, 0x5EA6,
-            0x65E0
+            0x65E0, 0x8FDE, 0x63A5
         };
         enum { TITLE_N = (int)(sizeof(title_cp) / sizeof(title_cp[0])), TITLE_EM = 40 };
         digit_t titles[TITLE_N];

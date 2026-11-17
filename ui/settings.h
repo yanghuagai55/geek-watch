@@ -57,6 +57,7 @@ typedef struct settings {
     uint8_t img_on_chip;  /* 1=已交换进片内 Flash 热槽(0 I2C 读), 0=片外 AT24C256 */
     uint16_t img_bytes;   /* 压缩或原始字节长度 */
     uint8_t mag_cal_saved;/* 是否曾写入磁强计偏置 */
+    uint8_t spi_mhz;      /* 屏幕 SPI 频率：15 / 30 MHz */
 } settings_t;
 
 void settings_init(void);

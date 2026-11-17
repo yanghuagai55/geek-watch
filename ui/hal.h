@@ -44,6 +44,8 @@ uint8_t hal_key_level(void);
 void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint16_t *pixels);
 int hal_display_busy(void);
+/* 设置 LCD SPI 时钟：15 或 30 MHz。端口不支持时可为空实现。 */
+void hal_display_set_clock(uint8_t mhz);
 
 /* 包住一帧里真正干活的时间。等待下一帧不计入。 */
 void hal_meter_begin(void);

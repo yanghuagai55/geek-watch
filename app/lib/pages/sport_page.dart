@@ -119,12 +119,17 @@ class _AttitudeStageCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              Watch3DView(
-                key: const Key('sport-watch-3d-large'),
-                controller: controller,
-                mode: Watch3DMode.stageLarge,
-                height: wide ? 356 : 248,
-                onTapExpand: () => _openFullscreen3D(context, controller),
+              Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: wide ? 520 : 360),
+                  child: Watch3DView(
+                    key: const Key('sport-watch-3d-large'),
+                    controller: controller,
+                    mode: Watch3DMode.stageLarge,
+                    height: wide ? 320 : 248,
+                    onTapExpand: () => _openFullscreen3D(context, controller),
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
               _TelemetryStrip(controller: controller),
@@ -137,9 +142,9 @@ class _AttitudeStageCard extends StatelessWidget {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(flex: 6, child: viewport),
+                Expanded(child: viewport),
                 const SizedBox(width: 18),
-                Expanded(flex: 5, child: calPanel),
+                Expanded(child: calPanel),
               ],
             );
           }
