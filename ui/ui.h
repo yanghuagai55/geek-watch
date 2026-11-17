@@ -29,7 +29,7 @@
 #define UI_W HAL_LCD_W
 #define UI_H HAL_LCD_H
 #define UI_BAND_H 4
-#define UI_RAM_BUDGET (8448u + 4u * UI_W * UI_BAND_H)
+#define UI_RAM_BUDGET (10560u + 4u * UI_W * UI_BAND_H)
 
 /* ---- lifecycle & cooperative service ---- */
 /* ui_core_init omits the demo app; follow with begin/draw/flush for custom pages. */
@@ -135,6 +135,7 @@ void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
                     int16_t radius, int16_t cy, int16_t rip_r,
                     uint16_t color, uint8_t opacity);
 void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color, uint8_t opacity);
+void ui_draw_line_w(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t width, uint16_t color, uint8_t opacity);
 void ui_draw_flush(void);
 
 /* ---- vector / bitmap / text ----
@@ -186,6 +187,10 @@ enum {
 void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                        uint32_t ext_offset, uint8_t fmt,
                        uint16_t color, uint8_t opacity);
+void ui_ext_image_draw_fast(int16_t x, int16_t y, int16_t w, int16_t h,
+                            const uint8_t *mem_ptr, uint32_t ext_offset,
+                            uint8_t fmt, uint16_t color, uint8_t opacity,
+                            uint16_t gen_tag);
 void ui_mem_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint8_t *pal4_rle, uint8_t transparent0, uint8_t opacity);
 void ui_text_draw(int16_t x, int16_t y, const char *utf8,
@@ -248,24 +253,56 @@ void link_clear_ext_messages(void);
 void link_enter_music(void);
 void link_leave_music(void);
 enum {
-    LINK_ASSET_COMPASS = 1u,   /* 指南针 64x64 1bpp 表盘底图 (4 + 512 B) */
-    LINK_ASSET_MSG_EMPTY = 2u  /* 消息空状态 96x40 1bpp 横幅 (4 + 480 B) */
+    LINK_ASSET_COMPASS   = 1u, /* 指南针 64x64 1bpp 底图降级包 */
+    LINK_ASSET_MSG_EMPTY = 2u, /* 保留兼容性编号 */
+    LINK_ASSET_COMPASS3D = 3u, /* Plan B: ARM Cortex-M4 3D指南针 PIC 二进制包 ('C3D1') */
+    LINK_ASSET_ABOUT     = 4u, /* 关于页放大彩图 + 华文琥珀简介缓存包 ('ABT2') */
+    LINK_ASSET_HEADERS   = 5u, /* 片外 13 枚华文琥珀中文标题包 ('SHD1') */
+    LINK_ASSET_SPORT     = 6u, /* 片外 运动步数 + 传感器诊断 PIC 包 ('SPR1') */
+    LINK_ASSET_ANALOG    = 7u, /* 片外 墨竹指针表盘 + IMU 水平仪 PIC 包 ('ANL1') */
+    LINK_ASSET_SYS       = 8u  /* 片外 主菜单动态图标 PIC 包 ('SYS1') */
 };
 void link_enter_compass(void);
+void link_begin_compass(void);
+int link_compass_loading(void);
 void link_leave_compass(void);
 int link_compass_asset_ready(void);
 const uint8_t *link_compass_asset_mask(int16_t *w, int16_t *h);
-int link_msg_empty_asset_ready(void);
-const uint8_t *link_msg_empty_asset_mask(int16_t *w, int16_t *h);
+int link_compass3d_ready(void);
+const uint8_t *link_compass3d_blob(uint16_t *entry_off, uint16_t *total_size);
+int link_about_asset_ready(void);
+void link_enter_about(void);
+void link_begin_about(void);
+int link_about_loading(void);
+void link_leave_about(void);
+const uint8_t *link_about_blob(uint16_t *total_size);
+int link_hdr_lookup(uint32_t cp, int16_t *w, int16_t *h, int16_t *adv,
+                    int8_t *ox, int8_t *oy, const uint8_t **rle_out);
+void link_hdr_active(int active);
+void link_begin_pic_sport(void);
+void link_leave_pic_sport(void);
+int link_pic_sport_ready(void);
+const uint8_t *link_pic_sport_blob(uint16_t *entry_off);
+void link_begin_pic_analog(void);
+void link_leave_pic_analog(void);
+int link_pic_analog_ready(void);
+const uint8_t *link_pic_analog_blob(uint16_t *entry_off);
+void link_begin_pic_sys(void);
+void link_leave_pic_sys(void);
+int link_pic_sys_ready(void);
+const uint8_t *link_pic_sys_blob(uint16_t *entry_off);
+uint16_t link_img_gen(void);
+void link_asset_pump(uint16_t max_bytes);
+void link_asset_finish(void);
 /* 外部 32KB Flash 分区与动态池（0x0000 设置双槽 + 0x0100 动态目录双槽 + 0x0300 统一动态池）。 */
 enum {
     LINK_EXT_OFF_CFG        = 0x0000u, /*   256B: 双槽 64B 设置/表盘/校准持久化 (0x0000/0x0080) */
     LINK_EXT_OFF_DIR        = 0x0100u, /*   512B: 双槽 256B 动态片外 ROM 目录表 (0x0100/0x0200) */
-    LINK_EXT_OFF_POOL       = 0x0300u, /* 32000B: 动态统一数据池 (表盘图+媒体+20条消息+按需页资源) */
+    LINK_EXT_OFF_POOL       = 0x0300u, /* 32000B: 双端动态池 (低端放表盘图+ROM资源 / 高端放媒体+20条消息) */
     LINK_EXT_POOL_SIZE      = 32000u,
     LINK_EXT_MSG_MAX        = 20u,
     LINK_EXT_OFF_IMG        = 0x3C00u, /* 兼容底图测试与直接流式测试偏移 */
-    LINK_EXT_IMG_MAX        = 0x4400u
+    LINK_EXT_IMG_MAX        = 0x5400u
 };
 void link_load_ext(void);
 uint32_t link_ext_img_offset(void);
@@ -278,7 +315,7 @@ void link_notify_settings(void);
 void link_notify_config(void);
 void ui_settings_apply(int key, int value);
 void ui_app_set_message_count(int count);
-/* 消息/音乐应用打开状态查询，用于按需管理动态 RAM 缓冲。 */
+/* 消息/音乐应用打开状态查询（消息返回 ui_menu_level：0 关闭 / 1 列表 / 2 详情）。 */
 int ui_app_message_active(void);
 int ui_app_music_active(void);
 /* 最近 4 秒内收到过合法帧即认为 PC/手机在线。 */

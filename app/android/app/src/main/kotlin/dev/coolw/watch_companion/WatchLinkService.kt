@@ -128,14 +128,24 @@ class WatchLinkService : Service() {
     private var mediaKey = ""
     private var mediaPlaying = false
     private var messageMode = false
+    @Volatile
+    private var watchMusicActive = false
     private val messages = ArrayDeque<CachedMessage>()
 
     private val scanner = FrameScanner { cmd, first ->
         when (cmd) {
-            0x10 -> MediaBridge.control(first, applicationContext)
+            0x10 -> {
+                MediaBridge.control(first, applicationContext)
+                if (watchMusicActive) {
+                    mainHandler.postDelayed({
+                        MediaBridge.refresh(applicationContext)
+                    }, 250)
+                }
+            }
             0x14 -> onMessageListRequested()
             0x15 -> onMessageDetailRequested(first)
             0x16 -> onMessageLeave()
+            0x2E -> onWatchExtFlags(first)
         }
     }
 
@@ -256,7 +266,8 @@ class WatchLinkService : Service() {
             updateNotification(statusText)
             finishConnect(true, null)
             messageMode = false
-            pushMediaNow(force = true)
+            watchMusicActive = false
+            requestWatchPoolState()
             return
         }
         stopping.set(false)
@@ -293,7 +304,8 @@ class WatchLinkService : Service() {
                 startKeepAlive()
                 sendTime()
                 messageMode = false
-                pushMediaNow(force = true)
+                watchMusicActive = false
+                requestWatchPoolState()
             } catch (error: Exception) {
                 connected.set(false)
                 val message = error.message ?: "连接失败"
@@ -431,6 +443,7 @@ class WatchLinkService : Service() {
         keepAliveRunnable = null
         mediaRunnable?.let { mainHandler.removeCallbacks(it) }
         mediaRunnable = null
+        stopMediaSyncPoll()
     }
 
     // ---- 写入 ---------------------------------------------------------------
@@ -524,18 +537,64 @@ class WatchLinkService : Service() {
 
     // ---- 媒体 ---------------------------------------------------------------
 
+    private fun requestWatchPoolState() {
+        worker.execute {
+            writeOrReport(buildFrame(0x2D, byteArrayOf(0x00)))
+        }
+    }
+
+    private var mediaPollRunnable: Runnable? = null
+
+    private fun startMediaSyncPoll() {
+        mediaPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!connected.get() || !watchMusicActive || !mediaFollow) return
+                MediaBridge.refresh(applicationContext)
+                mainHandler.postDelayed(this, 2_000)
+            }
+        }
+        mediaPollRunnable = runnable
+        mainHandler.postDelayed(runnable, 2_000)
+    }
+
+    private fun stopMediaSyncPoll() {
+        mediaPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        mediaPollRunnable = null
+    }
+
+    private fun onWatchExtFlags(flags: Int) {
+        val active = (flags and 0x10) != 0
+        mainHandler.post {
+            if (active == watchMusicActive) return@post
+            watchMusicActive = active
+            if (active) {
+                MediaBridge.refresh(applicationContext)
+                pushMediaNow(force = true)
+                startMediaSyncPoll()
+            } else {
+                stopMediaSyncPoll()
+                mediaRunnable?.let { mainHandler.removeCallbacks(it) }
+                mediaRunnable = null
+                mediaKey = ""
+            }
+        }
+    }
+
     fun onMediaChanged(title: String, artist: String, playing: Boolean) {
         mainHandler.post {
             val key = "$title\u0000$artist"
-            if (key != mediaKey) {
-                mediaKey = key
-                mediaPages = WatchTextRasterizer.pages(title, artist)
-                mediaPage = 0
-                scheduleMediaPush()
-            }
-            if (playing != mediaPlaying) {
-                mediaPlaying = playing
-                sendPlayState(playing)
+            if (watchMusicActive && !messageMode && mediaFollow && connected.get()) {
+                if (key != mediaKey) {
+                    mediaKey = key
+                    mediaPages = WatchTextRasterizer.pages(title, artist)
+                    mediaPage = 0
+                    scheduleMediaPush()
+                }
+                if (playing != mediaPlaying) {
+                    mediaPlaying = playing
+                    sendPlayState(playing)
+                }
             }
             if (title.isNotBlank()) {
                 statusText = "已连接 · $title"
@@ -545,8 +604,12 @@ class WatchLinkService : Service() {
     }
 
     private fun pushMediaNow(force: Boolean) {
-        if (messageMode || !mediaFollow || !connected.get()) return
-        val snapshot = MediaBridge.current
+        if (!watchMusicActive || messageMode || !mediaFollow || !connected.get()) return
+        var snapshot = MediaBridge.current
+        if (snapshot.title.isBlank()) {
+            MediaBridge.refresh(applicationContext)
+            snapshot = MediaBridge.current
+        }
         if (snapshot.title.isBlank()) return
         val key = "${snapshot.title}\u0000${snapshot.artist}"
         if (!force && key == mediaKey) return
@@ -561,10 +624,10 @@ class WatchLinkService : Service() {
     private fun scheduleMediaPush() {
         mediaRunnable?.let { mainHandler.removeCallbacks(it) }
         mediaRunnable = null
-        if (messageMode || !mediaFollow || mediaPages.isEmpty()) return
+        if (!watchMusicActive || messageMode || !mediaFollow || mediaPages.isEmpty()) return
         val runnable = object : Runnable {
             override fun run() {
-                if (!connected.get() || !mediaFollow || messageMode) return
+                if (!connected.get() || !mediaFollow || messageMode || !watchMusicActive) return
                 if (scanner.imageGuardActive()) {
                     mainHandler.postDelayed(this, 1_000)
                     return
@@ -1131,6 +1194,9 @@ private class FrameScanner(private val onFrame: (Int, Int) -> Unit) {
                         0
                     }
                     onFrame(cmd, first)
+                } else if (cmd == 0x2E && payload >= 13) {
+                    val flags = buffer[index + header + 12].toInt() and 0xFF
+                    onFrame(cmd, flags)
                 }
                 if (cmd == 0x11) {
                     imageUntil = SystemClock.uptimeMillis() + 800

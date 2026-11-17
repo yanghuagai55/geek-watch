@@ -43,8 +43,7 @@ static uint32_t get_u32(const uint8_t *p) {
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-uint16_t settings_crc16(const uint8_t *buf, uint32_t len) {
-    uint16_t crc = 0xFFFFu;
+uint16_t settings_crc16_step(uint16_t crc, const uint8_t *buf, uint32_t len) {
     uint32_t i;
     int bit;
 
@@ -56,6 +55,10 @@ uint16_t settings_crc16(const uint8_t *buf, uint32_t len) {
         }
     }
     return crc;
+}
+
+uint16_t settings_crc16(const uint8_t *buf, uint32_t len) {
+    return settings_crc16_step(0xFFFFu, buf, len);
 }
 
 static int read_slot(uint32_t off, uint8_t *buf) {
@@ -125,7 +128,7 @@ void settings_init(void) {
     memset(&st, 0, sizeof st);
     st.brightness = 1;
     st.raise_wrist = 1;
-    st.key_beep = 1;
+    st.key_beep = 0;
     st.bluetooth = 1;
     st.led_mode = 1;
     st.use_24h = 1;
@@ -198,8 +201,10 @@ int settings_load_ext(void) {
         st.img_fmt >= UI_EXT_FMT_1BPP && st.img_fmt <= UI_EXT_FMT_RGB565_RLE &&
         st.img_bytes > 0u && st.img_bytes <= LINK_EXT_IMG_MAX) {
         st.img_ready = 1u;
+        st.img_on_chip = (best[34] == 2u && (uint32_t)st.img_bytes <= hal_int_img_cap()) ? 1u : 0u;
     } else {
         st.img_ready = 0u;
+        st.img_on_chip = 0u;
         st.img_w = st.img_h = 0;
         st.img_fmt = 0;
         st.img_bytes = 0u;
@@ -256,7 +261,7 @@ int settings_save_ext(uint8_t source_prio) {
     put_u16(buf + 29, (uint16_t)st.img_w);
     put_u16(buf + 31, (uint16_t)st.img_h);
     buf[33] = st.img_fmt;
-    buf[34] = st.img_ready ? 1u : 0u;
+    buf[34] = st.img_ready ? (st.img_on_chip ? 2u : 1u) : 0u;
     put_u16(buf + 35, st.img_bytes);
 
     if (s9.mag_cal == 2u) {

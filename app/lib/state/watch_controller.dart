@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:material_ui/material_ui.dart';
 
 import '../services/android_spp.dart';
@@ -83,7 +84,7 @@ class WatchController extends ChangeNotifier {
   /// 手表实际设置（0x1A / 0x2C 回传）与 App 最高优先级策略。
   bool appPriorityOverride = true;
   bool raiseWrist = true;
-  bool keyBeep = true;
+  bool keyBeep = false;
   int watchBrightness = 1;
   bool watchBluetooth = true;
   int ledMode = 1;
@@ -108,9 +109,11 @@ class WatchController extends ChangeNotifier {
   int extI2cAddr = 0;
   bool cfgLoadedFromI2c = false;
   bool mcuImgReady = false;
+  bool mcuImgOnChip = false;
   int mcuImgBytes = 0;
   int mcuImgFmt = 0;
   bool mcuMagCalSaved = false;
+  bool watchMusicActive = false;
   int mcuCfgSource = 0; // 0=默认, 1=I2C模块, 2=App覆盖
   bool autoClearMessages = false;
   WatchExtPoolState? extPoolState;
@@ -459,6 +462,9 @@ class WatchController extends ChangeNotifier {
       extFlashPresent = false;
       extI2cAddr = 0;
       cfgLoadedFromI2c = false;
+      mcuImgOnChip = false;
+      watchMusicActive = false;
+      _mediaCueKey = '';
       mcuCfgSource = 0;
     } else {
       unawaited(_syncAndroidIntegration());
@@ -528,6 +534,7 @@ class WatchController extends ChangeNotifier {
     extI2cAddr = cfg.extI2cAddr;
     cfgLoadedFromI2c = cfg.cfgLoadedFromI2c;
     mcuImgReady = cfg.imgReady;
+    mcuImgOnChip = cfg.imgOnChip;
     mcuImgBytes = cfg.imgBytes;
     mcuImgFmt = cfg.imgFmt;
     mcuMagCalSaved = cfg.magCalSaved;
@@ -605,12 +612,39 @@ class WatchController extends ChangeNotifier {
   }
 
   void _applyExtPool(WatchExtPoolState pool) {
+    final prevMusic = watchMusicActive;
     extPoolState = pool;
+    watchMusicActive = pool.watchMusicActive;
+    if (prevMusic != watchMusicActive) {
+      if (!watchMusicActive) {
+        _mediaCueKey = '';
+      }
+      _syncMediaPolling();
+    }
     notifyListeners();
     if (pool.hasAssetFlags &&
         !_syncingAssets &&
-        ((pool.assetFlags | _syncedAssetMask) & 0x03) != 0x03) {
+        ((pool.assetFlags | _syncedAssetMask) & 0xEF) != 0xEF) {
       unawaited(_syncMissingExtAssets(pool.assetFlags | _syncedAssetMask));
+    }
+  }
+
+  Future<void> _syncBlobAsset(
+    WatchSession active,
+    int bitMask,
+    int assetId,
+    String assetPath,
+  ) async {
+    try {
+      final bd = await rootBundle.load(assetPath);
+      final bytes = bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
+      if (connected &&
+          bytes.isNotEmpty &&
+          await active.sendExtBlob(assetId: assetId, blob: bytes)) {
+        _syncedAssetMask |= bitMask;
+      }
+    } catch (_) {
+      // 忽略单包缺失或传输中断，下次重连或查询 0x2E 自动重试。
     }
   }
 
@@ -631,17 +665,28 @@ class WatchController extends ChangeNotifier {
           _syncedAssetMask |= 0x01;
         }
       }
+      if ((presentFlags & 0x04) == 0 && connected) {
+        await _syncBlobAsset(active, 0x04, 3, 'assets/blobs/compass3d_m4.bin');
+      }
+      if ((presentFlags & 0x08) == 0 && connected) {
+        await _syncBlobAsset(active, 0x08, 4, 'assets/blobs/about_art.bin');
+      }
+      if ((presentFlags & 0x20) == 0 && connected) {
+        await _syncBlobAsset(
+          active,
+          0x20,
+          5,
+          'assets/blobs/headers_sthupo.bin',
+        );
+      }
+      if ((presentFlags & 0x40) == 0 && connected) {
+        await _syncBlobAsset(active, 0x40, 6, 'assets/blobs/sport_mod_m4.bin');
+      }
+      if ((presentFlags & 0x80) == 0 && connected) {
+        await _syncBlobAsset(active, 0x80, 7, 'assets/blobs/analog_mod_m4.bin');
+      }
       if ((presentFlags & 0x02) == 0 && connected) {
-        final bits = await WatchMessageRasterizer.renderMsgEmptyAsset();
-        if (connected &&
-            await active.sendExtAsset(
-              assetId: WatchMessageRasterizer.msgEmptyAssetId,
-              width: WatchMessageRasterizer.msgEmptyW,
-              height: WatchMessageRasterizer.msgEmptyH,
-              bits: bits,
-            )) {
-          _syncedAssetMask |= 0x02;
-        }
+        await _syncBlobAsset(active, 0x02, 8, 'assets/blobs/sys_mod_m4.bin');
       }
     } catch (_) {
       // 资源下发属后台增强，失败不打断主链路，下次重连或查询 0x2E 可重试。
@@ -654,6 +699,15 @@ class WatchController extends ChangeNotifier {
     final active = session;
     if (active == null || !connected) return false;
     return active.requestExtPoolState();
+  }
+
+  Future<bool> syncExtAssetsNow() async {
+    final active = session;
+    if (active == null || !connected) return false;
+    _syncedAssetMask = 0;
+    await _syncMissingExtAssets(0);
+    await active.requestExtPoolState();
+    return true;
   }
 
   void setAutoClearMessages(bool value) {
@@ -1142,6 +1196,9 @@ class WatchController extends ChangeNotifier {
       if (action == WatchControl.pause) _controlMedia('pause');
       if (action == WatchControl.next) _controlMedia('next');
       if (action == WatchControl.previous) _controlMedia('previous');
+      if (watchMusicActive) {
+        Timer(const Duration(milliseconds: 250), () => unawaited(_pollMedia()));
+      }
     }
     if (action == WatchControl.play) playing = true;
     if (action == WatchControl.pause) playing = false;
@@ -1160,7 +1217,11 @@ class WatchController extends ChangeNotifier {
 
   void _syncMediaPolling() {
     final should =
-        mediaFollow && connected && session != null && Platform.isWindows;
+        mediaFollow &&
+        watchMusicActive &&
+        connected &&
+        session != null &&
+        Platform.isWindows;
     if (should) {
       if (_mediaTimer == null) {
         _mediaTimer = Timer.periodic(
@@ -1180,6 +1241,7 @@ class WatchController extends ChangeNotifier {
     if (_pollingMedia ||
         !connected ||
         !mediaFollow ||
+        !watchMusicActive ||
         session?.isCapturing == true) {
       return;
     }
@@ -1497,7 +1559,7 @@ class WatchController extends ChangeNotifier {
     use24Hour = true;
     appPriorityOverride = true;
     raiseWrist = true;
-    keyBeep = true;
+    keyBeep = false;
     watchBrightness = 1;
     ledMode = 1;
     screenOff = 0;

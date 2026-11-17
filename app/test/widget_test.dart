@@ -91,7 +91,7 @@ void main() {
 
     await tester.tap(find.text('表盘'));
     await tester.pumpAndSettle();
-    expect(find.text('表盘方案预览库'), findsOneWidget);
+    expect(find.text('表盘方案切换'), findsOneWidget);
     expect(find.text('32KB 外置 AT24C256 动态 ROM (0x50)'), findsOneWidget);
 
     await tester.ensureVisible(find.text('墨竹极简指针'));

@@ -25,6 +25,7 @@
 
 /* includes ------------------------------------------------------------------*/
 #include "at32f421_int.h"
+#include "at32f421_gpio.h"
 
 /** @addtogroup AT32F421_periph_template
   * @{
@@ -50,50 +51,15 @@ void NMI_Handler(void)
   */
 void HardFault_Handler(void)
 {
-  /* go to infinite loop when hard fault exception occurs */
-  while(1)
-  {
+  /* 确保意外硬件异常时立刻切断 PA8 震动马达输出 */
+  GPIOA->clr = GPIO_PINS_8;
+  for (;;) {
   }
 }
 
-/**
-  * @brief  this function handles memory manage exception.
-  * @param  none
-  * @retval none
-  */
-void MemManage_Handler(void)
-{
-  /* go to infinite loop when memory manage exception occurs */
-  while(1)
-  {
-  }
-}
-
-/**
-  * @brief  this function handles bus fault exception.
-  * @param  none
-  * @retval none
-  */
-void BusFault_Handler(void)
-{
-  /* go to infinite loop when bus fault exception occurs */
-  while(1)
-  {
-  }
-}
-
-/**
-  * @brief  this function handles usage fault exception.
-  * @param  none
-  * @retval none
-  */
-void UsageFault_Handler(void)
-{
-  /* go to infinite loop when usage fault exception occurs */
-  while(1)
-  {
-  }
-}
+void MemManage_Handler(void) { HardFault_Handler(); }
+void BusFault_Handler(void) { HardFault_Handler(); }
+void UsageFault_Handler(void) { HardFault_Handler(); }
 
 /**
   * @brief  this function handles svcall exception.

@@ -16,7 +16,33 @@ export 'watch_protocol.dart' show argbToRgb565, rgb565ToArgb;
 
 const int watchDisplayWidth = 128;
 const int watchDisplayHeight = 160;
-const int watchExtImgMaxBytes = 0x4400; // 17,408 B (0x3C00..0x7FFF)
+const int watchOnChipHotSwapMaxBytes = 9216; // 9 KB AT32 片内 Flash 热交换槽（0x0800DC00..0x08010000）
+const int watchExtImgMaxBytes = 0x5400; // 21,504 B (与固件 LINK_EXT_IMG_MAX 一致，兼容片外 AT24C256 退避)
+
+/// 每张图片独立的局部刷新与布局评估档案：
+/// - 判定是否可放入 9KB AT32 片内热交换槽（XIP 120MHz 零 I2C 读）
+/// - 评估上/中/下 3 区的边缘密度与背景亮度，给出低扰动局部刷新时钟推荐位置与对比蒙版
+class WatchImageProfile {
+  const WatchImageProfile({
+    required this.fitsOnChipHotSwap,
+    required this.onChipBudgetBytes,
+    required this.flatRatio,
+    required this.recommendedAlign,
+    required this.recommendedScrim,
+    required this.recommendedTextColor,
+    required this.recommendedAccentColor,
+    required this.zoneBusyScores,
+  });
+
+  final bool fitsOnChipHotSwap;
+  final int onChipBudgetBytes;
+  final double flatRatio;
+  final int recommendedAlign; // 0=居中, 1=居顶, 2=居底
+  final bool recommendedScrim;
+  final int recommendedTextColor;
+  final int recommendedAccentColor;
+  final List<double> zoneBusyScores; // [居顶, 居中, 居底] 复杂度(越低局部刷新越快/少遮挡主体)
+}
 
 enum WatchExtImgFormat {
   pal4Rle(4, '16色抖动压缩 (PAL4-RLE)'),
@@ -45,8 +71,22 @@ class EncodedWatchImage {
 
   int get rawRgb565Bytes => width * height * 2;
   bool get fitsFlash => bytes.length <= watchExtImgMaxBytes;
+  bool get fitsOnChipHotSwap => bytes.length <= watchOnChipHotSwapMaxBytes;
   double get compressionRatio =>
       bytes.isEmpty ? 1.0 : rawRgb565Bytes / bytes.length;
+}
+
+/// 读取源图原始像素尺寸（用于 2D 裁切选区交互画布确定原始纵横比与边界）。
+Future<({int width, int height})> probeImageSize(Uint8List fileBytes) async {
+  final codec = await ui.instantiateImageCodec(fileBytes);
+  final frame = await codec.getNextFrame();
+  final img = frame.image;
+  try {
+    return (width: img.width, height: img.height);
+  } finally {
+    img.dispose();
+    codec.dispose();
+  }
 }
 
 int _clampByte(int v) => v < 0 ? 0 : (v > 255 ? 255 : v);
@@ -58,7 +98,7 @@ int _snapRgb565(int r, int g, int b) {
   return (r5 << 11) | (g6 << 5) | b5;
 }
 
-/// 将任意已编码图片（PNG/JPG/BMP/WebP）裁切缩放为手表 128×160 RGBA 缓冲，并支持亮度/对比度调节。
+/// 将任意已编码图片（PNG/JPG/BMP/WebP）裁切缩放为手表 128×160 RGBA 缓冲，支持 2D 区域选取与亮度/对比度调节。
 Future<Uint8List> cropImageBytesToRgba(
   Uint8List fileBytes, {
   int targetWidth = watchDisplayWidth,
@@ -66,6 +106,7 @@ Future<Uint8List> cropImageBytesToRgba(
   double zoom = 1.0,
   double panX = 0.0,
   double panY = 0.0,
+  ui.Rect? cropRectNorm,
   double brightness = 0.0,
   double contrast = 1.0,
 }) async {
@@ -80,20 +121,35 @@ Future<Uint8List> cropImageBytesToRgba(
     );
     final iw = img.width.toDouble();
     final ih = img.height.toDouble();
-    final baseScale = math.max(targetWidth / iw, targetHeight / ih);
-    final drawW = iw * baseScale * zoom.clamp(1.0, 3.0);
-    final drawH = ih * baseScale * zoom.clamp(1.0, 3.0);
-    final maxDx = math.max(0.0, (drawW - targetWidth) / 2);
-    final maxDy = math.max(0.0, (drawH - targetHeight) / 2);
-    final left = (targetWidth - drawW) / 2 - panX.clamp(-1.0, 1.0) * maxDx;
-    final top = (targetHeight - drawH) / 2 - panY.clamp(-1.0, 1.0) * maxDy;
+    if (cropRectNorm != null &&
+        cropRectNorm.width > 0.01 &&
+        cropRectNorm.height > 0.01) {
+      final nl = cropRectNorm.left.clamp(0.0, 0.99);
+      final nt = cropRectNorm.top.clamp(0.0, 0.99);
+      final nr = (cropRectNorm.left + cropRectNorm.width).clamp(nl + 0.01, 1.0);
+      final nb = (cropRectNorm.top + cropRectNorm.height).clamp(nt + 0.01, 1.0);
+      canvas.drawImageRect(
+        img,
+        ui.Rect.fromLTRB(nl * iw, nt * ih, nr * iw, nb * ih),
+        ui.Rect.fromLTWH(0, 0, targetWidth.toDouble(), targetHeight.toDouble()),
+        ui.Paint()..filterQuality = ui.FilterQuality.high,
+      );
+    } else {
+      final baseScale = math.max(targetWidth / iw, targetHeight / ih);
+      final drawW = iw * baseScale * zoom.clamp(1.0, 4.0);
+      final drawH = ih * baseScale * zoom.clamp(1.0, 4.0);
+      final maxDx = math.max(0.0, (drawW - targetWidth) / 2);
+      final maxDy = math.max(0.0, (drawH - targetHeight) / 2);
+      final left = (targetWidth - drawW) / 2 - panX.clamp(-1.0, 1.0) * maxDx;
+      final top = (targetHeight - drawH) / 2 - panY.clamp(-1.0, 1.0) * maxDy;
 
-    canvas.drawImageRect(
-      img,
-      ui.Rect.fromLTWH(0, 0, iw, ih),
-      ui.Rect.fromLTWH(left, top, drawW, drawH),
-      ui.Paint()..filterQuality = ui.FilterQuality.high,
-    );
+      canvas.drawImageRect(
+        img,
+        ui.Rect.fromLTWH(0, 0, iw, ih),
+        ui.Rect.fromLTWH(left, top, drawW, drawH),
+        ui.Paint()..filterQuality = ui.FilterQuality.high,
+      );
+    }
     final pic = recorder.endRecording();
     final outImg = await pic.toImage(targetWidth, targetHeight);
     pic.dispose();
@@ -234,6 +290,138 @@ EncodedWatchImage encodeWatchImage(
   };
 }
 
+/// 针对每一张裁切后的图片自适应拟合：若默认抖动下 PAL4-RLE 略微超出 9KB 片内热槽，
+/// 自动阶梯提高平坦区抑制强度，优先确保压入 AT32 片内 Flash 热交换槽以实现 120MHz XIP 秒刷。
+EncodedWatchImage encodeWatchImageAdaptive(
+  Uint8List rgba, {
+  required WatchExtImgFormat format,
+  int width = watchDisplayWidth,
+  int height = watchDisplayHeight,
+  bool dither = true,
+  int accentArgb = 0xFF73D4AE,
+}) {
+  if (format != WatchExtImgFormat.pal4Rle) {
+    return encodeWatchImage(
+      rgba,
+      format: format,
+      width: width,
+      height: height,
+      dither: dither,
+      accentArgb: accentArgb,
+    );
+  }
+  var best = _encodePal4Rle(
+    rgba,
+    width: width,
+    height: height,
+    dither: dither,
+    flatSnapThreshold: 14,
+  );
+  if (best.fitsOnChipHotSwap || !dither) return best;
+  for (final snap in const [22, 32]) {
+    final cand = _encodePal4Rle(
+      rgba,
+      width: width,
+      height: height,
+      dither: true,
+      flatSnapThreshold: snap,
+    );
+    if (cand.bytes.length < best.bytes.length) best = cand;
+    if (best.fitsOnChipHotSwap) return best;
+  }
+  final nodith = _encodePal4Rle(
+    rgba,
+    width: width,
+    height: height,
+    dither: false,
+    flatSnapThreshold: 24,
+  );
+  if (nodith.bytes.length < best.bytes.length) best = nodith;
+  return best;
+}
+
+/// 为当前图片生成专属局部刷新与版面评估档案（平坦度 / 上中下三区时间最佳落位 / 对比度）。
+WatchImageProfile analyzeWatchImageProfile(
+  Uint8List rgba,
+  EncodedWatchImage encoded, {
+  int width = watchDisplayWidth,
+  int height = watchDisplayHeight,
+}) {
+  // 三区对应时钟常见落位：zone 1=居顶(y: 8..50), zone 0=居中(y: 54..106), zone 2=居底(y: 110..152)
+  final zones = <(int y0, int y1)>[
+    (height * 54 ~/ 160, height * 106 ~/ 160), // 0 = center
+    (height * 8 ~/ 160, height * 50 ~/ 160), // 1 = top
+    (height * 110 ~/ 160, height * 152 ~/ 160), // 2 = bottom
+  ];
+  final zoneBusy = <double>[0, 0, 0];
+  final zoneLuma = <double>[0, 0, 0];
+
+  var flatCount = 0;
+  final totalPx = width * height;
+  for (var y = 0; y < height; y++) {
+    for (var x = 1; x < width; x++) {
+      final a = (y * width + x) * 4;
+      final b = (y * width + x - 1) * 4;
+      final diff =
+          (rgba[a] - rgba[b]).abs() +
+          (rgba[a + 1] - rgba[b + 1]).abs() +
+          (rgba[a + 2] - rgba[b + 2]).abs();
+      if (diff <= 14) flatCount++;
+    }
+  }
+
+  for (var z = 0; z < 3; z++) {
+    final (y0, y1) = zones[z];
+    var edges = 0.0;
+    var lumaSum = 0.0;
+    var n = 0;
+    for (var y = y0; y < y1; y++) {
+      for (var x = (width * 18) ~/ 100; x < (width * 82) ~/ 100; x++) {
+        final i = (y * width + x) * 4;
+        final lum = (rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8;
+        lumaSum += lum;
+        if (x > 0) {
+          final j = i - 4;
+          edges +=
+              ((rgba[i] - rgba[j]).abs() +
+                  (rgba[i + 1] - rgba[j + 1]).abs() +
+                  (rgba[i + 2] - rgba[j + 2]).abs()) /
+              3.0;
+        }
+        n++;
+      }
+    }
+    zoneBusy[z] = n > 0 ? edges / n : 0.0;
+    zoneLuma[z] = n > 0 ? lumaSum / n : 0.0;
+  }
+
+  // 选择复杂度最低（主体遮挡最少、局部刷新最干净）的区域；仅轻微偏好上/下避开居中人脸
+  var bestAlign = 1; // top default on ties
+  var bestScore = zoneBusy[1] * 0.92;
+  final scoreBot = zoneBusy[2] * 0.90;
+  final scoreMid = zoneBusy[0] * 1.08;
+  if (scoreBot < bestScore) {
+    bestScore = scoreBot;
+    bestAlign = 2;
+  }
+  if (scoreMid < bestScore) {
+    bestAlign = 0;
+  }
+
+  final avgLuma = zoneLuma[bestAlign];
+  final lightBg = avgLuma >= 150.0;
+  return WatchImageProfile(
+    fitsOnChipHotSwap: encoded.fitsOnChipHotSwap,
+    onChipBudgetBytes: watchOnChipHotSwapMaxBytes,
+    flatRatio: totalPx > 0 ? (flatCount / totalPx).clamp(0.0, 1.0) : 0.0,
+    recommendedAlign: bestAlign,
+    recommendedScrim: lightBg || zoneBusy[bestAlign] >= 12.0,
+    recommendedTextColor: lightBg ? 0xFF101820 : 0xFFF4F6EA,
+    recommendedAccentColor: lightBg ? 0xFF0F8B6D : 0xFF73D4AE,
+    zoneBusyScores: zoneBusy,
+  );
+}
+
 class _ColorBox {
   _ColorBox(this.pixels);
   final List<int> pixels; // packed 0xRRGGBB
@@ -291,23 +479,67 @@ class _ColorBox {
 }
 
 List<int> _medianCutPalette16(Uint8List rgba, int width, int height) {
-  final step = (width * height) > 5120 ? 2 : 1;
+  final totalPx = width * height;
+  final step = totalPx > 10240 ? 2 : 1;
+  final anchors = <int>[];
   final samples = <int>[];
+  var nearWhiteCount = 0;
+  var nearBlackCount = 0;
+  var scanned = 0;
+
   for (var y = 0; y < height; y += step) {
     for (var x = 0; x < width; x += step) {
       final i = (y * width + x) * 4;
-      samples.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      final r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      scanned++;
+      if (r >= 244 && g >= 244 && b >= 244) {
+        nearWhiteCount++;
+      } else if (r <= 12 && g <= 12 && b <= 12) {
+        nearBlackCount++;
+      } else {
+        samples.add((r << 16) | (g << 8) | b);
+      }
     }
   }
+
+  // 锚定纯白 #FFFFFF / 纯黑 #000000，防止均值化把纯白背景漂移成灰白噪点
+  if (nearWhiteCount * 100 >= scanned) {
+    anchors.add(0xFFFF);
+  }
+  if (nearBlackCount * 100 >= scanned) {
+    anchors.add(0x0000);
+  }
+  if (samples.isEmpty) {
+    for (var y = 0; y < height; y += step) {
+      for (var x = 0; x < width; x += step) {
+        final i = (y * width + x) * 4;
+        samples.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      }
+    }
+  }
+
+  final cutSlots = 16 - anchors.length;
   final boxes = <_ColorBox>[_ColorBox(samples)];
-  while (boxes.length < 16) {
+  while (boxes.length < cutSlots) {
     boxes.sort((a, b) => b.maxSpan.compareTo(a.maxSpan));
     final top = boxes.first;
     if (top.length < 2 || top.maxSpan == 0) break;
     boxes.removeAt(0);
     boxes.addAll(top.split());
   }
-  final pal = <int>[for (final box in boxes) box.averageRgb565()];
+  final pal = <int>[...anchors];
+  for (final box in boxes) {
+    final c = box.averageRgb565();
+    if (!pal.contains(c)) {
+      pal.add(c);
+    }
+  }
+  // 补齐剩余色槽，防止空槽重复占满 16 色表
+  for (final box in boxes) {
+    if (pal.length >= 16) break;
+    final c = box.averageRgb565();
+    if (pal.length < 16) pal.add(c);
+  }
   while (pal.length < 16) {
     pal.add(pal.isEmpty ? 0 : pal.last);
   }
@@ -319,8 +551,11 @@ EncodedWatchImage _encodePal4Rle(
   required int width,
   required int height,
   required bool dither,
+  int flatSnapThreshold = 14,
 }) {
   final pal565 = _medianCutPalette16(rgba, width, height);
+  final whiteIdx = pal565.indexOf(0xFFFF);
+  final blackIdx = pal565.indexOf(0x0000);
   final palArgb = <int>[for (final c in pal565) rgb565ToArgb(c)];
   final palR = <int>[for (final c in palArgb) (c >> 16) & 0xFF];
   final palG = <int>[for (final c in palArgb) (c >> 8) & 0xFF];
@@ -336,7 +571,7 @@ EncodedWatchImage _encodePal4Rle(
   final indices = Uint8List(width * height);
   final preview = Uint8List(width * height * 4);
 
-  int nearestColor(int r, int g, int b) {
+  (int idx, int dist) nearestColor(int r, int g, int b) {
     var best = 0;
     var bestDist = 0x7FFFFFFF;
     for (var k = 0; k < 16; k++) {
@@ -350,12 +585,31 @@ EncodedWatchImage _encodePal4Rle(
         if (dist == 0) break;
       }
     }
-    return best;
+    return (best, bestDist);
+  }
+
+  int neighborDelta(int x, int y, int r0, int g0, int b0) {
+    var maxD = 0;
+    if (x > 0) {
+      final j = (y * width + x - 1) * 4;
+      final d = (r0 - rgba[j]).abs() + (g0 - rgba[j + 1]).abs() + (b0 - rgba[j + 2]).abs();
+      if (d > maxD) maxD = d;
+    }
+    if (y > 0) {
+      final j = ((y - 1) * width + x) * 4;
+      final d = (r0 - rgba[j]).abs() + (g0 - rgba[j + 1]).abs() + (b0 - rgba[j + 2]).abs();
+      if (d > maxD) maxD = d;
+    }
+    return maxD;
   }
 
   void addErr(int x, int y, int er, int eg, int eb, int mul) {
     if (x < 0 || x >= width || y < 0 || y >= height) return;
     final p = (y * width + x) * 3;
+    // 禁止把彩色/边缘量化误差扩散进纯白背景或纯黑区！
+    final sx = (y * width + x) * 4;
+    if (rgba[sx] >= 245 && rgba[sx + 1] >= 245 && rgba[sx + 2] >= 245) return;
+    if (rgba[sx] <= 8 && rgba[sx + 1] <= 8 && rgba[sx + 2] <= 8) return;
     err[p] += (er * mul) >> 4;
     err[p + 1] += (eg * mul) >> 4;
     err[p + 2] += (eb * mul) >> 4;
@@ -363,11 +617,32 @@ EncodedWatchImage _encodePal4Rle(
 
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
+      final sx = (y * width + x) * 4;
+      final sr = rgba[sx], sg = rgba[sx + 1], sb = rgba[sx + 2];
+      final grad = neighborDelta(x, y, sr, sg, sb);
       final p = (y * width + x) * 3;
       final r = _clampByte(err[p]);
       final g = _clampByte(err[p + 1]);
       final b = _clampByte(err[p + 2]);
-      final idx = nearestColor(r, g, b);
+
+      int idx;
+      var allowDiffuse = dither;
+      if (whiteIdx >= 0 && sr >= 244 && sg >= 244 && sb >= 244 && grad <= 28) {
+        // 纯白/近白平整区：直接锁定纯白 #FFFFFF 且零误差扩散，彻底根除白底彩点噪点
+        idx = whiteIdx;
+        allowDiffuse = false;
+      } else if (blackIdx >= 0 && sr <= 10 && sg <= 10 && sb <= 10 && grad <= 24) {
+        idx = blackIdx;
+        allowDiffuse = false;
+      } else {
+        final (nearIdx, dist) = nearestColor(r, g, b);
+        idx = nearIdx;
+        // 非渐变平坦色块（如动漫色块/渐变边缘之外的低梯度区）抑制抖动颗粒感，提高压缩率
+        if (grad <= flatSnapThreshold && dist <= flatSnapThreshold * flatSnapThreshold * 18) {
+          allowDiffuse = false;
+        }
+      }
+
       indices[y * width + x] = idx;
       final px = (y * width + x) * 4;
       preview[px] = palR[idx];
@@ -375,10 +650,10 @@ EncodedWatchImage _encodePal4Rle(
       preview[px + 2] = palB[idx];
       preview[px + 3] = 255;
 
-      if (dither) {
-        final er = (r - palR[idx]).clamp(-64, 64);
-        final eg = (g - palG[idx]).clamp(-64, 64);
-        final eb = (b - palB[idx]).clamp(-64, 64);
+      if (allowDiffuse) {
+        final er = (r - palR[idx]).clamp(-48, 48);
+        final eg = (g - palG[idx]).clamp(-48, 48);
+        final eb = (b - palB[idx]).clamp(-48, 48);
         addErr(x + 1, y, er, eg, eb, 7);
         addErr(x - 1, y + 1, er, eg, eb, 3);
         addErr(x, y + 1, er, eg, eb, 5);
@@ -387,7 +662,7 @@ EncodedWatchImage _encodePal4Rle(
     }
   }
 
-  // 组装二进制：palette[16](32B) + row_end[H](2*H B) + RLE 像素数据
+  // 组装二进制：palette[16](32B) + row_end[H](2*H B) + 位最优 Nibble-RLE 像素流
   final headerLen = 32 + height * 2;
   final data = BytesBuilder(copy: false);
   final rowEnds = Uint16List(height);
@@ -403,7 +678,7 @@ EncodedWatchImage _encodePal4Rle(
           indices[rowOff + x + run] == first) {
         run++;
       }
-      if (run >= 2) {
+      if (run >= 3) {
         data.addByte(0x80 | (run - 2));
         data.addByte(first & 0x0F);
         x += run;
@@ -412,9 +687,11 @@ EncodedWatchImage _encodePal4Rle(
         var lit = 0;
         while (x < width && lit < 128) {
           final rem = width - x;
-          if (rem >= 3 &&
+          // 仅当后续出现 >=4 连续同色像素时才切断字面段（2像素=1B，打断开销需 >=4 才回本）
+          if (rem >= 4 &&
               indices[rowOff + x] == indices[rowOff + x + 1] &&
-              indices[rowOff + x] == indices[rowOff + x + 2]) {
+              indices[rowOff + x] == indices[rowOff + x + 2] &&
+              indices[rowOff + x] == indices[rowOff + x + 3]) {
             break;
           }
           x++;

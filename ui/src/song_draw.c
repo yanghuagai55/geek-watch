@@ -57,8 +57,13 @@ int16_t ui_song_width(int face, const char *utf8) {
         if (g) {
             width += g->advance;
         } else {
-            const ui_glyph_t *f = ui_font_find(cp);
-            width += (f ? f->w : 8) * song_fallback_scale(face);
+            int16_t hw = 0, hh = 0, hadv = 0;
+            if ((face == 0 || face == 1) && link_hdr_lookup(cp, &hw, &hh, &hadv, 0, 0, 0)) {
+                width += hadv;
+            } else {
+                const ui_glyph_t *f = ui_font_find(cp);
+                width += (f ? f->w : 8) * song_fallback_scale(face);
+            }
         }
     }
     return (int16_t)width;
@@ -92,20 +97,29 @@ void ui_song_draw(int face, int16_t x, int16_t y, const char *utf8,
                              song_cover + g->off, color, opacity);
             pen += g->advance;
         } else {
-            char ch[5];
-            int n = (int)(s - start);
-            int i;
-            const ui_glyph_t *f = ui_font_find(cp);
-            if (n > 4) {
-                n = 4;
+            int16_t hw = 0, hh = 0, hadv = 0;
+            int8_t hx = 0, hy = 0;
+            const uint8_t *hrle = 0;
+            if ((face == 0 || face == 1) && link_hdr_lookup(cp, &hw, &hh, &hadv, &hx, &hy, &hrle) && hrle) {
+                ui_mask_rle_draw((int16_t)(pen + hx), (int16_t)(y + hy),
+                                 hw, hh, hrle, color, opacity);
+                pen += hadv;
+            } else {
+                char ch[5];
+                int n = (int)(s - start);
+                int i;
+                const ui_glyph_t *f = ui_font_find(cp);
+                if (n > 4) {
+                    n = 4;
+                }
+                for (i = 0; i < n; i++) {
+                    ch[i] = start[i];
+                }
+                ch[n] = 0;
+                ui_text_draw((int16_t)pen, y, ch, color, opacity,
+                             (uint8_t)song_fallback_scale(face));
+                pen += (f ? f->w : 8) * song_fallback_scale(face);
             }
-            for (i = 0; i < n; i++) {
-                ch[i] = start[i];
-            }
-            ch[n] = 0;
-            ui_text_draw((int16_t)pen, y, ch, color, opacity,
-                         (uint8_t)song_fallback_scale(face));
-            pen += (f ? f->w : 8) * song_fallback_scale(face);
         }
     }
 }

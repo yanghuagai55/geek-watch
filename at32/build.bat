@@ -11,7 +11,7 @@ set "OUT=%BATDIR%obj"
 set "CMSIS=%BATDIR%libraries\cmsis\cm4"
 set "LIB=%BATDIR%libraries"
 set "ARCH=-mcpu=cortex-m4 -mthumb -mfloat-abi=soft -DAT32F421K8T7"
-set "CFLAGS=%ARCH% -Os -std=c99 -flto -ffunction-sections -fdata-sections -fno-common -DUI_NO_TRACE -Wall -Wextra"
+set "CFLAGS=%ARCH% -Os -std=c99 -flto -flto-partition=one -ffunction-sections -fdata-sections -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -DUI_NO_TRACE -DAT32_SLIM_ROM -Wall -Wextra"
 set "INC=-I "%ROOT%\ui" -I "%BATDIR%." -I "%BATDIR%inc" -I "%BATDIR%bsp" -I "%LIB%\drivers\inc" -I "%CMSIS%\core_support" -I "%CMSIS%\device_support""
 if not exist "%OUT%" mkdir "%OUT%"
 if errorlevel 1 exit /b 1
@@ -31,7 +31,7 @@ for %%S in (port mini_snprintf) do (
     "%GCC%" %CFLAGS% %INC% -c "%BATDIR%%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
 )
-for %%S in (i2c_bus mpu6050 qmc5883l bmp580 ext_flash adc_bat beep led_bl) do (
+for %%S in (i2c_bus mpu6050 qmc5883l ext_flash adc_bat beep led_bl) do (
     "%GCC%" %CFLAGS% %INC% -c "%BATDIR%bsp\%%S.c" -o "%OUT%\%%S.o"
     if errorlevel 1 exit /b 1
 )
@@ -46,7 +46,7 @@ for %%S in (ui_mem ui_anim ui_draw ui_menu ui_trace ui_app ui_icons song_draw so
     if errorlevel 1 exit /b 1
 )
 
-"%GCC%" %ARCH% -Os -flto=auto -Wl,--wrap=snprintf -Wl,--wrap=atexit -Wl,--wrap=exit -Wl,--gc-sections -Wl,-Map="%OUT%\watch.map" -T "%BATDIR%AT32F421x8_FLASH.ld" -specs=nano.specs -specs=nosys.specs "%OUT%\startup.o" "%OUT%\system_at32f421.o" "%OUT%\crm.o" "%OUT%\gpio.o" "%OUT%\spi.o" "%OUT%\dma.o" "%OUT%\usart.o" "%OUT%\misc.o" "%OUT%\flash.o" "%OUT%\adc.o" "%OUT%\tmr.o" "%OUT%\i2c_bus.o" "%OUT%\mpu6050.o" "%OUT%\qmc5883l.o" "%OUT%\bmp580.o" "%OUT%\ext_flash.o" "%OUT%\adc_bat.o" "%OUT%\beep.o" "%OUT%\led_bl.o" "%OUT%\port.o" "%OUT%\mini_snprintf.o" "%OUT%\main.o" "%OUT%\libui.a" -lc -lm -lgcc -o "%OUT%\watch.elf"
+"%GCC%" %ARCH% -Os -flto -flto-partition=one -Wl,--wrap=snprintf -Wl,--wrap=atexit -Wl,--wrap=exit -Wl,--gc-sections -Wl,-Map="%OUT%\watch.map" -T "%BATDIR%AT32F421x8_FLASH.ld" -specs=nano.specs -specs=nosys.specs "%OUT%\startup.o" "%OUT%\system_at32f421.o" "%OUT%\crm.o" "%OUT%\gpio.o" "%OUT%\spi.o" "%OUT%\dma.o" "%OUT%\usart.o" "%OUT%\misc.o" "%OUT%\flash.o" "%OUT%\adc.o" "%OUT%\tmr.o" "%OUT%\i2c_bus.o" "%OUT%\mpu6050.o" "%OUT%\qmc5883l.o" "%OUT%\ext_flash.o" "%OUT%\adc_bat.o" "%OUT%\beep.o" "%OUT%\led_bl.o" "%OUT%\port.o" "%OUT%\mini_snprintf.o" "%OUT%\main.o" "%OUT%\libui.a" -lc -lm -lgcc -o "%OUT%\watch.elf"
 if errorlevel 1 exit /b 1
 "%OBJCOPY%" -O binary "%OUT%\watch.elf" "%OUT%\watch.bin"
 if errorlevel 1 exit /b 1

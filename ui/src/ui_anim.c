@@ -188,7 +188,7 @@ void ui_anim_play(ui_anim_id_t id, ui_obj_t *obj) {
     ui_anim_play_range(id, obj, presets[id].from, presets[id].to);
 }
 
-int ui_anim_busy(const ui_obj_t *obj) {
+static const slot_t *find_active_slot(const ui_obj_t *obj) {
     int i;
 
     if (!slots || !obj) {
@@ -196,10 +196,19 @@ int ui_anim_busy(const ui_obj_t *obj) {
     }
     for (i = 0; i < SLOT_N; i++) {
         if (slots[i].active && slots[i].obj == obj) {
-            return 1;
+            return &slots[i];
         }
     }
     return 0;
+}
+
+int ui_anim_busy(const ui_obj_t *obj) {
+    return find_active_slot(obj) != 0;
+}
+
+int ui_anim_closing(const ui_obj_t *obj) {
+    const slot_t *s = find_active_slot(obj);
+    return s != 0 && s->to < s->from;
 }
 
 void ui_anim_stop(ui_obj_t *obj, int finish) {

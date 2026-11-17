@@ -124,6 +124,11 @@ int hal_ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len);
 int hal_ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len);
 int hal_ext_flash_erase(uint32_t offset, uint32_t len);
 
+/* ---- 片内 Flash 自定义表盘极速热槽 (120MHz XIP 直读，独立 1KB 扇区) ---- */
+const uint8_t *hal_int_img_ptr(void);
+uint32_t hal_int_img_cap(void);
+int hal_int_img_write(uint32_t offset, const uint8_t *src, uint32_t len);
+
 /* 固件标识，关于本机用。返回静态字符串。 */
 const char *hal_fw_version(void);
 const char *hal_fw_build(void);

@@ -9,12 +9,12 @@
 #include "at32f421_dma.h"
 #include "at32f421_usart.h"
 #include "at32f421_misc.h"
+#include "at32f421_flash.h"
 
 #include "board_config.h"
 #include "i2c_bus.h"
 #include "mpu6050.h"
 #include "qmc5883l.h"
-#include "bmp580.h"
 #include "ext_flash.h"
 #include "adc_bat.h"
 #include "beep.h"
@@ -70,7 +70,7 @@ static volatile uint16_t rx_n;
 static unsigned char clock_src;
 
 /* 上电自检结果与最近一次采样，供 SWD 直接读 RAM 验证（不依赖蓝牙）。
-   bit0 MPU6050 / bit1 QMC5883L / bit2 BMP580。 */
+   bit0 MPU6050 / bit1 QMC5883L / bit3 AT24C256。 */
 volatile uint8_t g_sensor_ok;
 volatile int16_t g_imu_ax, g_imu_ay, g_imu_az;
 volatile int16_t g_imu_gx, g_imu_gy, g_imu_gz;
@@ -92,7 +92,9 @@ static void irq_restore(uint32_t mask) {
 }
 
 void SysTick_Handler(void) {
-    tick_ms++;
+    uint32_t now = tick_ms + 1u;
+    tick_ms = now;
+    beep_tick(now);
 }
 
 void DMA1_Channel3_2_IRQHandler(void) {
@@ -245,39 +247,37 @@ static void usart_setup(void) {
     uint32_t apb_hz = hal_sysclk_mhz() * 1000000u;
     crm_periph_clock_enable(CRM_USART2_PERIPH_CLOCK, TRUE);
     USART2->baudr_bit.div = (apb_hz + BLE_UART_BAUD / 2u) / BLE_UART_BAUD;
-    USART2->ctrl1_bit.dbn = USART_DATA_8BITS;
     USART2->ctrl2_bit.stopbn = USART_STOP_1_BIT;
-    usart_transmitter_enable(USART2, TRUE);
-    usart_receiver_enable(USART2, TRUE);
-    usart_interrupt_enable(USART2, USART_RDBF_INT, TRUE);
+    USART2->ctrl1 = (1u << 2) | (1u << 3) | (1u << 5) | (1u << 13); /* ren|ten|rdbfien|uen */
     nvic_irq_enable(USART2_IRQn, 2, 0);
-    usart_enable(USART2, TRUE);
 }
 
 void USART2_IRQHandler(void) {
-    if(usart_flag_get(USART2, USART_RDBF_FLAG) != RESET) {
-        unsigned char c = (unsigned char)usart_data_receive(USART2);
+    if(USART2->sts_bit.rdbf) {
+        unsigned char c = (unsigned char)USART2->dt;
         if(rx_n < sizeof rx_q) {
             rx_q[(rx_r + rx_n) % sizeof rx_q] = c;
             rx_n++;
         }
     } else {
-        (void)usart_data_receive(USART2);
+        (void)USART2->dt;
     }
 }
 
 static void uart_putc(unsigned char c) {
     uint32_t n = 100000u;
-    while(usart_flag_get(USART2, USART_TDBE_FLAG) == RESET && n--) {
+    while(!USART2->sts_bit.tdbe && n--) {
     }
-    usart_data_transmit(USART2, c);
+    USART2->dt = c;
 }
 
+#if !defined(AT32_SLIM_ROM)
 static void uart_puts(const char *s) {
     while(*s) {
         uart_putc((unsigned char)*s++);
     }
 }
+#endif
 
 static void delay_ms(unsigned int ms) {
     uint32_t t = tick_ms;
@@ -548,11 +548,7 @@ int hal_display_busy(void) {
     }
     dma_channel_enable(DMA1_CHANNEL3, FALSE);
     spi_i2s_dma_transmitter_enable(SPI1, FALSE);
-    (void)SPI1->dt;
-    (void)SPI1->sts;
-    spi_enable(SPI1, FALSE);
-    spi_frame_bit_num_set(SPI1, SPI_FRAME_8BIT);
-    spi_enable(SPI1, TRUE);
+    spi_bits(0);
     dma_flag_clear(DMA1_FDT3_FLAG);
     __asm volatile("dmb" ::: "memory");
     display_active = 0;
@@ -636,22 +632,15 @@ void board_init(void) {
     gpio_setup();
     spi_setup();
     usart_setup();
-    uart_puts("boot\r\n");
     lcd_init();
 
     i2c_bus_init();
     {
         int mpu_ok = mpu6050_init();
         int mag_ok = qmc5883l_init();
-#ifdef WATCH_BARO_ENABLE
-        int baro_ok = bmp580_init();
-#else
-        int baro_ok = 0;
-#endif
         int ext_ok = ext_flash_init();
         g_sensor_ok = (uint8_t)((mpu_ok ? 1u : 0u) |
                                 (mag_ok ? 2u : 0u) |
-                                (baro_ok ? 4u : 0u) |
                                 (ext_ok ? 8u : 0u));
     }
     adc_init();
@@ -663,8 +652,10 @@ void board_init(void) {
     /* 上电把 I2C 扫描 + QMC 寄存器存一份到 RAM，SWD 与蓝牙 DBG 共用。 */
     g_battery_mv = battery_mv();
     (void)hal_debug_snapshot(g_debug_line, (int)sizeof g_debug_line);
+#if !defined(AT32_SLIM_ROM)
     uart_puts(g_debug_line);
     uart_puts("\r\n");
+#endif
 }
 
 /* ---- 传感器/执行器 HAL 包装 ---- */
@@ -710,12 +701,8 @@ int hal_mag_read(hal_mag_t *out) {
 }
 
 int hal_baro_read(hal_baro_t *out) {
-#ifdef WATCH_BARO_ENABLE
-    return bmp580_read(out);
-#else
     (void)out;
     return 0;
-#endif
 }
 
 uint16_t hal_battery_mv(void) {
@@ -741,16 +728,34 @@ int hal_i2c_scan(uint8_t *out, int max) {
     return n;
 }
 
-/* 蓝牙 0x13 调试快照。重新扫一遍总线，插拔模块后重发就能看到变化。 */
+/* 蓝牙 0x13 调试快照。复用 hal_i2c_scan 节省体积，支持热插拔即时体现。 */
 int hal_debug_snapshot(char *out, int cap) {
-    int n = 0;
-    int addr;
-    int first = 1;
+    uint8_t addrs[6];
+    int na, i, n = 0;
+    imu9_state_t s9;
+#if !defined(AT32_SLIM_ROM)
     char qbuf[64];
+#endif
 
     if(!out || cap < 32) {
         return 0;
     }
+    na = hal_i2c_scan(addrs, (int)sizeof addrs);
+    imu9_get(&s9);
+#if defined(AT32_SLIM_ROM)
+    n = snprintf(out, (size_t)cap, "I2C%d M%d Q%d 9AX=%u R%dP%dH%u B%u",
+                 na, mpu6050_present(), qmc5883l_chip(),
+                 (unsigned)s9.fused_axes,
+                 (int)(s9.roll_d10 / 10), (int)(s9.pitch_d10 / 10),
+                 (unsigned)s9.heading_deg, (unsigned)g_battery_mv);
+    if (n < 0) n = 0;
+    if (n >= cap) n = cap - 1;
+    for (i = 0; i < n && i < (int)sizeof g_debug_line - 1; i++) {
+        g_debug_line[i] = out[i];
+    }
+    g_debug_line[i] = 0;
+    return n;
+#else
 #define DBG_ADD(...) do {                                              \
         int w = snprintf(out + n, (size_t)(cap - n), __VA_ARGS__);      \
         if(w > 0) {                                                    \
@@ -760,34 +765,29 @@ int hal_debug_snapshot(char *out, int cap) {
     } while(0)
 
     DBG_ADD("I2C=");
-    for(addr = 0x08; addr < 0x78 && n < cap - 8; addr++) {
-        if(i2c_probe((uint8_t)addr)) {
-            DBG_ADD("%s%02X", first ? "" : ",", addr);
-            first = 0;
+    if(na == 0) {
+        DBG_ADD("NONE");
+    } else {
+        for(i = 0; i < na; i++) {
+            DBG_ADD("%s%02X", i ? "," : "", (unsigned)addrs[i]);
         }
     }
-    if(first) {
-        DBG_ADD("NONE");
-    }
     qmc5883l_debug(qbuf, (int)sizeof qbuf);
-    {
-        imu9_state_t s9;
-        imu9_get(&s9);
-        DBG_ADD(";MPU=%d;%s;A=%d,%d,%d;M=%d,%d,%d;9AX=%u;RPY=%d,%d,%u;BAT=%u",
-                mpu6050_present(), qbuf,
-                g_imu_ax, g_imu_ay, g_imu_az,
-                g_mag_x, g_mag_y, g_mag_z,
-                (unsigned)s9.fused_axes,
-                (int)(s9.roll_d10 / 10), (int)(s9.pitch_d10 / 10),
-                (unsigned)s9.heading_deg,
-                (unsigned)g_battery_mv);
-    }
+    DBG_ADD(";MPU=%d;%s;A=%d,%d,%d;M=%d,%d,%d;9AX=%u;RPY=%d,%d,%u;BAT=%u",
+            mpu6050_present(), qbuf,
+            g_imu_ax, g_imu_ay, g_imu_az,
+            g_mag_x, g_mag_y, g_mag_z,
+            (unsigned)s9.fused_axes,
+            (int)(s9.roll_d10 / 10), (int)(s9.pitch_d10 / 10),
+            (unsigned)s9.heading_deg,
+            (unsigned)g_battery_mv);
 #undef DBG_ADD
-    for(addr = 0; addr < n && addr < (int)sizeof g_debug_line - 1; addr++) {
-        g_debug_line[addr] = out[addr];
+    for(i = 0; i < n && i < (int)sizeof g_debug_line - 1; i++) {
+        g_debug_line[i] = out[i];
     }
-    g_debug_line[addr < (int)sizeof g_debug_line ? addr : (int)sizeof g_debug_line - 1] = 0;
+    g_debug_line[i < (int)sizeof g_debug_line ? i : (int)sizeof g_debug_line - 1] = 0;
     return n;
+#endif
 }
 
 const char *hal_mag_name(void) {
@@ -906,10 +906,11 @@ const char *hal_clock_src(void) {
     return "8MHz HICK";
 }
 
-/* 帧空隙里的协作服务：串口解析 + 周期采样计步 + 蜂鸣器自动关。
+/* 帧空隙里的协作服务：串口解析 + 周期采样计步 + 传感器掉线热恢复（20ms 节拍）。
    由 main.c 通过 ui_set_service 挂上。采样节流到 ~50Hz。 */
 void port_service(void) {
     static uint32_t sensor_ms;
+    static uint8_t imu_miss, mag_miss;
     uint32_t now = tick_ms;
     hal_imu_t imu;
     hal_mag_t mag;
@@ -920,6 +921,7 @@ void port_service(void) {
         int mag_ok = hal_mag_read(&mag);
         sensor_ms = now;
         if(imu_ok) {
+            imu_miss = 0u;
             sport_feed(&imu, now);
             g_imu_read_ok = 1;
             g_imu_ax = imu.ax;
@@ -928,18 +930,95 @@ void port_service(void) {
             g_imu_gx = imu.gx;
             g_imu_gy = imu.gy;
             g_imu_gz = imu.gz;
+        } else if(++imu_miss >= 50u) {
+            imu_miss = 0u;
+            i2c_recover();
+            if(mpu6050_init()) {
+                g_sensor_ok |= 1u;
+            } else {
+                g_sensor_ok &= (uint8_t)~1u;
+            }
         }
         if(mag_ok) {
+            mag_miss = 0u;
             g_mag_read_ok = 1;
             g_mag_x = mag.x;
             g_mag_y = mag.y;
             g_mag_z = mag.z;
+        } else if(++mag_miss >= 50u) {
+            mag_miss = 0u;
+            if(qmc5883l_init()) {
+                g_sensor_ok |= 2u;
+            } else {
+                g_sensor_ok &= (uint8_t)~2u;
+            }
         }
         if(imu_ok || mag_ok) {
             imu9_feed(imu_ok ? &imu : 0, mag_ok ? &mag : 0, now);
         }
         g_battery_mv = battery_mv();
     }
-    beep_tick(now);
     led_tick(now);
+}
+
+extern const uint8_t __dial_swap_start[];
+extern const uint8_t __dial_swap_end[];
+
+const uint8_t *hal_int_img_ptr(void) {
+    return __dial_swap_start;
+}
+
+uint32_t hal_int_img_cap(void) {
+    uintptr_t s = (uintptr_t)__dial_swap_start;
+    uintptr_t e = (uintptr_t)__dial_swap_end;
+    return (e > s) ? (uint32_t)(e - s) : 0u;
+}
+
+static int flash_wait_idle(void) {
+    uint32_t to = 2000000u;
+    while (FLASH->sts_bit.obf && to--) {
+    }
+    return to > 0u && !FLASH->sts_bit.prgmerr && !FLASH->sts_bit.epperr;
+}
+
+int hal_int_img_write(uint32_t offset, const uint8_t *src, uint32_t len) {
+    uint32_t cap = hal_int_img_cap();
+    uintptr_t base = (uintptr_t)__dial_swap_start;
+    uint32_t i;
+    int ok = 1;
+
+    if (!src || len == 0u || (offset & 1u) != 0u || offset > cap || len > cap - offset) {
+        return 0;
+    }
+    FLASH->unlock = FLASH_UNLOCK_KEY1;
+    FLASH->unlock = FLASH_UNLOCK_KEY2;
+    FLASH->sts = FLASH_ODF_FLAG | FLASH_PRGMERR_FLAG | FLASH_EPPERR_FLAG;
+    for (i = 0u; i < len; ) {
+        uint32_t addr = (uint32_t)(base + offset + i);
+        uint16_t lo, hi;
+        if ((addr & 0x3FFu) == 0u) {
+            FLASH->ctrl_bit.secers = 1;
+            FLASH->addr = addr;
+            FLASH->ctrl_bit.erstr = 1;
+            ok = flash_wait_idle();
+            FLASH->ctrl_bit.secers = 0;
+            FLASH->sts = FLASH_ODF_FLAG;
+            if (!ok) {
+                break;
+            }
+        }
+        lo = src[i];
+        hi = (i + 1u < len) ? src[i + 1u] : 0xFFu;
+        FLASH->ctrl_bit.fprgm = 1;
+        *(__IO uint16_t *)addr = (uint16_t)(lo | (hi << 8));
+        ok = flash_wait_idle();
+        FLASH->ctrl_bit.fprgm = 0;
+        FLASH->sts = FLASH_ODF_FLAG;
+        if (!ok) {
+            break;
+        }
+        i += (i + 1u < len) ? 2u : 1u;
+    }
+    FLASH->ctrl_bit.oplk = 1;
+    return ok;
 }

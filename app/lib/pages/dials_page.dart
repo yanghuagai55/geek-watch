@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:material_ui/material_ui.dart';
 
 import '../services/image_picker_bridge.dart';
@@ -46,33 +48,33 @@ const _dialPresets = <_DialSpec>[
   _DialSpec(
     id: 0,
     name: '琥珀双色数字',
-    subtitle: '本地 ROM 大字号数字时间；支持自定义双色与上下信息栏',
-    tag: '本地 ROM',
+    subtitle: '片内核心 · SHD1 字体按需加载',
+    tag: '片内极速',
     sizeHint: '省电高对比',
     accent: AppPalette.mint,
   ),
   _DialSpec(
     id: 1,
     name: '墨竹极简指针',
-    subtitle: '动态时针/分针/可选秒针与 12 小时刻度，搭配任意主题色',
-    tag: '本地 ROM',
-    sizeHint: '矢量表盘',
+    subtitle: 'ANL1 片外加载入 SRAM 渲染',
+    tag: 'ANL1 PIC',
+    sizeHint: '矢量指针',
     accent: AppPalette.mintSoft,
   ),
   _DialSpec(
     id: 2,
-    name: '九轴运动仪表',
-    subtitle: '9-DOF 磁航向 + 实时 Roll/Pitch 地平线倾角条 + 步数进度环',
-    tag: '本地 ROM',
+    name: '九轴水平仪表',
+    subtitle: 'ANL1 模态 + 9-DOF 实时地平线',
+    tag: 'ANL1 PIC',
     sizeHint: '9 轴实时',
     accent: _dialAmber,
   ),
-    _DialSpec(
+  _DialSpec(
     id: 3,
     name: '自定义相册表盘',
-    subtitle: '将相册或内置壁纸压缩至 128×160 并写入 AT24C256 动态 ROM 池',
-    tag: '32KB I2C',
-    sizeHint: '动态共享池',
+    subtitle: '≤9KB 直入片内热交换槽 · 大图自动退避 EEPROM',
+    tag: '片内热槽',
+    sizeHint: 'XIP 120MHz',
     accent: Color(0xFF93C5FD),
   ),
 ];
@@ -128,18 +130,25 @@ class _DialsPageState extends State<DialsPage> {
   String? _pickedImageName;
   Uint8List? _pickedFileBytes;
 
-  double _zoom = 1.0;
+  ui.Image? _sourceUiImage;
+  int _srcWidth = watchDisplayWidth;
+  int _srcHeight = watchDisplayHeight;
+  ui.Rect _cropRectNorm = const ui.Rect.fromLTWH(0, 0, 1, 1);
+
   double _brightness = 0.0;
   double _contrast = 1.0;
   WatchExtImgFormat _format = WatchExtImgFormat.pal4Rle;
   bool _dither = true;
 
   EncodedWatchImage? _encoded;
+  WatchImageProfile? _profile;
   ui.Image? _previewImage;
   bool _encoding = false;
+  bool _encodePending = false;
   bool _uploading = false;
   int _sentChunks = 0;
   int _totalChunks = 0;
+  Timer? _cropDebounce;
 
   @override
   void initState() {
@@ -149,88 +158,168 @@ class _DialsPageState extends State<DialsPage> {
 
   @override
   void dispose() {
+    _cropDebounce?.cancel();
     _previewImage?.dispose();
+    _sourceUiImage?.dispose();
     super.dispose();
+  }
+
+  /// 计算源图坐标下最大的居中 4:5 (128:160) 选区矩形。
+  ui.Rect _defaultCropRect(int sw, int sh, {double scale = 1.0, double biasY = 0.5}) {
+    if (sw <= 0 || sh <= 0) return const ui.Rect.fromLTWH(0, 0, 1, 1);
+    final imgAspect = sw / sh;
+    const targetAspect = watchDisplayWidth / watchDisplayHeight; // 0.8
+    double maxW, maxH;
+    if (imgAspect >= targetAspect) {
+      maxH = 1.0;
+      maxW = (targetAspect / imgAspect).clamp(0.15, 1.0);
+    } else {
+      maxW = 1.0;
+      maxH = (imgAspect / targetAspect).clamp(0.15, 1.0);
+    }
+    final w = (maxW * scale).clamp(0.12, maxW);
+    final h = (maxH * scale).clamp(0.12, maxH);
+    final left = ((1.0 - w) * 0.5).clamp(0.0, 1.0 - w);
+    final top = ((1.0 - h) * biasY).clamp(0.0, 1.0 - h);
+    return ui.Rect.fromLTWH(left, top, w, h);
+  }
+
+  void _onCropChanged(ui.Rect next, {bool immediate = false}) {
+    setState(() => _cropRectNorm = next);
+    _cropDebounce?.cancel();
+    if (immediate) {
+      unawaited(_rebuildImagePreview());
+    } else {
+      _cropDebounce = Timer(const Duration(milliseconds: 55), () {
+        if (mounted) unawaited(_rebuildImagePreview());
+      });
+    }
+  }
+
+  void _applyRecommendedProfile() {
+    final p = _profile;
+    if (p == null) return;
+    widget.controller.updateDialConfig(
+      id: 3,
+      photoAlign: p.recommendedAlign,
+      photoScrim: p.recommendedScrim,
+      textColor: p.recommendedTextColor,
+      accentColor: p.recommendedAccentColor,
+      syncToWatch: false,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '已套用图像局部刷新方案：时间${const ['居中', '居顶', '居底'][p.recommendedAlign]} · ${p.recommendedScrim ? '开对比胶囊' : '透明叠字'}。',
+        ),
+      ),
+    );
   }
 
   Future<void> _pickLocalPhoto() async {
     final messenger = ScaffoldMessenger.of(context);
     final picked = await ImagePickerBridge.pickImage();
     if (!mounted || picked == null) return;
+
+    final codec = await ui.instantiateImageCodec(picked.bytes);
+    final frame = await codec.getNextFrame();
+    final srcImg = frame.image;
+    codec.dispose();
+    if (!mounted) {
+      srcImg.dispose();
+      return;
+    }
+
+    final oldSrc = _sourceUiImage;
     setState(() {
       _pickedFileBytes = picked.bytes;
       _pickedImageName = picked.name;
-      _zoom = 1.0;
+      _sourceUiImage = srcImg;
+      _srcWidth = srcImg.width;
+      _srcHeight = srcImg.height;
+      _cropRectNorm = _defaultCropRect(srcImg.width, srcImg.height, biasY: 0.25);
       _brightness = 0.0;
       _contrast = 1.0;
     });
+    oldSrc?.dispose();
     widget.controller.updateDialConfig(id: 3, syncToWatch: false);
     await _rebuildImagePreview();
     if (!mounted) return;
     messenger.hideCurrentSnackBar();
+    final enc = _encoded;
+    final fitHint = enc != null && enc.fitsOnChipHotSwap
+        ? '可直入片内 9KB 热交换槽 (${enc.bytes.length} B)'
+        : (enc != null ? '大小 ${enc.bytes.length} B · AT24C256 池' : '');
     messenger.showSnackBar(
       SnackBar(
-        content: Text('已载入「${picked.name}」并生成 128×160 ${_format.label} 预览。'),
+        content: Text('已载入「${picked.name}」（$_srcWidth×$_srcHeight）$fitHint'),
       ),
     );
   }
 
   Future<void> _rebuildImagePreview() async {
-    if (_encoding) return;
+    if (_encoding) {
+      _encodePending = true;
+      return;
+    }
     setState(() => _encoding = true);
     try {
-      Uint8List rgba;
-      final fileBytes = _pickedFileBytes;
-      if (fileBytes != null) {
-        rgba = await cropImageBytesToRgba(
-          fileBytes,
-          zoom: _zoom,
-          brightness: _brightness,
-          contrast: _contrast,
-        );
-      } else {
-        rgba = generateBuiltInWallpaperRgba(_wallpaperId);
-        if (_brightness.abs() > 0.001 || (_contrast - 1.0).abs() > 0.001) {
-          final bShift = _brightness * 255.0;
-          for (var i = 0; i < rgba.length; i += 4) {
-            rgba[i] = (((rgba[i] - 128) * _contrast + 128 + bShift)
-                .round()
-                .clamp(0, 255));
-            rgba[i + 1] = (((rgba[i + 1] - 128) * _contrast + 128 + bShift)
-                .round()
-                .clamp(0, 255));
-            rgba[i + 2] = (((rgba[i + 2] - 128) * _contrast + 128 + bShift)
-                .round()
-                .clamp(0, 255));
+      do {
+        _encodePending = false;
+        Uint8List rgba;
+        final fileBytes = _pickedFileBytes;
+        if (fileBytes != null) {
+          rgba = await cropImageBytesToRgba(
+            fileBytes,
+            cropRectNorm: _cropRectNorm,
+            brightness: _brightness,
+            contrast: _contrast,
+          );
+        } else {
+          rgba = generateBuiltInWallpaperRgba(_wallpaperId);
+          if (_brightness.abs() > 0.001 || (_contrast - 1.0).abs() > 0.001) {
+            final bShift = _brightness * 255.0;
+            for (var i = 0; i < rgba.length; i += 4) {
+              rgba[i] = (((rgba[i] - 128) * _contrast + 128 + bShift)
+                  .round()
+                  .clamp(0, 255));
+              rgba[i + 1] = (((rgba[i + 1] - 128) * _contrast + 128 + bShift)
+                  .round()
+                  .clamp(0, 255));
+              rgba[i + 2] = (((rgba[i + 2] - 128) * _contrast + 128 + bShift)
+                  .round()
+                  .clamp(0, 255));
+            }
           }
         }
-      }
 
-      final encoded = encodeWatchImage(
-        rgba,
-        format: _format,
-        dither: _dither,
-        accentArgb: widget.controller.dialAccentColor,
-      );
-      if (!mounted) return;
-      setState(() {
-        _encoded = encoded;
-        _encoding = false;
-      });
-      widget.controller.customDialPreviewRgba = encoded.previewRgba;
+        final encoded = encodeWatchImageAdaptive(
+          rgba,
+          format: _format,
+          dither: _dither,
+          accentArgb: widget.controller.dialAccentColor,
+        );
+        final profile = analyzeWatchImageProfile(rgba, encoded);
+        if (!mounted) return;
+        setState(() {
+          _encoded = encoded;
+          _profile = profile;
+        });
+        widget.controller.customDialPreviewRgba = encoded.previewRgba;
 
-      final img = await rgbaToUiImage(encoded.previewRgba);
-      if (!mounted) {
-        img.dispose();
-        return;
-      }
-      final old = _previewImage;
-      setState(() {
-        _previewImage = img;
-      });
-      old?.dispose();
+        final img = await rgbaToUiImage(encoded.previewRgba);
+        if (!mounted) {
+          img.dispose();
+          return;
+        }
+        final old = _previewImage;
+        setState(() {
+          _previewImage = img;
+        });
+        old?.dispose();
+      } while (_encodePending && mounted);
     } finally {
-      if (mounted && _encoding) setState(() => _encoding = false);
+      if (mounted) setState(() => _encoding = false);
     }
   }
 
@@ -300,14 +389,122 @@ class _DialsPageState extends State<DialsPage> {
         SnackBar(
           content: Text(
             ok
-                ? '自定义相册表盘（${enc.bytes.length} B，压缩 ${enc.compressionRatio.toStringAsFixed(1)}×）已写入 AT24C256 并立即生效！'
-                : '写入 AT24C256 失败，请确认手表端芯片已就绪并重连重试。',
+                ? (enc.fitsOnChipHotSwap
+                      ? '自定义相册表盘（${enc.bytes.length} B，压缩 ${enc.compressionRatio.toStringAsFixed(1)}×）已直入 AT32 片内热交换槽（XIP 零 I2C 秒刷）！'
+                      : '自定义相册表盘（${enc.bytes.length} B，压缩 ${enc.compressionRatio.toStringAsFixed(1)}×）已写入 AT24C256 并立即生效！')
+                : '写入失败，请确认手表连接与芯片就绪后重试。',
           ),
         ),
       );
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
+  }
+
+  Widget _buildPresetGrid(WatchController controller, double maxWidth) {
+    final tiles = <Widget>[
+      for (var i = 0; i < _dialPresets.length; i++)
+        _PresetTile(
+          spec: _dialPresets[i],
+          selected: i == controller.dialId,
+          onTap: () => controller.updateDialConfig(id: i),
+        ),
+    ];
+    if (maxWidth >= 980) {
+      return AppCard(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SectionHeader(
+              title: '表盘方案切换',
+              subtitle: '点击实时切换；手表长按 KEY2 亦可左右切换并持久落盘',
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < tiles.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 10),
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 82),
+                      child: tiles[i],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+    if (maxWidth >= 620) {
+      return AppCard(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SectionHeader(
+              title: '表盘方案切换',
+              subtitle: '点击实时切换预览并同步手表',
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 82),
+                    child: tiles[0],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 82),
+                    child: tiles[1],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 82),
+                    child: tiles[2],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 82),
+                    child: tiles[3],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionHeader(title: '表盘方案切换'),
+          const SizedBox(height: 10),
+          for (var i = 0; i < tiles.length; i++) ...[
+            if (i > 0) const SizedBox(height: 10),
+            tiles[i],
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -323,130 +520,158 @@ class _DialsPageState extends State<DialsPage> {
     return PageScroll(
       children: [
         PageHeader(
-          title: '表盘',
-          subtitle: 'AT24C256 动态 ROM 池 · 长按手表 KEY2 进表盘编辑，KEY1/3 左右选，短按 KEY2 确认',
+          title: '表盘工作台',
+          subtitle: '9KB 片内 Flash 热交换槽 + AT24C256 32KB 按需动态库 · 导入即见实时预览',
           trailing: StatusPill(
             label: controller.connected
-                ? (controller.extFlashPresent ? 'AT24C256 · 0x$addrHex 在线' : '未探测到 I2C Flash')
+                ? (controller.mcuImgOnChip
+                      ? '片内热槽 XIP 生效'
+                      : (controller.extFlashPresent ? 'AT24C256 · 0x$addrHex' : '未探测到 EEPROM'))
                 : '128×160 实时预览',
-            color: controller.connected && controller.extFlashPresent
+            color: controller.connected && (controller.mcuImgOnChip || controller.extFlashPresent)
                 ? AppPalette.mint
                 : _dialAmber,
           ),
         ),
-        const SizedBox(height: 22),
+        const SizedBox(height: 16),
         LayoutBuilder(
           builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 900;
             final preview = _DialStageCard(
               spec: current,
               controller: controller,
               photoImage: _previewImage,
               encoded: _encoded,
+              profile: _profile,
               uploading: _uploading,
               sentChunks: _sentChunks,
               totalChunks: _totalChunks,
               onPushConfig: _pushDialConfig,
               onUploadPhoto: _uploadPhotoDial,
+              onApplyProfile: _applyRecommendedProfile,
             );
-            final rightColumn = Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                AppCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const SectionHeader(
-                        title: '表盘方案预览库',
-                        subtitle: '点选实时切换预览；手表端长按 KEY2 也可循环切换并写入 AT24C256',
-                      ),
-                      const SizedBox(height: 14),
-                      for (var i = 0; i < _dialPresets.length; i++) ...[
-                        if (i > 0) const SizedBox(height: 10),
-                        _PresetTile(
-                          spec: _dialPresets[i],
-                          selected: i == controller.dialId,
-                          onTap: () => controller.updateDialConfig(id: i),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                _DialCustomizationCard(
-                  controller: controller,
-                  onAccentChanged: () {
-                    if (_format == WatchExtImgFormat.mono1bpp) {
-                      unawaited(_rebuildImagePreview());
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                _ImageCompressionCard(
-                  wallpaperId: _wallpaperId,
-                  pickedImageName: _pickedImageName,
-                  format: _format,
-                  dither: _dither,
-                  zoom: _zoom,
-                  brightness: _brightness,
-                  contrast: _contrast,
-                  encoded: _encoded,
-                  encoding: _encoding,
-                  uploading: _uploading,
-                  sentChunks: _sentChunks,
-                  totalChunks: _totalChunks,
-                  onSelectWallpaper: (id) {
-                    setState(() {
-                      _wallpaperId = id;
-                      _pickedFileBytes = null;
-                      _pickedImageName = null;
-                    });
-                    controller.updateDialConfig(id: 3, syncToWatch: false);
-                    unawaited(_rebuildImagePreview());
-                  },
-                  onPickLocalPhoto: _pickLocalPhoto,
-                  onFormatChanged: (fmt) {
-                    setState(() => _format = fmt);
-                    unawaited(_rebuildImagePreview());
-                  },
-                  onDitherChanged: (v) {
-                    setState(() => _dither = v);
-                    unawaited(_rebuildImagePreview());
-                  },
-                  onZoomChanged: (v) {
-                    setState(() => _zoom = v);
-                    unawaited(_rebuildImagePreview());
-                  },
-                  onBrightnessChanged: (v) {
-                    setState(() => _brightness = v);
-                    unawaited(_rebuildImagePreview());
-                  },
-                  onContrastChanged: (v) {
-                    setState(() => _contrast = v);
-                    unawaited(_rebuildImagePreview());
-                  },
-                  onUploadPhoto: _uploadPhotoDial,
-                ),
-                const SizedBox(height: 16),
-                _FlashPartitionCard(scheme: scheme, controller: controller),
-              ],
+            final imageStudio = _ImageCompressionCard(
+              wallpaperId: _wallpaperId,
+              pickedImageName: _pickedImageName,
+              sourceImage: _sourceUiImage,
+              srcWidth: _srcWidth,
+              srcHeight: _srcHeight,
+              cropRectNorm: _cropRectNorm,
+              format: _format,
+              dither: _dither,
+              brightness: _brightness,
+              contrast: _contrast,
+              encoded: _encoded,
+              profile: _profile,
+              encoding: _encoding,
+              uploading: _uploading,
+              sentChunks: _sentChunks,
+              totalChunks: _totalChunks,
+              onSelectWallpaper: (id) {
+                final oldSrc = _sourceUiImage;
+                setState(() {
+                  _wallpaperId = id;
+                  _pickedFileBytes = null;
+                  _pickedImageName = null;
+                  _sourceUiImage = null;
+                  _srcWidth = watchDisplayWidth;
+                  _srcHeight = watchDisplayHeight;
+                  _cropRectNorm = const ui.Rect.fromLTWH(0, 0, 1, 1);
+                });
+                oldSrc?.dispose();
+                controller.updateDialConfig(id: 3, syncToWatch: false);
+                unawaited(_rebuildImagePreview());
+              },
+              onPickLocalPhoto: _pickLocalPhoto,
+              onCropChanged: _onCropChanged,
+              onResetCropPreset: (scale, biasY) {
+                final next = _defaultCropRect(_srcWidth, _srcHeight, scale: scale, biasY: biasY);
+                _onCropChanged(next, immediate: true);
+              },
+              onFormatChanged: (fmt) {
+                setState(() => _format = fmt);
+                unawaited(_rebuildImagePreview());
+              },
+              onDitherChanged: (v) {
+                setState(() => _dither = v);
+                unawaited(_rebuildImagePreview());
+              },
+              onBrightnessChanged: (v) {
+                setState(() => _brightness = v);
+                unawaited(_rebuildImagePreview());
+              },
+              onContrastChanged: (v) {
+                setState(() => _contrast = v);
+                unawaited(_rebuildImagePreview());
+              },
+              onUploadPhoto: _uploadPhotoDial,
             );
+            final customization = _DialCustomizationCard(
+              controller: controller,
+              onAccentChanged: () {
+                if (_format == WatchExtImgFormat.mono1bpp) {
+                  unawaited(_rebuildImagePreview());
+                }
+              },
+            );
+            final memoryMap = _FlashPartitionCard(scheme: scheme, controller: controller);
 
-            if (constraints.maxWidth >= 900) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(flex: 5, child: preview),
-                  const SizedBox(width: 16),
-                  Expanded(flex: 7, child: rightColumn),
-                ],
-              );
-            }
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                preview,
+                _buildPresetGrid(controller, constraints.maxWidth),
                 const SizedBox(height: 16),
-                rightColumn,
+                if (wide) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 5,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 490),
+                          child: preview,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        flex: 7,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 490),
+                          child: imageStudio,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 5,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 410),
+                          child: customization,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        flex: 7,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 410),
+                          child: memoryMap,
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  preview,
+                  const SizedBox(height: 16),
+                  imageStudio,
+                  const SizedBox(height: 16),
+                  customization,
+                  const SizedBox(height: 16),
+                  memoryMap,
+                ],
               ],
             );
           },
@@ -462,22 +687,26 @@ class _DialStageCard extends StatelessWidget {
     required this.controller,
     required this.photoImage,
     required this.encoded,
+    required this.profile,
     required this.uploading,
     required this.sentChunks,
     required this.totalChunks,
     required this.onPushConfig,
     required this.onUploadPhoto,
+    required this.onApplyProfile,
   });
 
   final _DialSpec spec;
   final WatchController controller;
   final ui.Image? photoImage;
   final EncodedWatchImage? encoded;
+  final WatchImageProfile? profile;
   final bool uploading;
   final int sentChunks;
   final int totalChunks;
   final VoidCallback onPushConfig;
   final VoidCallback onUploadPhoto;
+  final VoidCallback onApplyProfile;
 
   @override
   Widget build(BuildContext context) {
@@ -548,7 +777,9 @@ class _DialStageCard extends StatelessWidget {
           Center(
             child: Text(
               controller.mcuImgReady
-                  ? '手表 0x3C00 已固化相册图 (${controller.mcuImgBytes} B)'
+                  ? (controller.mcuImgOnChip
+                        ? '片内 0xD800 热槽已激活 (${controller.mcuImgBytes} B · XIP 120MHz)'
+                        : 'AT24C256 已固化相册图 (${controller.mcuImgBytes} B)')
                   : '128 × 160 · 实机同款参数即时仿真',
               style: TextStyle(
                 fontSize: 11.5,
@@ -556,12 +787,79 @@ class _DialStageCard extends StatelessWidget {
               ),
             ),
           ),
+          if (profile != null && spec.id == 3) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHigh
+                    .withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: (profile!.fitsOnChipHotSwap
+                          ? AppPalette.mint
+                          : _dialAmber)
+                      .withValues(alpha: 0.35),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '平坦率 ${(profile!.flatRatio * 100).round()}% · 推荐${const ['居中', '居顶', '居底'][profile!.recommendedAlign]}',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      StatusPill(
+                        label: profile!.fitsOnChipHotSwap
+                            ? '可直入片内 9KB'
+                            : '需 AT24C256 退避',
+                        color: profile!.fitsOnChipHotSwap
+                            ? AppPalette.mint
+                            : _dialAmber,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: onApplyProfile,
+                      icon: const Icon(Icons.auto_fix_high_rounded, size: 15),
+                      label: const Text(
+                        '应用局部刷新最佳时钟位与对比度',
+                        style: TextStyle(fontSize: 11.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (uploading && totalChunks > 0) ...[
             const SizedBox(height: 12),
             LinearProgressIndicator(value: sentChunks / totalChunks),
             const SizedBox(height: 4),
             Text(
-              '正在分块写入 AT24C256：$sentChunks / $totalChunks 块',
+              encoded != null && encoded!.fitsOnChipHotSwap
+                  ? '正在写入 AT32 片内热交换槽：$sentChunks / $totalChunks 块'
+                  : '正在分块写入 AT24C256：$sentChunks / $totalChunks 块',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 11),
             ),
@@ -575,7 +873,7 @@ class _DialStageCard extends StatelessWidget {
                 onPressed: uploading ? null : onPushConfig,
                 icon: const Icon(Icons.save_as_rounded, size: 18),
                 label: Text(
-                  controller.connected ? '下发配置并写入 AT24C256' : '保存本地（连表覆盖）',
+                  controller.connected ? '下发配置到手表' : '保存本地（连表覆盖）',
                 ),
               ),
               if (spec.id == 3)
@@ -584,8 +882,10 @@ class _DialStageCard extends StatelessWidget {
                   icon: const Icon(Icons.upload_file_rounded, size: 18),
                   label: Text(
                     encoded == null
-                        ? '写入压缩相册底图'
-                        : '写入压缩底图 (${(encoded!.bytes.length / 1024).toStringAsFixed(1)} KB)',
+                        ? '写入压缩底图'
+                        : (encoded!.fitsOnChipHotSwap
+                              ? '写入片内热槽 (${(encoded!.bytes.length / 1024).toStringAsFixed(1)} KB)'
+                              : '写入片外 EEPROM (${(encoded!.bytes.length / 1024).toStringAsFixed(1)} KB)'),
                   ),
                 ),
             ],
@@ -1101,21 +1401,26 @@ class _ImageCompressionCard extends StatelessWidget {
   const _ImageCompressionCard({
     required this.wallpaperId,
     required this.pickedImageName,
+    required this.sourceImage,
+    required this.srcWidth,
+    required this.srcHeight,
+    required this.cropRectNorm,
     required this.format,
     required this.dither,
-    required this.zoom,
     required this.brightness,
     required this.contrast,
     required this.encoded,
+    required this.profile,
     required this.encoding,
     required this.uploading,
     required this.sentChunks,
     required this.totalChunks,
     required this.onSelectWallpaper,
     required this.onPickLocalPhoto,
+    required this.onCropChanged,
+    required this.onResetCropPreset,
     required this.onFormatChanged,
     required this.onDitherChanged,
-    required this.onZoomChanged,
     required this.onBrightnessChanged,
     required this.onContrastChanged,
     required this.onUploadPhoto,
@@ -1123,21 +1428,26 @@ class _ImageCompressionCard extends StatelessWidget {
 
   final String wallpaperId;
   final String? pickedImageName;
+  final ui.Image? sourceImage;
+  final int srcWidth;
+  final int srcHeight;
+  final ui.Rect cropRectNorm;
   final WatchExtImgFormat format;
   final bool dither;
-  final double zoom;
   final double brightness;
   final double contrast;
   final EncodedWatchImage? encoded;
+  final WatchImageProfile? profile;
   final bool encoding;
   final bool uploading;
   final int sentChunks;
   final int totalChunks;
   final ValueChanged<String> onSelectWallpaper;
   final VoidCallback onPickLocalPhoto;
+  final void Function(ui.Rect next, {bool immediate}) onCropChanged;
+  final void Function(double scale, double biasY) onResetCropPreset;
   final ValueChanged<WatchExtImgFormat> onFormatChanged;
   final ValueChanged<bool> onDitherChanged;
-  final ValueChanged<double> onZoomChanged;
   final ValueChanged<double> onBrightnessChanged;
   final ValueChanged<double> onContrastChanged;
   final VoidCallback onUploadPhoto;
@@ -1147,27 +1457,30 @@ class _ImageCompressionCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final bytes = encoded?.bytes.length ?? 0;
     final raw = watchDisplayWidth * watchDisplayHeight * 2; // 40,960 B
-    final fits = encoded?.fitsFlash ?? true;
+    final fitsChip = encoded?.fitsOnChipHotSwap ?? true;
+    final fitsPool = encoded?.fitsFlash ?? true;
 
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SectionHeader(
-            title: '128×160 相册图片与压缩算法',
+            title: '128×160 相册裁切选区与抗噪压缩工作台',
             subtitle: pickedImageName != null
-                ? '当前图片：$pickedImageName'
-                : '支持从本机相册/文件导入或直接选用预设艺术底图',
+                ? '源图 $pickedImageName ($srcWidth×$srcHeight) · 拖拽选框平移、拖拽四角缩放大区域'
+                : '选择本地图片后可直接框选任意 4:5 局部区域，左侧实时预览刷新效果',
             trailing: encoding
                 ? const StatusPill(label: '编码中…')
                 : StatusPill(
                     label: encoded == null
                         ? '--'
-                        : '${(bytes / 1024).toStringAsFixed(1)} KB (${encoded!.compressionRatio.toStringAsFixed(1)}×)',
-                    color: fits ? AppPalette.mint : const Color(0xFFEF4444),
+                        : '${(bytes / 1024).toStringAsFixed(1)} KB · ${fitsChip ? '片内热槽' : (fitsPool ? '片外池' : '超限')}',
+                    color: fitsChip
+                        ? AppPalette.mint
+                        : (fitsPool ? _dialAmber : const Color(0xFFEF4444)),
                   ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -1175,7 +1488,7 @@ class _ImageCompressionCard extends StatelessWidget {
               FilledButton.tonalIcon(
                 onPressed: uploading ? null : onPickLocalPhoto,
                 icon: const Icon(Icons.photo_library_outlined, size: 18),
-                label: const Text('选择本地图片'),
+                label: const Text('导入本地图片'),
               ),
               for (final wp in _wallpaperPresets)
                 ChoiceChip(
@@ -1185,20 +1498,54 @@ class _ImageCompressionCard extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 14),
+          if (sourceImage != null) ...[
+            const SizedBox(height: 12),
+            _InteractiveImageCropper(
+              image: sourceImage!,
+              srcWidth: srcWidth,
+              srcHeight: srcHeight,
+              cropRectNorm: cropRectNorm,
+              accent: fitsChip ? AppPalette.mint : _dialAmber,
+              onChanged: onCropChanged,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                ActionChip(
+                  label: const Text('居中全幅', style: TextStyle(fontSize: 11.5)),
+                  onPressed: () => onResetCropPreset(1.0, 0.5),
+                ),
+                ActionChip(
+                  label: const Text('偏上构图', style: TextStyle(fontSize: 11.5)),
+                  onPressed: () => onResetCropPreset(0.95, 0.08),
+                ),
+                ActionChip(
+                  label: const Text('偏下构图', style: TextStyle(fontSize: 11.5)),
+                  onPressed: () => onResetCropPreset(0.95, 0.92),
+                ),
+                ActionChip(
+                  label: const Text('中心特写 55%', style: TextStyle(fontSize: 11.5)),
+                  onPressed: () => onResetCropPreset(0.55, 0.35),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 12),
           SegmentedButton<WatchExtImgFormat>(
             segments: const [
               ButtonSegment(
                 value: WatchExtImgFormat.pal4Rle,
-                label: Text('16色RLE'),
+                label: Text('16色抗噪 RLE'),
               ),
               ButtonSegment(
                 value: WatchExtImgFormat.rgb565Rle,
-                label: Text('真彩RLE'),
+                label: Text('真彩 RLE'),
               ),
               ButtonSegment(
                 value: WatchExtImgFormat.mono1bpp,
-                label: Text('黑白1bpp'),
+                label: Text('黑白 1bpp'),
               ),
             ],
             selected: {format},
@@ -1208,28 +1555,11 @@ class _ImageCompressionCard extends StatelessWidget {
           if (format != WatchExtImgFormat.rgb565Rle)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Floyd-Steinberg 误差扩散抖动'),
-              subtitle: const Text('显著消除 16 色 / 黑白渐变断层'),
+              title: const Text('边缘自适应抗噪抖动（纯白背景零斑点）'),
+              subtitle: const Text('锁定纯白/平坦色块并抑制误差溢出，仅在渐变区启用 FS 抖动'),
               value: dither,
               onChanged: onDitherChanged,
             ),
-          if (pickedImageName != null) ...[
-            Row(
-              children: [
-                const Text('裁切缩放', style: TextStyle(fontSize: 12)),
-                Expanded(
-                  child: Slider(
-                    value: zoom,
-                    min: 1.0,
-                    max: 2.5,
-                    divisions: 15,
-                    label: '${zoom.toStringAsFixed(1)}×',
-                    onChanged: onZoomChanged,
-                  ),
-                ),
-              ],
-            ),
-          ],
           Row(
             children: [
               const SizedBox(width: 40, child: Text('亮度', style: TextStyle(fontSize: 12))),
@@ -1241,10 +1571,6 @@ class _ImageCompressionCard extends StatelessWidget {
                   onChanged: onBrightnessChanged,
                 ),
               ),
-            ],
-          ),
-          Row(
-            children: [
               const SizedBox(width: 40, child: Text('对比', style: TextStyle(fontSize: 12))),
               Expanded(
                 child: Slider(
@@ -1256,6 +1582,7 @@ class _ImageCompressionCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1271,15 +1598,19 @@ class _ImageCompressionCard extends StatelessWidget {
                   runSpacing: 4,
                   children: [
                     Text(
-                      '压缩体积：$bytes / $watchExtImgMaxBytes B',
+                      fitsChip
+                          ? '片内热槽命中：$bytes / $watchOnChipHotSwapMaxBytes B（XIP 零 I2C）'
+                          : '动态池体积：$bytes / $watchExtImgMaxBytes B（超过 9KB 走 AT24C256）',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: fits ? scheme.primary : const Color(0xFFEF4444),
+                        color: fitsChip
+                            ? AppPalette.mint
+                            : (fitsPool ? _dialAmber : const Color(0xFFEF4444)),
                       ),
                     ),
                     Text(
-                      '原始 RGB565：$raw B',
+                      '压缩比 ${(raw / math.max(1, bytes)).toStringAsFixed(1)}×',
                       style: TextStyle(
                         fontSize: 11,
                         color: scheme.onSurfaceVariant,
@@ -1291,19 +1622,27 @@ class _ImageCompressionCard extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(6),
                   child: LinearProgressIndicator(
-                    value: (bytes / watchExtImgMaxBytes).clamp(0.0, 1.0),
+                    value: fitsChip
+                        ? (bytes / watchOnChipHotSwapMaxBytes).clamp(0.0, 1.0)
+                        : (bytes / watchExtImgMaxBytes).clamp(0.0, 1.0),
                     minHeight: 6,
-                    color: fits ? scheme.primary : const Color(0xFFEF4444),
+                    color: fitsChip
+                        ? AppPalette.mint
+                        : (fitsPool ? _dialAmber : const Color(0xFFEF4444)),
                   ),
                 ),
                 const SizedBox(height: 10),
                 FilledButton.icon(
-                  onPressed: (!fits || uploading) ? null : onUploadPhoto,
+                  onPressed: (!fitsPool || uploading) ? null : onUploadPhoto,
                   icon: const Icon(Icons.cloud_upload_outlined, size: 18),
                   label: Text(
                     uploading
                         ? '正在写入 ($sentChunks/$totalChunks)...'
-                        : (fits ? '压缩并写入 AT24C256 设为表盘' : '超出 17KB 上限 · 请改用 PAL4-RLE'),
+                        : (fitsChip
+                              ? '编码并写入 AT32 片内热交换槽设为表盘'
+                              : (fitsPool
+                                    ? '写入 AT24C256 设为自定义表盘'
+                                    : '超出最大容量 · 请改用 16 色 RLE')),
                   ),
                 ),
               ],
@@ -1312,6 +1651,316 @@ class _ImageCompressionCard extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+enum _CropDragMode { none, pan, tl, tr, bl, br }
+
+class _InteractiveImageCropper extends StatefulWidget {
+  const _InteractiveImageCropper({
+    required this.image,
+    required this.srcWidth,
+    required this.srcHeight,
+    required this.cropRectNorm,
+    required this.accent,
+    required this.onChanged,
+  });
+
+  final ui.Image image;
+  final int srcWidth;
+  final int srcHeight;
+  final ui.Rect cropRectNorm;
+  final Color accent;
+  final void Function(ui.Rect next, {bool immediate}) onChanged;
+
+  @override
+  State<_InteractiveImageCropper> createState() =>
+      _InteractiveImageCropperState();
+}
+
+class _InteractiveImageCropperState extends State<_InteractiveImageCropper> {
+  _CropDragMode _mode = _CropDragMode.none;
+  ui.Rect _startNorm = ui.Rect.zero;
+  Offset _startLocal = Offset.zero;
+  ui.Rect _renderedImgRect = ui.Rect.zero;
+
+  double get _maxNormW {
+    final imgAspect = widget.srcWidth / math.max(1, widget.srcHeight);
+    const targetAspect = watchDisplayWidth / watchDisplayHeight; // 0.8
+    return imgAspect >= targetAspect
+        ? (targetAspect / imgAspect).clamp(0.12, 1.0)
+        : 1.0;
+  }
+
+  double get _maxNormH {
+    final imgAspect = widget.srcWidth / math.max(1, widget.srcHeight);
+    const targetAspect = watchDisplayWidth / watchDisplayHeight; // 0.8
+    return imgAspect >= targetAspect
+        ? 1.0
+        : (imgAspect / targetAspect).clamp(0.12, 1.0);
+  }
+
+  ui.Rect _rectPx(ui.Rect imgRect) {
+    final n = widget.cropRectNorm;
+    return ui.Rect.fromLTWH(
+      imgRect.left + n.left * imgRect.width,
+      imgRect.top + n.top * imgRect.height,
+      n.width * imgRect.width,
+      n.height * imgRect.height,
+    );
+  }
+
+  ui.Rect _computeImageRect(Size box) {
+    final iw = widget.srcWidth.toDouble();
+    final ih = widget.srcHeight.toDouble();
+    final scale = math.min(box.width / iw, box.height / ih);
+    final w = iw * scale;
+    final h = ih * scale;
+    return ui.Rect.fromLTWH((box.width - w) / 2, (box.height - h) / 2, w, h);
+  }
+
+  void _handleDown(DragStartDetails d) {
+    if (_renderedImgRect.isEmpty) return;
+    _startLocal = d.localPosition;
+    _startNorm = widget.cropRectNorm;
+    final cropPx = _rectPx(_renderedImgRect);
+    const hitR = 22.0;
+    if ((d.localPosition - cropPx.topLeft).distance <= hitR) {
+      _mode = _CropDragMode.tl;
+    } else if ((d.localPosition - cropPx.topRight).distance <= hitR) {
+      _mode = _CropDragMode.tr;
+    } else if ((d.localPosition - cropPx.bottomLeft).distance <= hitR) {
+      _mode = _CropDragMode.bl;
+    } else if ((d.localPosition - cropPx.bottomRight).distance <= hitR) {
+      _mode = _CropDragMode.br;
+    } else if (cropPx.contains(d.localPosition)) {
+      _mode = _CropDragMode.pan;
+    } else {
+      // 点击空白处直接把选区中心移过去
+      final nx = ((d.localPosition.dx - _renderedImgRect.left) /
+              _renderedImgRect.width)
+          .clamp(0.0, 1.0);
+      final ny = ((d.localPosition.dy - _renderedImgRect.top) /
+              _renderedImgRect.height)
+          .clamp(0.0, 1.0);
+      final nl = (nx - _startNorm.width / 2).clamp(0.0, 1.0 - _startNorm.width);
+      final nt = (ny - _startNorm.height / 2).clamp(0.0, 1.0 - _startNorm.height);
+      _startNorm = ui.Rect.fromLTWH(nl, nt, _startNorm.width, _startNorm.height);
+      _mode = _CropDragMode.pan;
+      widget.onChanged(_startNorm, immediate: false);
+    }
+  }
+
+  void _handleUpdate(DragUpdateDetails d) {
+    if (_mode == _CropDragMode.none || _renderedImgRect.isEmpty) return;
+    final dxN = (d.localPosition.dx - _startLocal.dx) / _renderedImgRect.width;
+    final dyN = (d.localPosition.dy - _startLocal.dy) / _renderedImgRect.height;
+
+    if (_mode == _CropDragMode.pan) {
+      final nl = (_startNorm.left + dxN).clamp(0.0, 1.0 - _startNorm.width);
+      final nt = (_startNorm.top + dyN).clamp(0.0, 1.0 - _startNorm.height);
+      widget.onChanged(
+        ui.Rect.fromLTWH(nl, nt, _startNorm.width, _startNorm.height),
+      );
+      return;
+    }
+
+    // 四角缩放严格锁定 128:160 (4:5) 物理像素纵横比，锚定对角顶点
+    final ratioHPerW = _maxNormH / math.max(0.001, _maxNormW);
+    final minW = math.min(0.16, _maxNormW);
+    double ax, ay; // anchor
+    double rawW, rawH;
+    switch (_mode) {
+      case _CropDragMode.tl:
+        ax = _startNorm.right;
+        ay = _startNorm.bottom;
+        rawW = (_startNorm.width - dxN);
+        rawH = (_startNorm.height - dyN);
+      case _CropDragMode.tr:
+        ax = _startNorm.left;
+        ay = _startNorm.bottom;
+        rawW = (_startNorm.width + dxN);
+        rawH = (_startNorm.height - dyN);
+      case _CropDragMode.bl:
+        ax = _startNorm.right;
+        ay = _startNorm.top;
+        rawW = (_startNorm.width - dxN);
+        rawH = (_startNorm.height + dyN);
+      case _CropDragMode.br:
+        ax = _startNorm.left;
+        ay = _startNorm.top;
+        rawW = (_startNorm.width + dxN);
+        rawH = (_startNorm.height + dyN);
+      case _CropDragMode.none:
+      case _CropDragMode.pan:
+        return;
+    }
+
+    final candW = ((rawW + rawH / ratioHPerW) * 0.5).clamp(minW, _maxNormW);
+    final maxAvailW = (_mode == _CropDragMode.tl || _mode == _CropDragMode.bl)
+        ? ax
+        : (1.0 - ax);
+    final maxAvailH = (_mode == _CropDragMode.tl || _mode == _CropDragMode.tr)
+        ? ay
+        : (1.0 - ay);
+    final boundedW = math.min(
+      candW,
+      math.min(maxAvailW, maxAvailH / ratioHPerW),
+    );
+    final nw = boundedW.clamp(minW, _maxNormW);
+    final nh = (nw * ratioHPerW).clamp(minW * ratioHPerW, _maxNormH);
+
+    final nl = (_mode == _CropDragMode.tl || _mode == _CropDragMode.bl)
+        ? (ax - nw)
+        : ax;
+    final nt = (_mode == _CropDragMode.tl || _mode == _CropDragMode.tr)
+        ? (ay - nh)
+        : ay;
+    widget.onChanged(
+      ui.Rect.fromLTWH(
+        nl.clamp(0.0, 1.0 - nw),
+        nt.clamp(0.0, 1.0 - nh),
+        nw,
+        nh,
+      ),
+    );
+  }
+
+  void _handleScroll(PointerScrollEvent e) {
+    final step = e.scrollDelta.dy > 0 ? 0.06 : -0.06;
+    final ratioHPerW = _maxNormH / math.max(0.001, _maxNormW);
+    final minW = math.min(0.16, _maxNormW);
+    final cur = widget.cropRectNorm;
+    final nw = (cur.width + step).clamp(minW, _maxNormW);
+    final nh = (nw * ratioHPerW).clamp(minW * ratioHPerW, _maxNormH);
+    final cx = cur.center.dx;
+    final cy = cur.center.dy;
+    final nl = (cx - nw / 2).clamp(0.0, 1.0 - nw);
+    final nt = (cy - nh / 2).clamp(0.0, 1.0 - nh);
+    widget.onChanged(ui.Rect.fromLTWH(nl, nt, nw, nh));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 224,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0D0C),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppPalette.line),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final size = Size(constraints.maxWidth, constraints.maxHeight);
+          _renderedImgRect = _computeImageRect(size);
+          return Listener(
+            onPointerSignal: (s) {
+              if (s is PointerScrollEvent) _handleScroll(s);
+            },
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanStart: _handleDown,
+              onPanUpdate: _handleUpdate,
+              onPanEnd: (_) {
+                _mode = _CropDragMode.none;
+                widget.onChanged(widget.cropRectNorm, immediate: true);
+              },
+              child: CustomPaint(
+                size: size,
+                painter: _CropOverlayPainter(
+                  image: widget.image,
+                  imgRect: _renderedImgRect,
+                  cropRectNorm: widget.cropRectNorm,
+                  accent: widget.accent,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CropOverlayPainter extends CustomPainter {
+  const _CropOverlayPainter({
+    required this.image,
+    required this.imgRect,
+    required this.cropRectNorm,
+    required this.accent,
+  });
+
+  final ui.Image image;
+  final ui.Rect imgRect;
+  final ui.Rect cropRectNorm;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawImageRect(
+      image,
+      ui.Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+      imgRect,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+
+    final sel = ui.Rect.fromLTWH(
+      imgRect.left + cropRectNorm.left * imgRect.width,
+      imgRect.top + cropRectNorm.top * imgRect.height,
+      cropRectNorm.width * imgRect.width,
+      cropRectNorm.height * imgRect.height,
+    );
+
+    final mask = Path()
+      ..addRect(imgRect)
+      ..addRect(sel)
+      ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(
+      mask,
+      Paint()..color = const Color(0x99000000),
+    );
+
+    final gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.25)
+      ..strokeWidth = 0.8;
+    for (var i = 1; i <= 2; i++) {
+      final dx = sel.left + sel.width * i / 3;
+      final dy = sel.top + sel.height * i / 3;
+      canvas.drawLine(Offset(dx, sel.top), Offset(dx, sel.bottom), gridPaint);
+      canvas.drawLine(Offset(sel.left, dy), Offset(sel.right, dy), gridPaint);
+    }
+
+    canvas.drawRect(
+      sel,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0,
+    );
+
+    final handleFill = Paint()..color = accent;
+    final handleStroke = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    for (final pt in [
+      sel.topLeft,
+      sel.topRight,
+      sel.bottomLeft,
+      sel.bottomRight,
+    ]) {
+      canvas.drawCircle(pt, 5.5, handleFill);
+      canvas.drawCircle(pt, 5.5, handleStroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) {
+    return oldDelegate.image != image ||
+        oldDelegate.imgRect != imgRect ||
+        oldDelegate.cropRectNorm != cropRectNorm ||
+        oldDelegate.accent != accent;
   }
 }
 
@@ -1524,9 +2173,18 @@ class _FlashPartitionCard extends StatelessWidget {
           const SizedBox(height: 8),
           _PartitionRow(
             color: AppPalette.mint,
-            range: '0x0300 – 0x7FFF · 图片块',
-            title: '压缩表盘底图（与消息动态共享 32,000 B Pool）',
-            size: imgB > 0 ? '$imgB B' : '未写入',
+            range: '0x0800DC00 – 0x08010000 (MCU 片内)',
+            title: 'AT32 片内自定义表盘极速热槽（≤9KB XIP 120MHz 零 I2C）',
+            size: controller.mcuImgOnChip && controller.mcuImgReady
+                ? '已激活 (${controller.mcuImgBytes} B)'
+                : '9,216 B 可用',
+          ),
+          const SizedBox(height: 8),
+          _PartitionRow(
+            color: AppPalette.mint,
+            range: '0x0300 – 0x7FFF · 图片回退块',
+            title: '超 9KB 大图自动写入 AT24C256（含 SYS1/SHD1/SPR1/ANL1 共 6 项按需包）',
+            size: imgB > 0 ? '$imgB B' : '已走片内热槽',
           ),
           const SizedBox(height: 8),
           _PartitionRow(
@@ -1537,11 +2195,47 @@ class _FlashPartitionCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           _PartitionRow(
+            color: const Color(0xFFF5B759),
+            range: '0x0300 · 按需小程序与字库 (0x2F)',
+            title: 'SYS1(动画图标) / SHD1(23 枚华文琥珀) / SPR1 / ANL1 / C3D1 / ABT2',
+            size: (() {
+              final f = controller.extPoolState?.assetFlags ?? 0;
+              var ready = 0;
+              for (final b in const [0x02, 0x04, 0x08, 0x20, 0x40, 0x80]) {
+                if ((f & b) != 0) ready++;
+              }
+              return '$ready / 6 已就绪';
+            })(),
+          ),
+          const SizedBox(height: 8),
+          _PartitionRow(
             color: scheme.outlineVariant,
             range: '最大可用连续块',
             title: '当前剩余动态 ROM 空间（空间不足自动淘汰最旧通知）',
             size: '${controller.extPoolFreeMax} B 空闲',
           ),
+          if (controller.connected) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final ok = await controller.syncExtAssetsNow();
+                  if (!context.mounted) return;
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        ok ? '已全量同步 6 项片外小程序、字库与关于资源 (0x2F)。' : '请先连接手表后再同步。',
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.sync_rounded, size: 16),
+                label: const Text('全量同步片外小程序与字库 (0x2F)'),
+              ),
+            ),
+          ],
         ],
       ),
     );

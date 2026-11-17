@@ -62,6 +62,8 @@ static uint8_t link_tx[FB_W * FB_H * 2 + 4096];
 static int link_tx_n;
 static int sim_ext_flash_on = 1;
 static uint8_t sim_ext_flash[HAL_EXT_FLASH_SIZE];
+enum { HOST_INT_IMG_CAP = 12u * 1024u };
+static uint8_t sim_int_img[HOST_INT_IMG_CAP];
 
 static int month_days(int year, int month) {
     static const uint8_t days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -850,6 +852,24 @@ int hal_ext_flash_erase(uint32_t offset, uint32_t len) {
     }
     if (len > 0) {
         memset(sim_ext_flash + offset, 0, len);
+    }
+    return 1;
+}
+
+const uint8_t *hal_int_img_ptr(void) {
+    return sim_int_img;
+}
+
+uint32_t hal_int_img_cap(void) {
+    return HOST_INT_IMG_CAP;
+}
+
+int hal_int_img_write(uint32_t offset, const uint8_t *src, uint32_t len) {
+    if (!src || offset > HOST_INT_IMG_CAP || len > HOST_INT_IMG_CAP - offset) {
+        return 0;
+    }
+    if (len > 0) {
+        memcpy(sim_int_img + offset, src, len);
     }
     return 1;
 }

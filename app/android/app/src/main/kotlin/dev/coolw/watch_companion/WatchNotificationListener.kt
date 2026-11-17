@@ -3,6 +3,7 @@ package dev.coolw.watch_companion
 import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -11,6 +12,7 @@ import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import android.view.KeyEvent
 
 /**
  * 读取系统媒体会话（汽水音乐、网易云、B 站等）并转发通知。
@@ -260,7 +262,21 @@ object MediaBridge {
     fun control(action: Int, context: Context) {
         val controller = sessionController ?: refresh(context)
         if (controller == null) {
-            Log.d("WatchLink", "媒体控制 $action 失败：没有活动会话（检查通知使用权）")
+            val keyCode = when (action) {
+                1 -> KeyEvent.KEYCODE_MEDIA_PLAY
+                2 -> KeyEvent.KEYCODE_MEDIA_PAUSE
+                3 -> KeyEvent.KEYCODE_MEDIA_NEXT
+                4 -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                else -> 0
+            }
+            val am = context.getSystemService(AudioManager::class.java)
+            if (keyCode != 0 && am != null) {
+                Log.d("WatchLink", "媒体控制 action=$action 走系统媒体键广播")
+                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            } else {
+                Log.d("WatchLink", "媒体控制 $action 失败：没有活动会话（检查通知使用权）")
+            }
             return
         }
         Log.d("WatchLink", "媒体控制 action=$action")

@@ -57,19 +57,10 @@ int ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
     if (!flash_addr && !ext_flash_init()) {
         return 0;
     }
-    while (len > 0) {
-        uint32_t chunk = len > 128u ? 128u : len;
-        if (!wait_ready()) {
-            return 0;
-        }
-        if (!i2c_read16(flash_addr, (uint16_t)offset, dst, (int)chunk)) {
-            return 0;
-        }
-        offset += chunk;
-        dst += chunk;
-        len -= chunk;
+    if (!wait_ready()) {
+        return 0;
     }
-    return 1;
+    return i2c_read16(flash_addr, (uint16_t)offset, dst, (int)len);
 }
 
 int ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {

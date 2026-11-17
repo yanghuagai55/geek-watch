@@ -10,7 +10,7 @@
 #include "at32f421.h"
 
 /* ---- I2C 传感器与存储总线（软件 I2C，PA9=SCL / PA10=SDA，外部 10k 上拉）----
-   挂 MPU6050(0x68) / QMC5883L(0x0D) / BMP580(0x46) / 32KB I2C Flash(0x50)。 */
+   挂 MPU6050/QMI8658(0x68/0x6B) / QMC5883L(0x0D)/QMC5883P(0x2C) / 32KB I2C Flash(0x50)。 */
 #define I2C_PORT        GPIOA
 #define I2C_SCL_PIN     GPIO_PINS_9
 #define I2C_SDA_PIN     GPIO_PINS_10
@@ -41,8 +41,6 @@
 #define MPU_INT_PIN     GPIO_PINS_6   /* MPU6050 INT */
 #define MAG_DRDY_PORT   GPIOB
 #define MAG_DRDY_PIN    GPIO_PINS_5   /* QMC5883L DRDY */
-#define BMP_INT_PORT    GPIOB
-#define BMP_INT_PIN     GPIO_PINS_4   /* BMP580 INT */
 
 /* ---- 模拟 ---- */
 #define MIC_ADC_PORT    GPIOA

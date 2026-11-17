@@ -15,9 +15,10 @@ enum {
     KIND_MASK1 = 8,
     KIND_RIPPLE = 9,
     KIND_EXT_IMAGE = 10,
-    ITEM_MAX = 96,
+    ITEM_MAX = 80,
     STR_MAX = 640,
-    PIC_MAX = 24
+    PIC_MAX = 24,
+    EXT_SRC_MAX = 4
 };
 
 typedef struct draw_item {
@@ -84,6 +85,18 @@ static void use_item_xform(const draw_item_t *it) {
 }
 static const void *pic_ref[PIC_MAX];
 static int pic_n;
+typedef struct ext_src_entry {
+    const uint8_t *mem_ptr;
+    uint32_t ext_off;
+    uint16_t gen;
+} ext_src_entry_t;
+static ext_src_entry_t ext_srcs[EXT_SRC_MAX];
+static int ext_src_n;
+static const uint8_t *pal_cache_ptr;
+static uint32_t pal_cache_off;
+static uint16_t pal_cache_gen;
+static uint8_t pal_cache_valid;
+static uint16_t pal_cache[16];
 static volatile int output_preempt;
 static int16_t gif_x, gif_y, gif_w, gif_h;
 static const uint16_t *gif_px;
@@ -153,6 +166,7 @@ void ui_draw_init(void) {
 
 void ui_draw_invalidate(void) {
     invalidated = 1;
+    pal_cache_valid = 0;
 }
 
 void ui_render_get_stats(ui_render_stats_t *out) {
@@ -165,6 +179,7 @@ void ui_draw_begin(void) {
     item_n = 0;
     str_n = 0;
     pic_n = 0;
+    ext_src_n = 0;
     dropped = 0;
     tf_s = 256;
     tf_ox = 0;
@@ -266,8 +281,8 @@ void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
     it->pal_off = (uint16_t)cy;
 }
 
-void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
-                  uint16_t color, uint8_t opacity) {
+static void line_item_add(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                          uint8_t width, uint16_t color, uint8_t opacity) {
     draw_item_t *it;
 
     if (!items || !item_space() || opacity == 0) {
@@ -282,8 +297,18 @@ void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
     it->str_off = 0;
     it->kind = KIND_LINE;
     it->opacity = opacity;
-    it->scale = 0;
+    it->scale = width;
     stamp(it);
+}
+
+void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                  uint16_t color, uint8_t opacity) {
+    line_item_add(x0, y0, x1, y1, 0u, color, opacity);
+}
+
+void ui_draw_line_w(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                    uint8_t width, uint16_t color, uint8_t opacity) {
+    line_item_add(x0, y0, x1, y1, width, color, opacity);
 }
 
 void ui_draw_text(int16_t x, int16_t y, const char *utf8,
@@ -318,6 +343,7 @@ void ui_draw_text(int16_t x, int16_t y, const char *utf8,
     strs[str_n++] = 0;
 }
 
+#if !defined(AT32_SLIM_ROM)
 void ui_svg_draw_p(int16_t x, int16_t y, uint8_t scale,
                    const ui_svg_cmd_t *cmd, int count,
                    const uint16_t *pal, uint8_t npal,
@@ -366,6 +392,7 @@ void ui_svg_draw(int16_t x, int16_t y, uint8_t scale,
                  uint16_t color, uint8_t opacity) {
     ui_svg_draw_w(x, y, scale, cmd, count, color, opacity, 0);
 }
+#endif
 
 void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                    uint8_t scale, const uint16_t *rgb565, uint8_t opacity) {
@@ -779,17 +806,6 @@ static void fill_disc(int cx, int cy, int r, int band_y,
     }
 }
 
-static void raster_line(const draw_item_t *it, int band_y) {
-    use_item_xform(it);
-    stroke(it->x, it->y, it->w, it->h, band_y, it->color, it->opacity);
-}
-
-/* Thick stroke: lay 2px centerlines along the normal, then round the caps.
-   width is the target thickness in the same units stroke() receives. */
-static int round_div(int n, int d) {
-    return n >= 0 ? (n + d / 2) / d : -((-n + d / 2) / d);
-}
-
 static void stroke_w(int x0, int y0, int x1, int y1, int width,
                      int band_y, uint16_t color, uint8_t opacity) {
     int dx = x1 - x0, dy = y1 - y0;
@@ -807,14 +823,25 @@ static void stroke_w(int x0, int y0, int x1, int y1, int width,
     nx = -dy * 256 / len;
     ny = dx * 256 / len;
     for (o = -r; o <= r; o++) {
-        int ox = round_div(nx * o, 256);
-        int oy = round_div(ny * o, 256);
+        int vx = nx * o, vy = ny * o;
+        int ox = (vx + (vx >= 0 ? 128 : -128)) / 256;
+        int oy = (vy + (vy >= 0 ? 128 : -128)) / 256;
         stroke(x0 + ox, y0 + oy, x1 + ox, y1 + oy, band_y, color, opacity);
     }
     fill_disc(x0, y0, r, band_y, color, opacity);
     fill_disc(x1, y1, r, band_y, color, opacity);
 }
 
+static void raster_line(const draw_item_t *it, int band_y) {
+    use_item_xform(it);
+    if (it->scale > 2) {
+        stroke_w(it->x, it->y, it->w, it->h, it->scale, band_y, it->color, it->opacity);
+    } else {
+        stroke(it->x, it->y, it->w, it->h, band_y, it->color, it->opacity);
+    }
+}
+
+#if !defined(AT32_SLIM_ROM)
 static void raster_svg(const draw_item_t *it, int band_y) {
     const ui_svg_cmd_t *cmd;
     const uint16_t *pal = 0;
@@ -849,6 +876,7 @@ static void raster_svg(const draw_item_t *it, int band_y) {
         }
     }
 }
+#endif
 
 typedef struct sample_axis {
     int value, error, step, remainder, denominator;
@@ -923,8 +951,8 @@ static void bitmap(const draw_item_t *it, int band_y, int ox, int oy,
                 for (k = 0; k < sw; k++) {
                     if (rem == 0) {
                         uint8_t b = *rle_p++;
-                        rem = (b >> 4) + 1;
-                        val = b & 15;
+                        rem = (b >> 2) + 1;
+                        val = (b & 3) * 5;
                     }
                     if (k < 64) dst[k] = val;
                     rem--;
@@ -936,9 +964,12 @@ static void bitmap(const draw_item_t *it, int band_y, int ox, int oy,
         for (x = x0; x < x1; x++, sample_next(&ax)) {
             int sx = ax.value;
             if (sx < 0 || sx >= sw) continue;
+#if !defined(AT32_SLIM_ROM)
             if (kind == KIND_IMAGE) {
                 pixel(x, y, band_y, ((const uint16_t *)data)[sy * sw + sx], it->opacity);
-            } else if (kind == KIND_MASK) {
+            } else
+#endif
+            if (kind == KIND_MASK) {
                 int a4;
                 if (box2) {
                     int sx1 = sx + 1 < sw ? sx + 1 : sx;
@@ -983,8 +1014,12 @@ static void bitmap(const draw_item_t *it, int band_y, int ox, int oy,
 }
 
 static void raster_image(const draw_item_t *it, int band_y) {
+#if !defined(AT32_SLIM_ROM)
     bitmap(it, band_y, it->x, it->y, it->w, it->h, it->scale,
            pic_ref[it->str_off], KIND_IMAGE);
+#else
+    (void)it; (void)band_y;
+#endif
 }
 
 static void raster_mask(const draw_item_t *it, int band_y) {
@@ -1041,21 +1076,28 @@ static void raster_mask1(const draw_item_t *it, int band_y) {
 }
 
 static draw_item_t *ext_item_add(int16_t x, int16_t y, int16_t w, int16_t h,
-                                 uint32_t ext_offset, uint8_t fmt,
-                                 uint16_t color, uint8_t opacity) {
+                                 const uint8_t *mem_ptr, uint32_t ext_offset,
+                                 uint8_t fmt, uint16_t color, uint8_t opacity,
+                                 uint16_t gen_tag) {
     draw_item_t *it;
+    int idx;
 
     if (!items || w <= 0 || h <= 0 || !item_space() || opacity == 0 ||
-        fmt < UI_EXT_FMT_1BPP || fmt > UI_EXT_FMT_RGB565_RLE) {
+        fmt < UI_EXT_FMT_1BPP || fmt > UI_EXT_FMT_RGB565_RLE ||
+        ext_src_n >= EXT_SRC_MAX) {
         return 0;
     }
+    idx = ext_src_n++;
+    ext_srcs[idx].mem_ptr = mem_ptr;
+    ext_srcs[idx].ext_off = ext_offset;
+    ext_srcs[idx].gen = gen_tag;
     it = &items[item_n++];
     it->x = x;
     it->y = y;
     it->w = w;
     it->h = h;
     it->color = color;
-    it->str_off = (uint16_t)ext_offset;
+    it->str_off = (uint16_t)idx;
     it->kind = KIND_EXT_IMAGE;
     it->opacity = opacity;
     it->scale = 1;
@@ -1070,25 +1112,27 @@ void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
     if (ext_offset >= HAL_EXT_FLASH_SIZE) {
         return;
     }
-    (void)ext_item_add(x, y, w, h, ext_offset, fmt, color, opacity);
+    (void)ext_item_add(x, y, w, h, 0, ext_offset, fmt, color, opacity, 0u);
+}
+
+void ui_ext_image_draw_fast(int16_t x, int16_t y, int16_t w, int16_t h,
+                            const uint8_t *mem_ptr, uint32_t ext_offset,
+                            uint8_t fmt, uint16_t color, uint8_t opacity,
+                            uint16_t gen_tag) {
+    if (!mem_ptr && ext_offset >= HAL_EXT_FLASH_SIZE) {
+        return;
+    }
+    (void)ext_item_add(x, y, w, h, mem_ptr, mem_ptr ? 0u : ext_offset,
+                       fmt, color, opacity, gen_tag);
 }
 
 void ui_mem_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint8_t *pal4_rle, uint8_t transparent0, uint8_t opacity) {
-    int ref;
-    draw_item_t *it;
-
     if (!pal4_rle) {
         return;
     }
-    ref = pic_add(pal4_rle);
-    if (ref < 0) {
-        return;
-    }
-    it = ext_item_add(x, y, w, h, 0u, UI_EXT_FMT_PAL4_RLE, transparent0 ? 1u : 0u, opacity);
-    if (it) {
-        it->pal_off = (uint16_t)(ref + 1);
-    }
+    (void)ext_item_add(x, y, w, h, pal4_rle, 0u, UI_EXT_FMT_PAL4_RLE,
+                       transparent0 ? 1u : 0u, opacity, 0u);
 }
 
 static const uint8_t *ext_mem_ptr;
@@ -1206,17 +1250,21 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     int row_bytes = 0;
     int loaded_sy = -1;
     uint8_t row_buf[256];
-    uint16_t pal[16];
+    uint16_t *pal = pal_cache;
     uint8_t skip0;
+    const ext_src_entry_t *src = &ext_srcs[it->str_off < EXT_SRC_MAX ? it->str_off : 0];
+    uint32_t base_off = src->ext_off;
     sample_axis_t ay, ax0;
 
-    ext_mem_ptr = it->pal_off ? (const uint8_t *)pic_ref[it->pal_off - 1] : 0;
-    skip0 = (uint8_t)(ext_mem_ptr && it->color);
+    ext_mem_ptr = src->mem_ptr;
+    skip0 = (uint8_t)(it->color != 0u);
     use_item_xform(it);
     if (fmt == UI_EXT_FMT_1BPP) {
         row_bytes = (sw + 7) >> 3;
+#if !defined(AT32_SLIM_ROM)
     } else if (fmt == UI_EXT_FMT_4BPP) {
         row_bytes = (sw + 1) >> 1;
+#endif
     } else if (fmt == UI_EXT_FMT_PAL4_RLE) {
         row_bytes = sw;
     } else {
@@ -1226,14 +1274,22 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
         return;
     }
     if (fmt == UI_EXT_FMT_PAL4_RLE) {
-        uint8_t raw_pal[32];
-        int k;
-        if ((!ext_mem_ptr && (uint32_t)it->str_off + 32u > HAL_EXT_FLASH_SIZE) ||
-            !read_img_src(it->str_off, raw_pal, 32u)) {
-            return;
-        }
-        for (k = 0; k < 16; k++) {
-            pal[k] = (uint16_t)(raw_pal[k * 2] | ((uint16_t)raw_pal[k * 2 + 1] << 8));
+        if (!pal_cache_valid || pal_cache_ptr != ext_mem_ptr ||
+            (!ext_mem_ptr && pal_cache_off != base_off) ||
+            pal_cache_gen != src->gen) {
+            uint8_t raw_pal[32];
+            int k;
+            if ((!ext_mem_ptr && base_off + 32u > HAL_EXT_FLASH_SIZE) ||
+                !read_img_src(base_off, raw_pal, 32u)) {
+                return;
+            }
+            for (k = 0; k < 16; k++) {
+                pal_cache[k] = (uint16_t)(raw_pal[k * 2] | ((uint16_t)raw_pal[k * 2 + 1] << 8));
+            }
+            pal_cache_ptr = ext_mem_ptr;
+            pal_cache_off = base_off;
+            pal_cache_gen = src->gen;
+            pal_cache_valid = 1u;
         }
     }
     x0 = tf_ox + it->x * tf_s / 256;
@@ -1247,6 +1303,63 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     if (x0 >= x1 || y0 >= y1) {
         return;
     }
+    /* Fast path: 1:1 unscaled opaque PAL4_RLE directly from on-chip XIP Flash/RAM (zero row_buf copy) */
+    if (ext_mem_ptr && tf_s == 256 && scale == 1 && it->opacity == 255 && !skip0 &&
+        fmt == UI_EXT_FMT_PAL4_RLE) {
+        const uint8_t *tbl = ext_mem_ptr + 32u;
+        const uint8_t *dat = tbl + (uint32_t)sh * 2u;
+        int ox = tf_ox + it->x;
+        int oy = tf_oy + it->y;
+        int sx0 = x0 - ox;
+        int sx1 = x1 - ox;
+        if (sx0 >= 0 && sx1 <= sw) {
+            for (y = y0; y < y1; y++) {
+                int sy = y - oy;
+                uint16_t r_start, r_end;
+                const uint8_t *rp;
+                const uint8_t *rend;
+                uint16_t *row_dst = band + (y - band_y) * UI_W;
+                int px = 0;
+                if (sy < 0 || sy >= sh) continue;
+                r_start = sy == 0 ? 0u : (uint16_t)(tbl[(sy - 1) * 2] | ((uint16_t)tbl[(sy - 1) * 2 + 1] << 8));
+                r_end = (uint16_t)(tbl[sy * 2] | ((uint16_t)tbl[sy * 2 + 1] << 8));
+                if (r_end <= r_start) continue;
+                rp = dat + r_start;
+                rend = dat + r_end;
+                while (px < sx1 && rp < rend) {
+                    uint8_t hdr = *rp++;
+                    int is_rep = (hdr & 0x80u) != 0;
+                    int n = (hdr & 0x7Fu) + (is_rep ? 2 : 1);
+                    if (is_rep) {
+                        uint16_t c;
+                        int end_px = px + n;
+                        int s_a, s_b;
+                        if (rp >= rend) break;
+                        c = pal[*rp++ & 0x0Fu];
+                        s_a = px > sx0 ? px : sx0;
+                        s_b = end_px < sx1 ? end_px : sx1;
+                        for (; s_a < s_b; s_a++) row_dst[ox + s_a] = c;
+                        px = end_px;
+                    } else {
+                        int i, nib = 0;
+                        for (i = 0; i < n && px < sw && rp <= rend; i++) {
+                            uint8_t ci;
+                            if ((i & 1) == 0) {
+                                if (rp >= rend) break;
+                                nib = *rp++;
+                                ci = (uint8_t)(nib >> 4);
+                            } else {
+                                ci = (uint8_t)(nib & 0x0Fu);
+                            }
+                            if (px >= sx0 && px < sx1) row_dst[ox + px] = pal[ci];
+                            px++;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+    }
     ax0 = sample_begin((x0 - (tf_ox + it->x * tf_s / 256)) * 256, tf_s * scale);
     ay = sample_begin((y0 - (tf_oy + it->y * tf_s / 256)) * 256, tf_s * scale);
     for (y = y0; y < y1; y++, sample_next(&ay)) {
@@ -1257,12 +1370,12 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
         }
         if (sy != loaded_sy) {
             if (fmt == UI_EXT_FMT_PAL4_RLE || fmt == UI_EXT_FMT_RGB565_RLE) {
-                if (!decode_ext_rle_row(fmt, it->str_off, sw, sh, sy, row_buf)) {
+                if (!decode_ext_rle_row(fmt, base_off, sw, sh, sy, row_buf)) {
                     return;
                 }
             } else {
-                uint32_t off = (uint32_t)it->str_off + (uint32_t)sy * (uint32_t)row_bytes;
-                if (!hal_ext_flash_read(off, row_buf, (uint32_t)row_bytes)) {
+                uint32_t off = base_off + (uint32_t)sy * (uint32_t)row_bytes;
+                if (!read_img_src(off, row_buf, (uint32_t)row_bytes)) {
                     return;
                 }
             }
@@ -1277,12 +1390,14 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
                 if ((row_buf[sx >> 3] >> (7 - (sx & 7))) & 1) {
                     pixel(x, y, band_y, it->color, it->opacity);
                 }
+#if !defined(AT32_SLIM_ROM)
             } else if (fmt == UI_EXT_FMT_4BPP) {
                 uint8_t b = row_buf[sx >> 1];
                 uint8_t a4 = (sx & 1) ? (b & 15u) : (b >> 4);
                 if (a4) {
                     pixel(x, y, band_y, it->color, (uint8_t)((int)it->opacity * a4 / 15));
                 }
+#endif
             } else if (fmt == UI_EXT_FMT_PAL4_RLE) {
                 uint8_t ci = (uint8_t)(row_buf[sx] & 15u);
                 if (!skip0 || ci != 0u) {
@@ -1391,8 +1506,11 @@ static history_t describe(const draw_item_t *it) {
     h = hash_bytes(h, fields, sizeof fields);
     h = hash_bytes(h, &it->pal_off, sizeof it->pal_off);
     h = hash_bytes(h, &it->pal_n, sizeof it->pal_n);
-    if (it->kind == KIND_RIPPLE || it->kind == KIND_EXT_IMAGE) {
+    if (it->kind == KIND_RIPPLE) {
         h = hash_bytes(h, &it->str_off, sizeof it->str_off);
+    } else if (it->kind == KIND_EXT_IMAGE) {
+        const ext_src_entry_t *es = &ext_srcs[it->str_off < EXT_SRC_MAX ? it->str_off : 0];
+        h = hash_bytes(h, es, sizeof *es);
     }
     if (it->kind == KIND_TEXT) {
         const char *s = strs + it->str_off;
@@ -1407,10 +1525,19 @@ static history_t describe(const draw_item_t *it) {
             pen += w * it->scale;
         }
     } else if (it->kind == KIND_LINE) {
-        extend(&x0, &x1, it->w, it->w);
-        extend(&y0, &y1, it->h, it->h);
-        x1 += 2;
-        y1++;
+        if (it->scale > 2) {
+            int half = it->scale / 2 + 1;
+            extend(&x0, &x1, x0 - half, x0 + half);
+            extend(&x0, &x1, it->w - half, it->w + half);
+            extend(&y0, &y1, y0 - half, y0 + half);
+            extend(&y0, &y1, it->h - half, it->h + half);
+        } else {
+            extend(&x0, &x1, it->w, it->w);
+            extend(&y0, &y1, it->h, it->h);
+            x1 += 2;
+            y1++;
+        }
+#if !defined(AT32_SLIM_ROM)
     } else if (it->kind == KIND_SVG) {
         const ui_svg_cmd_t *cmd = pic_ref[it->str_off];
         int i;
@@ -1439,6 +1566,7 @@ static history_t describe(const draw_item_t *it) {
                 }
             }
         }
+#endif
     } else {
         int scale = it->kind == KIND_IMAGE ? it->scale : 1;
         x1 += it->w * scale;
@@ -1450,6 +1578,10 @@ static history_t describe(const draw_item_t *it) {
             h = hash_bytes(h, pic_ref[it->str_off], (unsigned)stride_bytes * (unsigned)it->h);
         } else if (it->kind == KIND_IMAGE || (it->kind == KIND_MASK && it->pal_n)) {
             h = hash_bytes(h, &pic_ref[it->str_off], sizeof(void *));
+            if (it->kind == KIND_MASK && pic_ref[it->str_off]) {
+                unsigned sample_n = (it->w >= 16 && it->h >= 8) ? 16u : 2u;
+                h = hash_bytes(h, pic_ref[it->str_off], sample_n);
+            }
         }
     }
     x0 = it->tf_ox + x0 * it->tf_s / 256 - 1;
@@ -1509,6 +1641,7 @@ void ui_output_preempt(void) {
     output_preempt = 1;
 }
 
+#if !defined(AT32_SLIM_ROM)
 void ui_gif_post(int16_t x, int16_t y, int16_t w, int16_t h,
                  const uint16_t *rgb565) {
     gif_x = x;
@@ -1518,6 +1651,7 @@ void ui_gif_post(int16_t x, int16_t y, int16_t w, int16_t h,
     gif_px = rgb565;
     output_preempt = 1;
 }
+#endif
 
 static void wait_display(void) {
     uint32_t start = hal_tick_us();
@@ -1529,6 +1663,13 @@ static void wait_display(void) {
 }
 
 static void flush_gif(void) {
+#if defined(AT32_SLIM_ROM)
+    (void)gif_x; (void)gif_y; (void)gif_w; (void)gif_h; (void)gif_px;
+    if (!output_preempt) return;
+    wait_display();
+    invalidated = 1;
+    output_preempt = 0;
+#else
     int x0, x1, y0, y1, y;
     if (!output_preempt && !gif_px) return;
     wait_display();
@@ -1552,10 +1693,11 @@ static void flush_gif(void) {
     gif_px = 0;
     gif_w = 0;
     output_preempt = 0;
+#endif
 }
 
 void ui_draw_flush(void) {
-    int y, n, row, next_buffer = 0;
+    int y, n, next_buffer = 0;
     int snapshot, heal = 0;
     uint32_t start = hal_tick_us(), t0;
     memset(&stats, 0, sizeof stats);
@@ -1597,18 +1739,25 @@ void ui_draw_flush(void) {
         clip_x1 = UI_W;
         clip_y1 = y + h;
         w = UI_W;
+        int skip_clear = 0;
         band = buffers[next_buffer];
         t0 = hal_tick_us();
-        for (row = 0; row < h; row++) {
-            memset(band + row * UI_W, 0, (unsigned)w * 2u);
-        }
         for (n = 0; n < item_n; n++) {
             const draw_item_t *it = &items[n];
-            if (it->kind == KIND_FILL && it->opacity == 255 &&
+            int opaque_cov = (it->kind == KIND_FILL && it->opacity == 255) ||
+                (it->kind == KIND_EXT_IMAGE && it->opacity == 255 && !it->color &&
+                 it->pal_n >= UI_EXT_FMT_RGB565);
+            if (opaque_cov &&
                 it->tf_ox + it->x * it->tf_s / 256 <= clip_x0 &&
                 it->tf_oy + it->y * it->tf_s / 256 <= y &&
                 it->tf_ox + (it->x + it->w - 1) * it->tf_s / 256 + 1 >= clip_x1 &&
-                it->tf_oy + (it->y + it->h - 1) * it->tf_s / 256 + 1 >= clip_y1) first = n;
+                it->tf_oy + (it->y + it->h - 1) * it->tf_s / 256 + 1 >= clip_y1) {
+                first = n;
+                skip_clear = 1;
+            }
+        }
+        if (!skip_clear) {
+            memset(band, 0, (unsigned)h * (unsigned)UI_W * 2u);
         }
         for (n = first; n < item_n; n++) {
             const bounds_t *b = &history[n].box;
@@ -1618,7 +1767,9 @@ void ui_draw_flush(void) {
             case KIND_ROUND: raster_round(&items[n], y); break;
             case KIND_LINE: raster_line(&items[n], y); break;
             case KIND_TEXT: raster_text(&items[n], y); break;
+#if !defined(AT32_SLIM_ROM)
             case KIND_SVG: raster_svg(&items[n], y); break;
+#endif
             case KIND_IMAGE: raster_image(&items[n], y); break;
             case KIND_MASK: raster_mask(&items[n], y); break;
             case KIND_MASK1: raster_mask1(&items[n], y); break;

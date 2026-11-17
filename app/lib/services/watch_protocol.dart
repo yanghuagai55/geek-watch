@@ -580,6 +580,7 @@ class WatchConfigBundle {
     this.cfgLoadedFromI2c = false,
     this.imgReady = false,
     this.magCalSaved = false,
+    this.imgOnChip = false,
     this.cfgSource = 0,
     this.imgBytes = 0,
     this.imgFmt = 0,
@@ -608,6 +609,7 @@ class WatchConfigBundle {
   final bool cfgLoadedFromI2c;
   final bool imgReady;
   final bool magCalSaved;
+  final bool imgOnChip;
   final int cfgSource;
   final int imgBytes;
   final int imgFmt;
@@ -677,6 +679,7 @@ class WatchConfigBundle {
       cfgLoadedFromI2c: (hw & 0x02) != 0,
       imgReady: (hw & 0x04) != 0,
       magCalSaved: (hw & 0x08) != 0,
+      imgOnChip: (hw & 0x10) != 0,
       cfgSource: d[21],
       imgBytes: u16(22),
       imgFmt: d[24],
@@ -708,6 +711,14 @@ class WatchExtPoolState {
   final int msgMax;
   final int assetFlags;
   final bool hasAssetFlags;
+
+  bool get hasSysModAsset => hasAssetFlags && (assetFlags & 0x02) != 0;
+  bool get hasCompass3dAsset => hasAssetFlags && (assetFlags & 0x04) != 0;
+  bool get hasAboutAsset => hasAssetFlags && (assetFlags & 0x08) != 0;
+  bool get watchMusicActive => hasAssetFlags && (assetFlags & 0x10) != 0;
+  bool get hasHdrAsset => hasAssetFlags && (assetFlags & 0x20) != 0;
+  bool get hasSportModAsset => hasAssetFlags && (assetFlags & 0x40) != 0;
+  bool get hasAnalogModAsset => hasAssetFlags && (assetFlags & 0x80) != 0;
 
   static WatchExtPoolState? fromFrame(WatchFrame frame) {
     final d = frame.data;

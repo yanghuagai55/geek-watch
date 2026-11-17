@@ -76,6 +76,12 @@ flutter:
   assets:
     - assets/models/at32_watch.glb
     - assets/images/about_logo.png
+    - assets/blobs/compass3d_m4.bin
+    - assets/blobs/about_art.bin
+    - assets/blobs/headers_sthupo.bin
+    - assets/blobs/sport_mod_m4.bin
+    - assets/blobs/analog_mod_m4.bin
+    - assets/blobs/sys_mod_m4.bin
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

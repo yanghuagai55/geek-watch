@@ -1,6 +1,9 @@
 #include "hal_host.h"
 #include "panel.h"
 #include "ui.h"
+#include "settings.h"
+#include "compass3d_blob_test.h"
+#include "about_asset_test.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -40,6 +43,43 @@ static void default_shots(char *out, size_t cap) {
     snprintf(out, cap, "%s/obj/check_%dx%d", exe, UI_W, UI_H);
 }
 
+static void seed_link_blob(uint8_t id, const uint8_t *blob, uint16_t len) {
+    uint16_t crc = settings_crc16(blob, len);
+    uint16_t off = 0u;
+    uint8_t chunk = 0u;
+    uint8_t wire[160];
+
+    while (off < len) {
+        uint16_t left = (uint16_t)(len - off);
+        uint16_t take = left > 128u ? 128u : left;
+        uint16_t pay_len = (uint16_t)(6u + take);
+        uint8_t xsum = 0u;
+        int i;
+
+        wire[0] = 0xA5u;
+        wire[1] = 0x2Fu;
+        wire[2] = (uint8_t)pay_len;
+        wire[3] = id;
+        wire[4] = chunk++;
+        wire[5] = (uint8_t)(len & 0xFFu);
+        wire[6] = (uint8_t)(len >> 8);
+        wire[7] = (uint8_t)(crc & 0xFFu);
+        wire[8] = (uint8_t)(crc >> 8);
+        memcpy(wire + 9, blob + off, take);
+        for (i = 0; i < 3 + pay_len; i++) xsum ^= wire[i];
+        wire[3 + pay_len] = xsum;
+        hal_host_link_rx(wire, 4 + pay_len);
+        ui_frame();
+        off = (uint16_t)(off + take);
+    }
+}
+
+static void seed_interactive_ext_assets(void) {
+    seed_link_blob(LINK_ASSET_COMPASS3D, compass3d_m4_blob, (uint16_t)sizeof compass3d_m4_blob);
+    seed_link_blob(LINK_ASSET_ABOUT, about_art_blob, (uint16_t)sizeof about_art_blob);
+    hal_host_link_clear();
+}
+
 static void headless_init(void) {
     const hal_clock_t clock = {2026, 11, 11, 8, 30, 0};
     int i;
@@ -47,6 +87,7 @@ static void headless_init(void) {
     hal_host_use_virtual_time();
     hal_clock_set(&clock);
     ui_init();
+    seed_interactive_ext_assets();
     for (i = 0; i < 32; i++) ui_frame();
 }
 
@@ -134,6 +175,7 @@ int main(int argc, char **argv) {
     ui_set_trace(host_panel_trace);
     ui_set_service(hal_host_pump);
     ui_init();
+    seed_interactive_ext_assets();
     while (hal_host_running()) {
         hal_host_pump();
         if (!hal_host_running()) break;

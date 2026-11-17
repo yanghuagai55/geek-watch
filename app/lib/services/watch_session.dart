@@ -284,7 +284,18 @@ class WatchSession {
     return _command(WatchCmd.msgClear);
   }
 
-  /// 分块上传按需页面 1bpp 资源到手表 AT24C256 动态 ROM（0x2F）。
+  static int crc16Ccitt(Uint8List data) {
+    var crc = 0xFFFF;
+    for (final b in data) {
+      crc ^= b << 8;
+      for (var bit = 0; bit < 8; bit++) {
+        crc = (crc & 0x8000) != 0 ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+      }
+    }
+    return crc;
+  }
+
+  /// 分块上传按需页面 1bpp 资源到手表 AT24C256 动态 ROM（0x2F，id=1）。
   Future<bool> sendExtAsset({
     required int assetId,
     required int width,
@@ -302,6 +313,32 @@ class WatchSession {
         height & 0xFF,
         (height >> 8) & 0xFF,
         ...bits.sublist(offset, end),
+      ];
+      if (!await _command(WatchCmd.extAsset, pay)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// 分块上传可变长二进制模块/彩图包到手表 AT24C256（0x2F，id=3 3D指南针 / id=4 关于页）。
+  Future<bool> sendExtBlob({
+    required int assetId,
+    required Uint8List blob,
+  }) async {
+    const chunkSize = 128;
+    final totalLen = blob.length;
+    final crc = crc16Ccitt(blob);
+    for (var offset = 0, chunk = 0; offset < totalLen; offset += chunkSize, chunk++) {
+      final end = (offset + chunkSize < totalLen) ? offset + chunkSize : totalLen;
+      final pay = <int>[
+        assetId & 0xFF,
+        chunk & 0xFF,
+        totalLen & 0xFF,
+        (totalLen >> 8) & 0xFF,
+        crc & 0xFF,
+        (crc >> 8) & 0xFF,
+        ...blob.sublist(offset, end),
       ];
       if (!await _command(WatchCmd.extAsset, pay)) {
         return false;
@@ -393,8 +430,8 @@ class WatchSession {
     bool applyDial = true,
     void Function(int sentChunks, int totalChunks)? onProgress,
   }) {
-    if (bytes.isEmpty || bytes.length > 0x4400) {
-      throw ArgumentError.value(bytes.length, 'bytes', '大小需在 1..17408 字节内');
+    if (bytes.isEmpty || bytes.length > 0x5400) {
+      throw ArgumentError.value(bytes.length, 'bytes', '大小需在 1..21504 字节内');
     }
     return _serialize(() async {
       final transport = _transport;

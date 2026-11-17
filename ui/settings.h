@@ -53,7 +53,8 @@ typedef struct settings {
     int16_t img_w;        /* 自定义表盘底图宽 */
     int16_t img_h;        /* 自定义表盘底图高 */
     uint8_t img_fmt;      /* UI_EXT_FMT_* */
-    uint8_t img_ready;    /* AT24C256 LINK_EXT_OFF_IMG 是否存在有效自定义表盘图 */
+    uint8_t img_ready;    /* 自定义表盘图就绪 (0=无, 1=就绪) */
+    uint8_t img_on_chip;  /* 1=已交换进片内 Flash 热槽(0 I2C 读), 0=片外 AT24C256 */
     uint16_t img_bytes;   /* 压缩或原始字节长度 */
     uint8_t mag_cal_saved;/* 是否曾写入磁强计偏置 */
 } settings_t;
@@ -65,6 +66,7 @@ void settings_unpack_wire(const uint8_t *src20);
 int settings_load_ext(void);
 int settings_save_ext(uint8_t source_prio);
 void settings_record_clock(const void *hal_clock_ptr);
+uint16_t settings_crc16_step(uint16_t crc, const uint8_t *buf, uint32_t len);
 uint16_t settings_crc16(const uint8_t *buf, uint32_t len);
 
 #endif

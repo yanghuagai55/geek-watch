@@ -684,7 +684,7 @@ class _NotificationRules extends StatelessWidget {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('通知清理开关（开启即清空 / 重启不保留）'),
-            subtitle: const Text('同步至手表设置项「通知清理」，开启时自动抹除片外通知缓存'),
+            subtitle: const Text('开启时立即抹除并禁用持久化消息；手表端「清空通知」位于消息列表末尾（仅存在消息时显示）'),
             value: controller.autoClearMessages,
             onChanged: controller.setAutoClearMessages,
           ),

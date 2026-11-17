@@ -414,15 +414,6 @@ class SettingsPage extends StatelessWidget {
               value: controller.use24Hour,
               onChanged: controller.setUse24Hour,
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('通知清理开关（重启自动清空）'),
-              subtitle: const Text(
-                '开启时立即清空手表 AT24C256 持久化消息且重启不再保留；关闭可断电永久留存最多 20 条',
-              ),
-              value: controller.autoClearMessages,
-              onChanged: controller.setAutoClearMessages,
-            ),
             Row(
               children: [
                 const Text('每日步数目标', style: TextStyle(fontWeight: FontWeight.w600)),

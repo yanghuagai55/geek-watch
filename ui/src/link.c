@@ -1,6 +1,9 @@
 #include "ui.h"
+#include "ui_menu.h"
 #include "settings.h"
 #include "sport.h"
+#include "compass3d.h"
+#include "pic_mod.h"
 
 #include <string.h>
 
@@ -80,22 +83,23 @@ enum {
     LINK_MSG_DETAIL_H = 160,
     LINK_MSG_DETAIL_CHUNKS = 20,
     LINK_ROW_BYTES = LINK_BMP_W * 22 / 8,
-    LINK_LIST_WIN_ROWS = 6,
+    LINK_LIST_WIN_ROWS = 5,
     LINK_MEDIA_BYTES = LINK_BMP_W * LINK_BMP_H / 2,
     LINK_LIST_BYTES = LINK_ROW_BYTES * LINK_LIST_WIN_ROWS,
     LINK_MASK_BYTES = LINK_BMP_W * LINK_MSG_DETAIL_H / 8,
     LINK_ASSET_COMPASS_W = 64,
     LINK_ASSET_COMPASS_H = 64,
     LINK_ASSET_COMPASS_BYTES = 4 + LINK_ASSET_COMPASS_W * LINK_ASSET_COMPASS_H / 8,
-    LINK_ASSET_MSG_W = 96,
-    LINK_ASSET_MSG_H = 40,
-    LINK_ASSET_MSG_BYTES = 4 + LINK_ASSET_MSG_W * LINK_ASSET_MSG_H / 8,
     DYN_NONE = 0,
     DYN_MEDIA = 1,
     DYN_MSG_LIST = 2,
     DYN_MSG_DETAIL = 3,
     DYN_COMPASS = 4,
-    DYN_MSG_ASSET = 5,
+    DYN_COMPASS3D = 5,
+    DYN_ABOUT = 6,
+    DYN_SPORT = 7,
+    DYN_ANALOG = 8,
+    DYN_SYS = 9,
     ST_MARK = 0,
     ST_CMD = 1,
     ST_LEN = 2,
@@ -108,8 +112,8 @@ enum {
 };
 
 #define EXT_DIR_MAGIC     0x41544431u /* 'ATD1' */
-#define EXT_DIR_VER       2u
-#define EXT_DIR_RECLEN    192u
+#define EXT_DIR_VER       4u
+#define EXT_DIR_RECLEN    220u
 #define EXT_DIR_SLOT0     (LINK_EXT_OFF_DIR + 0x000u)
 #define EXT_DIR_SLOT1     (LINK_EXT_OFF_DIR + 0x100u)
 
@@ -125,7 +129,13 @@ enum {
     EXT_BLK_ASSET0 = 2 + LINK_EXT_MSG_MAX * 2,
     EXT_BLK_ASSET_COMPASS = EXT_BLK_ASSET0,
     EXT_BLK_ASSET_MSG_EMPTY = EXT_BLK_ASSET0 + 1,
-    EXT_BLK_TOTAL = EXT_BLK_ASSET0 + 2
+    EXT_BLK_ASSET_COMPASS3D = EXT_BLK_ASSET0 + 2,
+    EXT_BLK_ASSET_ABOUT = EXT_BLK_ASSET0 + 3,
+    EXT_BLK_ASSET_HEADERS = EXT_BLK_ASSET0 + 4,
+    EXT_BLK_ASSET_SPORT = EXT_BLK_ASSET0 + 5,
+    EXT_BLK_ASSET_ANALOG = EXT_BLK_ASSET0 + 6,
+    EXT_BLK_ASSET_SYS = EXT_BLK_ASSET0 + 7,
+    EXT_BLK_TOTAL = EXT_BLK_ASSET0 + 8
 };
 
 typedef struct {
@@ -135,7 +145,16 @@ typedef struct {
     uint8_t active_slot;
 } ext_dir_t;
 
+enum {
+    HDR_IDX_BYTES = 240u,
+    HDR_RING_BYTES = 1360u,
+    HDR_BUF_BYTES = HDR_IDX_BYTES + HDR_RING_BYTES,
+    HDR_SLOTS = 10
+};
+
+#if !defined(AT32_SLIM_ROM)
 static char msgs[LINK_MSG_N][LINK_MSG_LEN];
+#endif
 static char lyric[LINK_LYRIC_LEN];
 /* 动态位图缓冲 + 统一片外 32KB I2C Flash 动态块分配与掉电恢复。 */
 static struct {
@@ -148,13 +167,44 @@ static struct {
     uint8_t *rx_det;
     uint8_t *rx_asset;
     uint16_t rx_asset_need;
+    uint16_t rx_asset_crc;
+    uint16_t rx_asset_off;
     uint8_t rx_asset_id;
+    uint8_t *c3d_buf;
+    uint16_t c3d_entry;
+    uint16_t c3d_total;
+    uint8_t pic_ready_kind;
+    uint16_t pic_entry;
+    uint8_t about_ready;
+    uint8_t about_want;
+    uint16_t about_total;
+    uint16_t about_crc;
+    uint8_t hdr_ready;
+    uint8_t hdr_active;
+    uint8_t hdr_loaded;
+    uint8_t hdr_count;
+    uint16_t hdr_cover_off;
+    uint16_t hdr_total;
+    uint8_t *hdr_buf;
+    uint16_t hdr_wr;
+    uint16_t hdr_slot_cp[HDR_SLOTS];
+    uint16_t hdr_slot_off[HDR_SLOTS];
+    uint16_t hdr_slot_end[HDR_SLOTS];
+    uint8_t hdr_slot_next;
+    uint32_t load_ext_off;
+    uint16_t load_pos;
+    uint16_t load_need;
+    uint16_t load_crc;
+    uint16_t load_entry;
+    uint8_t load_kind;
     uint8_t rx_det_slot;
     uint8_t list_target_n;
     uint16_t media_staging_off;
     uint8_t media_staging_ok;
     uint8_t detail_slot;
     uint8_t img_ready;
+    uint8_t img_to_chip;
+    uint16_t img_gen;
     uint8_t img_fmt;
     int16_t img_w;
     int16_t img_h;
@@ -205,6 +255,7 @@ static void copy_text(char *dst, int cap, const uint8_t *src, int n) {
     dst[n] = 0;
 }
 
+#if !defined(AT32_SLIM_ROM)
 static void copy_cstr(char *dst, int cap, const char *src) {
     int n = 0;
     while (src[n]) {
@@ -212,6 +263,7 @@ static void copy_cstr(char *dst, int cap, const char *src) {
     }
     copy_text(dst, cap, (const uint8_t *)src, n);
 }
+#endif
 
 static void reply(const char *s) {
     int n = 0;
@@ -296,7 +348,8 @@ static void send_cfg_state(void) {
     frame[23] = (uint8_t)((hal_ext_flash_present() ? 0x01u : 0u) |
                           (s->cfg_loaded ? 0x02u : 0u) |
                           (s->img_ready ? 0x04u : 0u) |
-                          (s->mag_cal_saved ? 0x08u : 0u));
+                          (s->mag_cal_saved ? 0x08u : 0u) |
+                          ((s->img_ready && s->img_on_chip) ? 0x10u : 0u));
     frame[24] = s->cfg_source;
     u16_put(frame + 25, s->img_bytes);
     frame[27] = s->img_fmt;
@@ -396,12 +449,16 @@ static int blk_ok(uint16_t off, uint16_t blen) {
     return blen > 0u && (uint32_t)off + (uint32_t)blen <= LINK_EXT_POOL_SIZE;
 }
 
-static int ext_pool_alloc_or_query(uint16_t need, uint16_t *out_off, uint16_t *free_max_out) {
+/* 双端防碎片动态池分配：top_down=0 从低端向上分配（表盘/静态ROM资产）；top_down=1 从高端向下分配（消息/媒体）。 */
+static int ext_pool_alloc_ex(uint16_t need, int top_down,
+                             uint16_t *out_off, uint16_t *free_max_out) {
     for (;;) {
         ext_blk_t blks[EXT_BLK_TOTAL];
         int n = ext_collect_blks(blks, (int)(sizeof blks / sizeof blks[0]));
         uint16_t cursor = 0u;
         uint16_t best = 0u;
+        uint16_t picked = 0u;
+        int have = 0;
         int i;
 
         for (i = 0; i <= n; i++) {
@@ -410,8 +467,12 @@ static int ext_pool_alloc_or_query(uint16_t need, uint16_t *out_off, uint16_t *f
                 uint16_t gap = (uint16_t)(end - cursor);
                 if (gap > best) best = gap;
                 if (need > 0u && gap >= need) {
-                    if (out_off) *out_off = cursor;
-                    return 1;
+                    if (!top_down) {
+                        if (out_off) *out_off = cursor;
+                        return 1;
+                    }
+                    picked = (uint16_t)(end - need);
+                    have = 1;
                 }
             }
             if (i < n) {
@@ -420,6 +481,10 @@ static int ext_pool_alloc_or_query(uint16_t need, uint16_t *out_off, uint16_t *f
                     cursor = nxt > LINK_EXT_POOL_SIZE ? (uint16_t)LINK_EXT_POOL_SIZE : (uint16_t)nxt;
                 }
             }
+        }
+        if (have) {
+            if (out_off) *out_off = picked;
+            return 1;
         }
         if (need == 0u) {
             if (free_max_out) *free_max_out = best;
@@ -442,8 +507,8 @@ static int ext_pool_alloc_or_query(uint16_t need, uint16_t *out_off, uint16_t *f
     }
 }
 
-static int ext_pool_alloc(uint16_t need, uint16_t *out_off) {
-    return ext_pool_alloc_or_query(need, out_off, 0);
+static int ext_pool_alloc(uint16_t need, int top_down, uint16_t *out_off) {
+    return ext_pool_alloc_ex(need, top_down, out_off, 0);
 }
 
 void link_ext_pool_stats(uint16_t *total, uint16_t *used, uint16_t *free_max,
@@ -458,7 +523,7 @@ void link_ext_pool_stats(uint16_t *total, uint16_t *used, uint16_t *free_max,
     for (i = EXT_BLK_ASSET0; i < EXT_BLK_TOTAL; i++) {
         ab = (uint16_t)(ab + lk.ext_dir.blks[i].len);
     }
-    (void)ext_pool_alloc_or_query(0u, 0, &fm);
+    (void)ext_pool_alloc_ex(0u, 0, 0, &fm);
     if (total) *total = LINK_EXT_POOL_SIZE;
     if (used) *used = (uint16_t)(lk.ext_dir.blks[EXT_BLK_IMG].len + lk.ext_dir.blks[EXT_BLK_MEDIA].len + mb + ab);
     if (free_max) *free_max = fm;
@@ -482,7 +547,13 @@ static void send_ext_pool_state(void) {
     frame[13] = mn;
     frame[14] = LINK_EXT_MSG_MAX;
     frame[15] = (uint8_t)((lk.ext_dir.blks[EXT_BLK_ASSET_COMPASS].len > 0u ? 0x01u : 0u) |
-                          (lk.ext_dir.blks[EXT_BLK_ASSET_MSG_EMPTY].len > 0u ? 0x02u : 0u));
+                          (lk.ext_dir.blks[EXT_BLK_ASSET_SYS].len > 12u ? 0x02u : 0u) |
+                          (lk.ext_dir.blks[EXT_BLK_ASSET_COMPASS3D].len > 12u ? 0x04u : 0u) |
+                          (lk.about_ready ? 0x08u : 0u) |
+                          (ui_app_music_active() ? 0x10u : 0u) |
+                          (lk.hdr_ready ? 0x20u : 0u) |
+                          (lk.ext_dir.blks[EXT_BLK_ASSET_SPORT].len > 12u ? 0x40u : 0u) |
+                          (lk.ext_dir.blks[EXT_BLK_ASSET_ANALOG].len > 12u ? 0x80u : 0u));
     send_frame_buf(frame, 13u);
 }
 
@@ -550,7 +621,7 @@ static uint16_t packbits_stream(const uint8_t *src, uint16_t raw_len,
     return w.out_n;
 }
 
-static int ext_store_blob(const uint8_t *raw, uint16_t raw_len,
+static int ext_store_blob(const uint8_t *raw, uint16_t raw_len, int top_down,
                           uint16_t *off_slot, uint16_t *len_slot) {
     uint16_t comp_n, store_n, off = 0u;
     int ok = 1;
@@ -562,7 +633,7 @@ static int ext_store_blob(const uint8_t *raw, uint16_t raw_len,
     }
     comp_n = packbits_stream(raw, raw_len, 0, 0u, 0);
     store_n = (comp_n > 0u && comp_n < raw_len) ? comp_n : raw_len;
-    if (!ext_pool_alloc(store_n, &off)) {
+    if (!ext_pool_alloc(store_n, top_down, &off)) {
         return 0;
     }
     if (store_n < raw_len) {
@@ -645,7 +716,7 @@ static void ext_save_msg_blob(int slot, int is_det, const uint8_t *raw, uint16_t
     blk = &lk.ext_dir.blks[EXT_BLK_MSG0 + slot * 2 + (is_det ? 1 : 0)];
     blk->off = 0u;
     blk->len = 0u;
-    (void)ext_store_blob(raw, raw_len, &blk->off, &blk->len);
+    (void)ext_store_blob(raw, raw_len, 1, &blk->off, &blk->len);
 }
 
 static void ext_save_msg_row(int slot, const uint8_t *row352) {
@@ -673,6 +744,22 @@ static void free_rx_scratch(void) {
     lk.rx_asset_need = 0u;
 }
 
+static void free_c3d_buf(void) {
+    if (lk.load_kind == DYN_COMPASS3D) {
+        lk.load_need = 0u;
+        lk.load_pos = 0u;
+        lk.load_kind = DYN_NONE;
+        lk.load_crc = 0u;
+        lk.load_entry = 0u;
+    }
+    if (lk.c3d_buf) {
+        ui_mem_free(lk.c3d_buf);
+        lk.c3d_buf = 0;
+    }
+    lk.c3d_entry = 0u;
+    lk.c3d_total = 0u;
+}
+
 static void free_dyn_buf(void) {
     if (lk.dyn_buf) {
         ui_mem_free(lk.dyn_buf);
@@ -680,10 +767,105 @@ static void free_dyn_buf(void) {
     }
     lk.dyn_cap = 0;
     lk.dyn_kind = DYN_NONE;
+    if (lk.load_kind != DYN_COMPASS3D) {
+        lk.load_need = 0u;
+        lk.load_pos = 0u;
+        lk.load_kind = DYN_NONE;
+        lk.load_crc = 0u;
+        lk.load_entry = 0u;
+    }
+    lk.pic_ready_kind = DYN_NONE;
+    lk.pic_entry = 0u;
     memset(lk.win_row_id, 0xFF, sizeof lk.win_row_id);
 }
 
-static int load_msg_empty_asset(void);
+static void free_hdr_buf(void) {
+    if (lk.hdr_buf) {
+        ui_mem_free(lk.hdr_buf);
+        lk.hdr_buf = 0;
+    }
+    lk.hdr_loaded = 0u;
+    lk.hdr_wr = 0u;
+    lk.hdr_slot_next = 0u;
+    memset(lk.hdr_slot_cp, 0, sizeof lk.hdr_slot_cp);
+    memset(lk.hdr_slot_off, 0, sizeof lk.hdr_slot_off);
+}
+
+static uint16_t ext_flash_crc16(uint32_t abs_off, uint32_t len) {
+    uint8_t buf[32];
+    uint16_t crc = 0xFFFFu;
+    uint32_t pos = 0u;
+
+    while (pos < len) {
+        uint32_t n = (len - pos > (uint32_t)sizeof buf) ? (uint32_t)sizeof buf : (len - pos);
+        if (!hal_ext_flash_read(abs_off + pos, buf, n)) {
+            return 0u;
+        }
+        crc = settings_crc16_step(crc, buf, n);
+        pos += n;
+    }
+    return crc;
+}
+
+static void load_about_meta(void) {
+    ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_ABOUT];
+    uint8_t hdr[16];
+    uint16_t off0, total, crc;
+
+    lk.about_ready = 0u;
+    lk.about_total = 0u;
+    lk.about_crc = 0u;
+    if (!hal_ext_flash_present() || b->len < 40u) {
+        return;
+    }
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off, hdr, sizeof hdr)) {
+        return;
+    }
+    if (u32_get(hdr + 0) != 0x32544241u) { /* 'ABT2' */
+        return;
+    }
+    off0 = u16_get(hdr + 8);
+    total = u16_get(hdr + 10);
+    crc = u16_get(hdr + 12);
+    if (!hdr[4] || !hdr[5] || hdr[6] != 3u ||
+        off0 != 40u || total <= off0 || total > 3712u || total > b->len) {
+        return;
+    }
+    lk.about_total = total;
+    lk.about_crc = crc;
+    lk.about_ready = 1u;
+}
+
+static void load_hdr_meta(void) {
+    ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_HEADERS];
+    uint8_t hdr[12];
+    uint16_t cnt, cov, total;
+
+    lk.hdr_ready = 0u;
+    lk.hdr_count = 0u;
+    lk.hdr_cover_off = 0u;
+    lk.hdr_total = 0u;
+    if (!hal_ext_flash_present() || b->len < 24u) {
+        return;
+    }
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off, hdr, sizeof hdr)) {
+        return;
+    }
+    if (u32_get(hdr + 0) != 0x31444853u) { /* 'SHD1' */
+        return;
+    }
+    cnt = u16_get(hdr + 4);
+    cov = u16_get(hdr + 6);
+    total = u16_get(hdr + 8);
+    if (cnt == 0u || cnt > 24u || cov < 12u + cnt * 10u ||
+        cov - 12u > HDR_IDX_BYTES || total <= cov || total > b->len) {
+        return;
+    }
+    lk.hdr_count = (uint8_t)cnt;
+    lk.hdr_cover_off = cov;
+    lk.hdr_total = total;
+    lk.hdr_ready = 1u;
+}
 
 void link_clear_ext_messages(void) {
     memset(&lk.ext_dir.blks[EXT_BLK_MSG0], 0, LINK_EXT_MSG_MAX * 2 * sizeof(ext_blk_t));
@@ -696,14 +878,12 @@ void link_clear_ext_messages(void) {
     lk.msg_detail_ready = 0;
     lk.msg_detail_loading = 0;
     free_rx_scratch();
-    if (lk.dyn_kind == DYN_MSG_LIST || lk.dyn_kind == DYN_MSG_DETAIL || lk.dyn_kind == DYN_MSG_ASSET) {
+    if (lk.dyn_kind == DYN_MSG_LIST || lk.dyn_kind == DYN_MSG_DETAIL) {
         free_dyn_buf();
     }
     ext_dir_save();
-    if (ui_app_message_active()) {
-        (void)load_msg_empty_asset();
-    }
     ui_app_set_message_count(0);
+    send_ext_pool_state();
     ui_draw_invalidate();
 }
 
@@ -722,6 +902,9 @@ void link_load_ext(void) {
 
     memset(&lk.ext_dir, 0, sizeof lk.ext_dir);
     memset(lk.win_row_id, 0xFF, sizeof lk.win_row_id);
+    lk.about_ready = 0u;
+    lk.hdr_ready = 0u;
+    free_hdr_buf();
     if (!hal_ext_flash_present()) {
         ui_app_set_message_count(0);
         return;
@@ -760,10 +943,13 @@ void link_load_ext(void) {
             validate_blk(&lk.ext_dir.blks[i].off, &lk.ext_dir.blks[i].len);
         }
     }
-    if (!cfg->img_ready || lk.ext_dir.blks[EXT_BLK_IMG].len == 0u) {
+    load_about_meta();
+    load_hdr_meta();
+    if (!cfg->img_ready || (!cfg->img_on_chip && lk.ext_dir.blks[EXT_BLK_IMG].len == 0u)) {
         lk.ext_dir.blks[EXT_BLK_IMG].off = 0u;
         lk.ext_dir.blks[EXT_BLK_IMG].len = 0u;
         cfg->img_ready = 0u;
+        cfg->img_on_chip = 0u;
     } else {
         lk.img_ready = 1u;
     }
@@ -781,11 +967,18 @@ uint32_t link_ext_img_offset(void) {
 }
 
 static uint8_t *ensure_dyn_buf(uint8_t kind, uint16_t size) {
+    if (kind != DYN_SPORT && lk.c3d_buf) {
+        free_c3d_buf();
+    }
     if (lk.dyn_buf && lk.dyn_kind == kind && lk.dyn_cap == size) {
         return lk.dyn_buf;
     }
     free_dyn_buf();
     lk.dyn_buf = (uint8_t *)ui_mem_alloc(size, 4);
+    if (!lk.dyn_buf && lk.c3d_buf) {
+        free_c3d_buf();
+        lk.dyn_buf = (uint8_t *)ui_mem_alloc(size, 4);
+    }
     if (lk.dyn_buf) {
         lk.dyn_cap = size;
         lk.dyn_kind = kind;
@@ -812,6 +1005,7 @@ static void expand_media_row_chunk(uint8_t *media_dst, uint8_t chunk, const uint
 }
 
 
+#if !defined(AT32_SLIM_ROM)
 static void synth_compass_asset(uint8_t *dst) {
     uint8_t *pix = dst + 4;
     int x, y;
@@ -836,30 +1030,84 @@ static void synth_compass_asset(uint8_t *dst) {
         pix[(7 + x) * 8 + (rx >> 3)] |= (uint8_t)(0x80u >> (rx & 7));
     }
 }
+#endif
 
-static void synth_msg_empty_asset(uint8_t *dst) {
-    uint8_t *pix = dst + 4;
-    int i;
+static int begin_pic_load(int blk_idx, uint32_t magic, uint8_t dyn_kind, uint16_t max_sz) {
+    ext_blk_t *b = &lk.ext_dir.blks[blk_idx];
+    uint8_t hdr[12];
+    uint16_t flags, entry_off, total, crc;
+    uint8_t *buf;
 
-    u16_put(dst + 0, LINK_ASSET_MSG_W);
-    u16_put(dst + 2, LINK_ASSET_MSG_H);
-    memset(pix, 0, LINK_ASSET_MSG_BYTES - 4u);
-    for (i = 26; i <= 69; i++) {
-        pix[6 * 12 + (i >> 3)] |= (uint8_t)(0x80u >> (i & 7));
-        pix[33 * 12 + (i >> 3)] |= (uint8_t)(0x80u >> (i & 7));
+    if (dyn_kind != DYN_COMPASS3D) {
+        lk.pic_ready_kind = DYN_NONE;
+        lk.pic_entry = 0u;
     }
-    for (i = 6; i <= 33; i++) {
-        pix[i * 12 + 3] |= 0x20u;
-        pix[i * 12 + 8] |= 0x04u;
+    if (!hal_ext_flash_present() || b->len < 16u || b->len > max_sz) {
+        return 0;
     }
-    for (i = 0; i <= 21; i++) {
-        int r = 7 + i * 2 / 3;
-        int xl = 27 + i, xr = 68 - i;
-        pix[r * 12 + (xl >> 3)] |= (uint8_t)(0x80u >> (xl & 7));
-        pix[r * 12 + (xr >> 3)] |= (uint8_t)(0x80u >> (xr & 7));
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off, hdr, sizeof hdr)) {
+        return 0;
     }
+    if (u32_get(hdr + 0) != magic) {
+        return 0;
+    }
+    flags = u16_get(hdr + 4);
+    entry_off = u16_get(hdr + 6);
+    total = u16_get(hdr + 8);
+    crc = u16_get(hdr + 10);
+    if ((flags >> 8) != COMPASS3D_ABI_VER || (flags & 1u) == 0u ||
+        entry_off < 12u || total <= entry_off || total > b->len) {
+        return 0;
+    }
+    if (dyn_kind == DYN_COMPASS3D) {
+        free_c3d_buf();
+        buf = (uint8_t *)ui_mem_alloc(total, 4);
+        if (!buf) {
+            free_dyn_buf();
+            buf = (uint8_t *)ui_mem_alloc(total, 4);
+        }
+        lk.c3d_buf = buf;
+    } else {
+        buf = ensure_dyn_buf(dyn_kind, total);
+    }
+    if (!buf) {
+        return 0;
+    }
+    memcpy(buf, hdr, sizeof hdr);
+    lk.load_kind = dyn_kind;
+    lk.load_entry = entry_off;
+    lk.load_crc = crc;
+    lk.load_ext_off = LINK_EXT_OFF_POOL + (uint32_t)b->off;
+    lk.load_pos = (uint16_t)sizeof hdr;
+    lk.load_need = total;
+    return 1;
 }
 
+static int begin_compass3d_load(void) {
+    return begin_pic_load(EXT_BLK_ASSET_COMPASS3D, COMPASS3D_MAGIC, DYN_COMPASS3D, 4096u);
+}
+
+static int begin_about_load(void) {
+    ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_ABOUT];
+    uint8_t *buf;
+
+    if (!lk.about_ready || !hal_ext_flash_present() ||
+        lk.about_total < 40u || lk.about_total > b->len) {
+        return 0;
+    }
+    buf = ensure_dyn_buf(DYN_ABOUT, lk.about_total);
+    if (!buf) {
+        return 0;
+    }
+    lk.load_kind = DYN_ABOUT;
+    lk.load_crc = lk.about_crc;
+    lk.load_ext_off = LINK_EXT_OFF_POOL + (uint32_t)b->off;
+    lk.load_pos = 0u;
+    lk.load_need = lk.about_total;
+    return 1;
+}
+
+#if !defined(AT32_SLIM_ROM)
 static int load_asset_blk(int blk_idx, uint16_t raw_len, uint8_t dyn_kind,
                           void (*synth)(uint8_t *)) {
     uint8_t *buf;
@@ -883,32 +1131,158 @@ static int load_asset_blk(int blk_idx, uint16_t raw_len, uint8_t dyn_kind,
     }
     synth(buf);
     if (hal_ext_flash_present()) {
-        if (ext_store_blob(buf, raw_len, &b->off, &b->len)) {
+        if (ext_store_blob(buf, raw_len, 0, &b->off, &b->len)) {
             ext_dir_save();
         }
     }
     return 1;
 }
+#endif
 
-static int load_msg_empty_asset(void) {
-    return load_asset_blk(EXT_BLK_ASSET_MSG_EMPTY, LINK_ASSET_MSG_BYTES,
-                          DYN_MSG_ASSET, synth_msg_empty_asset);
+static void compass_fallback_load(void) {
+    free_c3d_buf();
+#if defined(AT32_SLIM_ROM)
+    (void)begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
+#else
+    (void)load_asset_blk(EXT_BLK_ASSET_COMPASS, LINK_ASSET_COMPASS_BYTES,
+                         DYN_COMPASS, synth_compass_asset);
+#endif
+}
+
+static void finish_dyn_load(void) {
+    uint8_t kind = lk.load_kind;
+    uint16_t total = lk.load_need;
+    uint16_t crc = lk.load_crc;
+    uint16_t entry = lk.load_entry;
+    uint8_t *buf = (kind == DYN_COMPASS3D) ? lk.c3d_buf : lk.dyn_buf;
+
+    if ((kind == DYN_COMPASS3D || kind == DYN_SPORT || kind == DYN_ANALOG || kind == DYN_SYS) &&
+        buf && total >= 16u &&
+        settings_crc16(buf + 12u, (uint32_t)(total - 12u)) == crc) {
+        lk.load_need = 0u;
+        lk.load_pos = 0u;
+        lk.load_kind = DYN_NONE;
+        if (kind == DYN_COMPASS3D) {
+            lk.c3d_entry = entry;
+            lk.c3d_total = total;
+        } else {
+            lk.pic_ready_kind = kind;
+            lk.pic_entry = entry;
+        }
+        ui_draw_invalidate();
+        return;
+    }
+    if (kind == DYN_ABOUT && buf && total >= 40u) {
+        uint16_t off0 = u16_get(buf + 8);
+        uint16_t hdr_tot = u16_get(buf + 10);
+        uint16_t hdr_crc = u16_get(buf + 12);
+        int i, ok = (u32_get(buf + 0) == 0x32544241u && off0 == 40u &&
+                     hdr_tot == total && hdr_crc == crc && buf[6] == 3u &&
+                     settings_crc16(buf + 40u, (uint32_t)(total - 40u)) == crc);
+        for (i = 0; ok && i < 3; i++) {
+            const uint8_t *d = buf + 16 + i * 8;
+            uint16_t ol = u16_get(d + 0);
+            uint16_t orr = u16_get(d + 2);
+            uint8_t gw = d[4], gh = d[5], wl = d[6];
+            uint8_t wr = (uint8_t)(gw - wl);
+            if (!gw || !gh || wl == 0u || wl > 64u || wr > 64u ||
+                ol < off0 || ol >= total || orr < ol || (wr > 0u ? (orr >= total) : (orr > total))) {
+                ok = 0;
+            }
+        }
+        if (ok) {
+            lk.load_need = 0u;
+            lk.load_pos = 0u;
+            lk.load_kind = DYN_NONE;
+            ui_draw_invalidate();
+            return;
+        }
+    }
+    if (kind == DYN_COMPASS3D) {
+        compass_fallback_load();
+    } else {
+        free_dyn_buf();
+    }
+    ui_draw_invalidate();
+}
+
+void link_asset_pump(uint16_t max_bytes) {
+    uint16_t rem, take;
+    uint8_t kind = lk.load_kind;
+    uint8_t *dst;
+
+    if (lk.load_need == 0u) {
+        return;
+    }
+    dst = (kind == DYN_COMPASS3D) ? lk.c3d_buf : lk.dyn_buf;
+    if (!dst || (kind != DYN_COMPASS3D && (lk.dyn_kind != kind || lk.dyn_cap < lk.load_need)) ||
+        !hal_ext_flash_present()) {
+        if (kind == DYN_COMPASS3D) free_c3d_buf();
+        else free_dyn_buf();
+        return;
+    }
+    rem = (uint16_t)(lk.load_need - lk.load_pos);
+    if ((kind == DYN_SYS || kind == DYN_SPORT || kind == DYN_ANALOG) && max_bytes > 0u && max_bytes < 1024u) {
+        max_bytes = 1024u;
+    }
+    take = (max_bytes > 0u && rem > max_bytes) ? max_bytes : rem;
+    if (take > 0u &&
+        !hal_ext_flash_read(lk.load_ext_off + lk.load_pos, dst + lk.load_pos, take)) {
+        if (kind == DYN_COMPASS3D) {
+            compass_fallback_load();
+        } else {
+            free_dyn_buf();
+        }
+        ui_draw_invalidate();
+        return;
+    }
+    lk.load_pos = (uint16_t)(lk.load_pos + take);
+    if (lk.load_pos >= lk.load_need) {
+        finish_dyn_load();
+    }
+}
+
+void link_asset_finish(void) {
+    while (lk.load_need > 0u) {
+        link_asset_pump(lk.load_need);
+    }
+}
+
+void link_begin_compass(void) {
+    lk.media_mask_ready = 0;
+    if (lk.c3d_buf && (lk.load_kind == DYN_COMPASS3D || lk.c3d_total >= 16u)) {
+        return;
+    }
+    if (begin_compass3d_load()) {
+        return;
+    }
+#if defined(AT32_SLIM_ROM)
+    if (lk.dyn_kind == DYN_SPORT && lk.dyn_buf &&
+        (lk.load_need > 0u || lk.pic_ready_kind == DYN_SPORT)) {
+        return;
+    }
+    (void)begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
+#else
+    (void)load_asset_blk(EXT_BLK_ASSET_COMPASS, LINK_ASSET_COMPASS_BYTES,
+                         DYN_COMPASS, synth_compass_asset);
+#endif
 }
 
 void link_enter_compass(void) {
-    lk.media_mask_ready = 0;
-    (void)load_asset_blk(EXT_BLK_ASSET_COMPASS, LINK_ASSET_COMPASS_BYTES,
-                         DYN_COMPASS, synth_compass_asset);
+    link_begin_compass();
+    link_asset_finish();
 }
 
 void link_leave_compass(void) {
-    if (lk.dyn_kind == DYN_COMPASS) {
+    free_c3d_buf();
+    if (lk.dyn_kind == DYN_COMPASS || lk.dyn_kind == DYN_COMPASS3D) {
         free_dyn_buf();
     }
 }
 
 void link_enter_music(void) {
     if (lk.media_mask_ready && lk.dyn_buf && lk.dyn_kind == DYN_MEDIA) {
+        send_ext_pool_state();
         return;
     }
     if (lk.ext_dir.blks[EXT_BLK_MEDIA].len == LINK_BMP_W * LINK_BMP_H / 8 && hal_ext_flash_present()) {
@@ -929,11 +1303,13 @@ void link_enter_music(void) {
             }
             if (ok) {
                 lk.media_mask_ready = 1;
+                send_ext_pool_state();
                 return;
             }
             free_dyn_buf();
         }
     }
+    send_ext_pool_state();
 }
 
 void link_leave_music(void) {
@@ -941,6 +1317,7 @@ void link_leave_music(void) {
     if (lk.dyn_kind == DYN_MEDIA) {
         free_dyn_buf();
     }
+    send_ext_pool_state();
 }
 
 void link_request_messages(void) {
@@ -958,9 +1335,7 @@ void link_request_messages(void) {
             return;
         }
     }
-    if (lk.ext_dir.msg_count == 0u || lk.msg_list_empty) {
-        (void)load_msg_empty_asset();
-    } else if (lk.dyn_kind != DYN_MSG_LIST) {
+    if (lk.dyn_kind != DYN_MSG_LIST) {
         free_dyn_buf();
     }
     lk.msg_list_ready = 0;
@@ -1011,7 +1386,7 @@ void link_leave_messages(void) {
     lk.msg_detail_ready = 0;
     lk.msg_detail_loading = 0;
     free_rx_scratch();
-    if (lk.dyn_kind == DYN_MSG_LIST || lk.dyn_kind == DYN_MSG_DETAIL || lk.dyn_kind == DYN_MSG_ASSET) {
+    if (lk.dyn_kind == DYN_MSG_LIST || lk.dyn_kind == DYN_MSG_DETAIL) {
         free_dyn_buf();
     }
     send_empty(LINK_MSG_LEAVE);
@@ -1021,7 +1396,8 @@ void link_leave_messages(void) {
 static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
     uint8_t *buf;
 
-    if (ui_app_message_active()) {
+    if (ui_app_message_active() || !ui_app_music_active()) {
+        lk.media_staging_ok = 0u;
         return;
     }
     if (chunk >= LINK_BMP_CHUNKS || n < LINK_BMP_CHUNK) {
@@ -1031,14 +1407,12 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
         lk.media_mask_ready = 0;
         lk.ext_dir.blks[EXT_BLK_MEDIA].off = 0u;
         lk.ext_dir.blks[EXT_BLK_MEDIA].len = 0u;
-        lk.media_staging_ok = (uint8_t)ext_pool_alloc(LINK_BMP_CHUNKS * LINK_BMP_CHUNK, &lk.media_staging_off);
+        lk.media_staging_ok = (uint8_t)ext_pool_alloc(LINK_BMP_CHUNKS * LINK_BMP_CHUNK, 1, &lk.media_staging_off);
         lk.msg_list_ready = 0;
         lk.msg_list_loading = 0;
         lk.msg_list_empty = 0;
         lk.msg_detail_ready = 0;
         lk.msg_detail_loading = 0;
-        /* 新的媒体行到达时自动切到音乐页，让标题/歌词常驻可见。 */
-        ui_app_open_music();
     }
     if (lk.media_staging_ok) {
         (void)hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.media_staging_off +
@@ -1049,9 +1423,6 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
             lk.ext_dir.blks[EXT_BLK_MEDIA].len = LINK_BMP_CHUNKS * LINK_BMP_CHUNK;
             ext_dir_save();
         }
-    }
-    if (!ui_app_music_active()) {
-        return;
     }
     buf = ensure_dyn_buf(DYN_MEDIA, LINK_MEDIA_BYTES);
     if (!buf) {
@@ -1091,10 +1462,10 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
         if (lk.list_target_n == 0u) {
             lk.list_target_n = 5u;
         }
-        if (ui_app_message_active()) {
+        lk.msg_list_empty = 0;
+        if (ui_app_message_active() == UI_MENU_LIST) {
             lk.msg_list_ready = 0;
             lk.msg_list_loading = 1;
-            lk.msg_list_empty = 0;
             lk.msg_detail_ready = 0;
             lk.msg_detail_loading = 0;
             lk.media_mask_ready = 0;
@@ -1138,28 +1509,29 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
     if ((uint16_t)((uint16_t)(chunk + 1u) * LINK_BMP_CHUNK) >= total) {
         ui_mem_free(lk.rx_row);
         lk.rx_row = 0;
+        lk.msg_list_empty = 0;
         lk.ext_dir.msg_count = count;
         ext_dir_save();
         ui_app_set_message_count(count);
-        if (ui_app_message_active()) {
+        if (ui_app_message_active() == UI_MENU_LIST) {
             if (!lk.dyn_buf || lk.dyn_kind != DYN_MSG_LIST) {
                 (void)ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
             }
-            lk.msg_list_ready = 1;
+            if (lk.dyn_buf && lk.dyn_kind == DYN_MSG_LIST) {
+                lk.msg_list_ready = 1;
+            }
             lk.msg_list_loading = 0;
         }
+        ui_draw_invalidate();
     }
 }
 
 /* 128x160 详情图，1bpp，20 块；压缩后动态存入 AT24C256（支持 0..19 槽位）。 */
 static void msg_detail_slot_chunk(uint8_t slot, uint8_t chunk, const uint8_t *src, int n) {
     uint8_t *buf = 0;
-    int active_view = ui_app_message_active() && slot == lk.detail_slot;
+    int active_view = (ui_app_message_active() == UI_MENU_CHILD) && slot == lk.detail_slot;
 
     if (slot >= LINK_EXT_MSG_MAX || chunk >= LINK_MSG_DETAIL_CHUNKS || n < LINK_BMP_CHUNK) {
-        return;
-    }
-    if (!active_view && ui_app_message_active() && lk.dyn_kind == DYN_MSG_LIST) {
         return;
     }
     if (active_view) {
@@ -1206,7 +1578,7 @@ static void msg_detail_chunk(uint8_t chunk, const uint8_t *src, int n) {
     msg_detail_slot_chunk(lk.detail_slot, chunk, src, n);
 }
 
-/* 0x29：外置 Flash 动态空间图片分块写入（每块最高 128 字节）。 */
+/* 0x29：图片分块写入（适合热槽时直写 MCU 片内 Flash，大容量回退 AT24C256 动态池）。 */
 static void ext_img_chunk(uint8_t chunk, const uint8_t *src, int n) {
     uint32_t off;
     uint32_t write_n;
@@ -1222,15 +1594,25 @@ static void ext_img_chunk(uint8_t chunk, const uint8_t *src, int n) {
     if (off + write_n > lk.img_total_bytes) {
         write_n = lk.img_total_bytes - off;
     }
-    if (!hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.img_staging_off + off,
-                             src, write_n)) {
+    if (lk.img_to_chip) {
+        if (!hal_int_img_write(off, src, write_n)) {
+            return;
+        }
+    } else if (!hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.img_staging_off + off,
+                                    src, write_n)) {
         return;
     }
     if (off + write_n >= lk.img_total_bytes) {
-        lk.ext_dir.blks[EXT_BLK_IMG].off = lk.img_staging_off;
-        lk.ext_dir.blks[EXT_BLK_IMG].len = lk.img_total_bytes;
+        if (lk.img_to_chip) {
+            lk.ext_dir.blks[EXT_BLK_IMG].off = 0u;
+            lk.ext_dir.blks[EXT_BLK_IMG].len = 0u;
+        } else {
+            lk.ext_dir.blks[EXT_BLK_IMG].off = lk.img_staging_off;
+            lk.ext_dir.blks[EXT_BLK_IMG].len = lk.img_total_bytes;
+        }
         ext_dir_save();
         lk.img_ready = 1;
+        lk.img_gen++;
         if (lk.img_apply_dial) {
             settings_t *s = settings_get();
             s->img_w = lk.img_w;
@@ -1238,6 +1620,7 @@ static void ext_img_chunk(uint8_t chunk, const uint8_t *src, int n) {
             s->img_fmt = lk.img_fmt;
             s->img_bytes = lk.img_total_bytes;
             s->img_ready = 1u;
+            s->img_on_chip = lk.img_to_chip ? 1u : 0u;
             s->dial_id = UI_DIAL_PHOTO;
             lk.img_msg_preview = 0;
             (void)settings_save_ext(UI_CFG_PRIO_APP);
@@ -1250,23 +1633,111 @@ static void ext_img_chunk(uint8_t chunk, const uint8_t *src, int n) {
     }
 }
 
-/* 0x2F：按需功能页片外 ROM 静态资源下发：[0] id(1指南针/2空消息), [1] chunk, [2..3] w, [4..5] h, [6..] 1bpp */
+/* 0x2F：按需功能页片外 ROM 静态资源下发。 */
 static void ext_asset_chunk(const uint8_t *p, int l) {
     uint8_t id, chunk;
-    uint16_t w, h, raw_len, off, take;
+    uint16_t a0, a1, off, take;
 
     if (l < 7) {
         return;
     }
     id = p[0];
     chunk = p[1];
-    w = u16_get(p + 2);
-    h = u16_get(p + 4);
-    if (id == LINK_ASSET_COMPASS && w == LINK_ASSET_COMPASS_W && h == LINK_ASSET_COMPASS_H) {
-        raw_len = LINK_ASSET_COMPASS_BYTES;
-    } else if (id == LINK_ASSET_MSG_EMPTY && w == LINK_ASSET_MSG_W && h == LINK_ASSET_MSG_H) {
-        raw_len = LINK_ASSET_MSG_BYTES;
-    } else {
+    a0 = u16_get(p + 2);
+    a1 = u16_get(p + 4);
+
+    if (id >= LINK_ASSET_COMPASS3D && id <= LINK_ASSET_SYS) {
+        static const uint8_t blk_map[6] = {
+            EXT_BLK_ASSET_COMPASS3D,
+            EXT_BLK_ASSET_ABOUT,
+            EXT_BLK_ASSET_HEADERS,
+            EXT_BLK_ASSET_SPORT,
+            EXT_BLK_ASSET_ANALOG,
+            EXT_BLK_ASSET_SYS
+        };
+        static const uint16_t max_map[6] = { 4096u, 8192u, 6144u, 4608u, 3072u, 4096u };
+        int idx = (int)(id - LINK_ASSET_COMPASS3D);
+        int blk_idx = blk_map[idx];
+        uint16_t max_sz = max_map[idx];
+        if (a0 < 16u || a0 > max_sz || !hal_ext_flash_present()) {
+            return;
+        }
+        if (chunk == 0u) {
+            lk.ext_dir.blks[blk_idx].off = 0u;
+            lk.ext_dir.blks[blk_idx].len = 0u;
+            if (id == LINK_ASSET_ABOUT) {
+                lk.about_ready = 0u;
+                lk.about_total = 0u;
+                lk.about_crc = 0u;
+                if (lk.dyn_kind == DYN_ABOUT) {
+                    free_dyn_buf();
+                }
+            } else if (id == LINK_ASSET_HEADERS) {
+                lk.hdr_ready = 0u;
+                free_hdr_buf();
+            } else if ((id == LINK_ASSET_SPORT && lk.dyn_kind == DYN_SPORT) ||
+                       (id == LINK_ASSET_ANALOG && lk.dyn_kind == DYN_ANALOG) ||
+                       (id == LINK_ASSET_SYS && lk.dyn_kind == DYN_SYS)) {
+                free_dyn_buf();
+            }
+            if (!ext_pool_alloc(a0, 0, &lk.rx_asset_off)) {
+                lk.rx_asset_id = 0u;
+                lk.rx_asset_need = 0u;
+                return;
+            }
+            lk.rx_asset_id = id;
+            lk.rx_asset_need = a0;
+            lk.rx_asset_crc = a1;
+        }
+        if (lk.rx_asset_id != id || lk.rx_asset_need != a0 || lk.rx_asset_crc != a1) {
+            return;
+        }
+        off = (uint16_t)((uint16_t)chunk * LINK_BMP_CHUNK);
+        if (off >= lk.rx_asset_need) {
+            return;
+        }
+        take = (uint16_t)(l - 6);
+        if (off + take > lk.rx_asset_need) {
+            take = (uint16_t)(lk.rx_asset_need - off);
+        }
+        if (!hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.rx_asset_off + off, p + 6, take)) {
+            return;
+        }
+        if (off + take >= lk.rx_asset_need) {
+            uint16_t got_crc = ext_flash_crc16(LINK_EXT_OFF_POOL + (uint32_t)lk.rx_asset_off,
+                                               lk.rx_asset_need);
+            if (got_crc == lk.rx_asset_crc) {
+                lk.ext_dir.blks[blk_idx].off = lk.rx_asset_off;
+                lk.ext_dir.blks[blk_idx].len = lk.rx_asset_need;
+                ext_dir_save();
+                if (id == LINK_ASSET_COMPASS3D &&
+                    (lk.c3d_buf || lk.dyn_kind == DYN_COMPASS)) {
+                    free_c3d_buf();
+                    if (lk.dyn_kind == DYN_COMPASS) {
+                        free_dyn_buf();
+                    }
+                    link_begin_compass();
+                } else if (id == LINK_ASSET_ABOUT) {
+                    load_about_meta();
+                    if (lk.about_want) {
+                        link_begin_about();
+                    }
+                } else if (id == LINK_ASSET_HEADERS) {
+                    load_hdr_meta();
+                    free_hdr_buf();
+                }
+            } else {
+                lk.ack_bad++;
+            }
+            lk.rx_asset_id = 0u;
+            lk.rx_asset_need = 0u;
+            send_ext_pool_state();
+            ui_draw_invalidate();
+        }
+        return;
+    }
+
+    if (id != LINK_ASSET_COMPASS || a0 != LINK_ASSET_COMPASS_W || a1 != LINK_ASSET_COMPASS_H) {
         return;
     }
     if (chunk == 0u) {
@@ -1274,45 +1745,41 @@ static void ext_asset_chunk(const uint8_t *p, int l) {
             ui_mem_free(lk.rx_asset);
             lk.rx_asset = 0;
         }
-        lk.rx_asset = (uint8_t *)ui_mem_alloc(raw_len, 4);
+        lk.rx_asset = (uint8_t *)ui_mem_alloc(LINK_ASSET_COMPASS_BYTES, 4);
         if (!lk.rx_asset) {
             lk.rx_asset_id = 0u;
             lk.rx_asset_need = 0u;
             return;
         }
-        u16_put(lk.rx_asset + 0, w);
-        u16_put(lk.rx_asset + 2, h);
+        u16_put(lk.rx_asset + 0, a0);
+        u16_put(lk.rx_asset + 2, a1);
         lk.rx_asset_id = id;
-        lk.rx_asset_need = raw_len;
+        lk.rx_asset_need = LINK_ASSET_COMPASS_BYTES;
     }
-    if (!lk.rx_asset || lk.rx_asset_id != id || lk.rx_asset_need != raw_len) {
+    if (!lk.rx_asset || lk.rx_asset_id != id || lk.rx_asset_need != LINK_ASSET_COMPASS_BYTES) {
         return;
     }
     off = (uint16_t)(4u + (uint16_t)chunk * LINK_BMP_CHUNK);
-    if (off >= raw_len) {
+    if (off >= LINK_ASSET_COMPASS_BYTES) {
         return;
     }
     take = (uint16_t)(l - 6);
-    if (off + take > raw_len) {
-        take = (uint16_t)(raw_len - off);
+    if (off + take > LINK_ASSET_COMPASS_BYTES) {
+        take = (uint16_t)(LINK_ASSET_COMPASS_BYTES - off);
     }
     memcpy(lk.rx_asset + off, p + 6, take);
-    if (off + take >= raw_len) {
-        int blk_idx = EXT_BLK_ASSET0 + (int)(id - 1u);
-        ext_blk_t *b = &lk.ext_dir.blks[blk_idx];
-        if (ext_store_blob(lk.rx_asset, raw_len, &b->off, &b->len)) {
+    if (off + take >= LINK_ASSET_COMPASS_BYTES) {
+        ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_COMPASS];
+        if (ext_store_blob(lk.rx_asset, LINK_ASSET_COMPASS_BYTES, 0, &b->off, &b->len)) {
             ext_dir_save();
         }
         ui_mem_free(lk.rx_asset);
         lk.rx_asset = 0;
         lk.rx_asset_id = 0u;
         lk.rx_asset_need = 0u;
-        if (id == LINK_ASSET_COMPASS && lk.dyn_kind == DYN_COMPASS) {
+        if (lk.dyn_kind == DYN_COMPASS) {
             free_dyn_buf();
-            link_enter_compass();
-        } else if (id == LINK_ASSET_MSG_EMPTY && lk.dyn_kind == DYN_MSG_ASSET) {
-            free_dyn_buf();
-            (void)load_msg_empty_asset();
+            link_begin_compass();
         }
         send_ext_pool_state();
         ui_draw_invalidate();
@@ -1386,12 +1853,14 @@ static void apply_frame(void) {
         }
         break;
     case LINK_MSG:
+#if !defined(AT32_SLIM_ROM)
         if (l >= 1 && p[0] < LINK_MSG_N) {
             copy_text(msgs[p[0]], LINK_MSG_LEN, p + 1, l - 1);
             if (settings_get()->key_beep) {
                 hal_beep(HAL_VIB_SMS, 70u);
             }
         }
+#endif
         break;
     case LINK_BMP:
         if (l == 1 + LINK_BMP_CHUNK) {
@@ -1432,8 +1901,10 @@ static void apply_frame(void) {
             } else {
                 uint32_t row_bytes = 0;
                 if (fmt == UI_EXT_FMT_1BPP) row_bytes = ((uint32_t)w + 7u) >> 3;
+#if !defined(AT32_SLIM_ROM)
                 else if (fmt == UI_EXT_FMT_4BPP) row_bytes = ((uint32_t)w + 1u) >> 1;
                 else if (fmt == UI_EXT_FMT_RGB565) row_bytes = (uint32_t)w * 2u;
+#endif
                 total = row_bytes * (uint32_t)h;
             }
             if (w > 0 && w <= 240 && h > 0 && h <= 240 &&
@@ -1441,7 +1912,17 @@ static void apply_frame(void) {
                 total > 0u && total <= LINK_EXT_IMG_MAX) {
                 lk.ext_dir.blks[EXT_BLK_IMG].off = 0u;
                 lk.ext_dir.blks[EXT_BLK_IMG].len = 0u;
-                if (ext_pool_alloc((uint16_t)total, &lk.img_staging_off)) {
+                if (apply && total <= hal_int_img_cap()) {
+                    lk.img_to_chip = 1u;
+                    lk.img_w = (int16_t)w;
+                    lk.img_h = (int16_t)h;
+                    lk.img_fmt = fmt;
+                    lk.img_total_bytes = (uint16_t)total;
+                    lk.img_apply_dial = apply;
+                    lk.img_ready = 0;
+                    lk.img_msg_preview = 0;
+                } else if (ext_pool_alloc((uint16_t)total, 0, &lk.img_staging_off)) {
+                    lk.img_to_chip = 0u;
                     lk.img_w = (int16_t)w;
                     lk.img_h = (int16_t)h;
                     lk.img_fmt = fmt;
@@ -1453,6 +1934,7 @@ static void apply_frame(void) {
                     }
                 } else {
                     lk.img_total_bytes = 0u;
+                    lk.img_to_chip = 0u;
                 }
             }
         }
@@ -1478,6 +1960,7 @@ static void apply_frame(void) {
                 if (l >= 2 && p[1] > 0u && p[1] < lk.ext_dir.msg_count) {
                     lk.ext_dir.msg_count = p[1];
                 }
+                lk.msg_list_empty = 0;
                 memset(lk.win_row_id, 0xFF, sizeof lk.win_row_id);
                 ui_app_set_message_count(lk.ext_dir.msg_count);
                 ext_dir_save();
@@ -1494,14 +1977,20 @@ static void apply_frame(void) {
                     if (off + cp > LINK_ROW_BYTES) cp = (uint16_t)(LINK_ROW_BYTES - off);
                     memcpy(lk.rx_row + off, p + 2, cp);
                     if (off + cp >= LINK_ROW_BYTES) {
+                        int list_open = (ui_app_message_active() == UI_MENU_LIST);
+                        lk.msg_list_empty = 0;
+                        if (list_open) {
+                            (void)ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
+                        }
                         rx_row_finish(0u);
-                        if (lk.dyn_kind == DYN_MSG_LIST && lk.dyn_buf) {
+                        if (list_open && lk.dyn_kind == DYN_MSG_LIST && lk.dyn_buf) {
                             lk.msg_list_ready = 1;
-                            lk.msg_list_empty = 0;
+                            lk.msg_list_loading = 0;
                         }
                         ui_mem_free(lk.rx_row);
                         lk.rx_row = 0;
                         ext_dir_save();
+                        ui_app_set_message_count(lk.ext_dir.msg_count);
                         ui_draw_invalidate();
                     }
                 }
@@ -1760,9 +2249,11 @@ static void feed(uint8_t b) {
 }
 
 void link_init(void) {
+#if !defined(AT32_SLIM_ROM)
     copy_cstr(msgs[0], LINK_MSG_LEN, "消息1");
     copy_cstr(msgs[1], LINK_MSG_LEN, "消息2");
     copy_cstr(msgs[2], LINK_MSG_LEN, "消息3");
+#endif
     lyric[0] = 0;
     memset(&lk, 0, sizeof lk);
     memset(lk.win_row_id, 0xFF, sizeof lk.win_row_id);
@@ -1780,10 +2271,15 @@ void link_poll(void) {
 }
 
 const char *link_message(int index) {
+#if !defined(AT32_SLIM_ROM)
     if (index < 0 || index >= LINK_MSG_N) {
         return "";
     }
     return msgs[index];
+#else
+    (void)index;
+    return "";
+#endif
 }
 
 int link_brightness(void) {
@@ -1819,12 +2315,67 @@ const uint8_t *link_compass_asset_mask(int16_t *w, int16_t *h) {
     return asset_mask_get(DYN_COMPASS, w, h);
 }
 
-int link_msg_empty_asset_ready(void) {
-    return lk.dyn_kind == DYN_MSG_ASSET && lk.dyn_buf != 0 && lk.dyn_cap >= 4u;
+int link_compass_loading(void) {
+    return lk.load_kind == DYN_COMPASS3D && lk.load_need > 0u;
 }
 
-const uint8_t *link_msg_empty_asset_mask(int16_t *w, int16_t *h) {
-    return asset_mask_get(DYN_MSG_ASSET, w, h);
+int link_compass3d_ready(void) {
+    return lk.c3d_buf != 0 && lk.load_kind != DYN_COMPASS3D &&
+           lk.c3d_total >= 16u && lk.c3d_entry >= 12u;
+}
+
+const uint8_t *link_compass3d_blob(uint16_t *entry_off, uint16_t *total_size) {
+    if (!link_compass3d_ready()) {
+        return 0;
+    }
+    if (entry_off) *entry_off = lk.c3d_entry;
+    if (total_size) *total_size = lk.c3d_total;
+    return lk.c3d_buf;
+}
+
+int link_about_asset_ready(void) {
+    return lk.about_ready != 0u;
+}
+
+int link_about_loading(void) {
+    return lk.dyn_kind == DYN_ABOUT && lk.load_need > 0u;
+}
+
+void link_begin_about(void) {
+    lk.about_want = 1u;
+    if (!lk.about_ready) {
+        return;
+    }
+    if (lk.dyn_kind == DYN_ABOUT && lk.dyn_buf &&
+        (lk.load_need > 0u || lk.dyn_cap >= lk.about_total)) {
+        return;
+    }
+    (void)begin_about_load();
+}
+
+void link_enter_about(void) {
+    link_begin_about();
+    while (lk.load_need > 0u) {
+        link_asset_pump(lk.load_need);
+    }
+}
+
+void link_leave_about(void) {
+    lk.about_want = 0u;
+    if (lk.dyn_kind == DYN_ABOUT) {
+        free_dyn_buf();
+    }
+}
+
+const uint8_t *link_about_blob(uint16_t *total_size) {
+    if (!lk.about_ready || lk.dyn_kind != DYN_ABOUT || !lk.dyn_buf ||
+        lk.load_need != 0u || lk.about_total < 40u) {
+        return 0;
+    }
+    if (total_size) {
+        *total_size = lk.about_total;
+    }
+    return lk.dyn_buf;
 }
 
 int link_msg_list_ready(void) {
@@ -1975,4 +2526,207 @@ void link_media_next(void) {
 
 void link_media_prev(void) {
     send_ctrl(ACT_PREV);
+}
+
+void link_hdr_active(int active) {
+    if (!active) {
+        lk.hdr_active = 0u;
+        free_hdr_buf();
+        return;
+    }
+    lk.hdr_active = 1u;
+    if (!lk.hdr_ready || !hal_ext_flash_present()) {
+        return;
+    }
+    if (!lk.hdr_buf) {
+        lk.hdr_buf = (uint8_t *)ui_mem_alloc(HDR_BUF_BYTES, 4);
+        if (!lk.hdr_buf) {
+            return;
+        }
+    }
+    if (!lk.hdr_loaded) {
+        ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_HEADERS];
+        uint16_t idx_bytes = (uint16_t)lk.hdr_count * 10u;
+        if (b->len >= 12u + idx_bytes &&
+            hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off + 12u,
+                               lk.hdr_buf, idx_bytes)) {
+            lk.hdr_loaded = 1u;
+            lk.hdr_wr = 0u;
+            lk.hdr_slot_next = 0u;
+            memset(lk.hdr_slot_cp, 0, sizeof lk.hdr_slot_cp);
+            memset(lk.hdr_slot_off, 0, sizeof lk.hdr_slot_off);
+            memset(lk.hdr_slot_end, 0, sizeof lk.hdr_slot_end);
+        } else {
+            free_hdr_buf();
+        }
+    }
+}
+
+int link_hdr_lookup(uint32_t cp, int16_t *w, int16_t *h, int16_t *adv,
+                    int8_t *ox, int8_t *oy, const uint8_t **rle_out) {
+    ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_HEADERS];
+    uint8_t *ring;
+    uint16_t idx_off = 0u, r_len = 0u;
+    int i, found = -1, evicted = 0;
+
+    if (!lk.hdr_ready || !lk.hdr_active || !hal_ext_flash_present()) {
+        return 0;
+    }
+    if (!lk.hdr_buf || !lk.hdr_loaded) {
+        link_hdr_active(1);
+    }
+    if (!lk.hdr_buf || !lk.hdr_loaded) {
+        return 0;
+    }
+    for (i = 0; i < (int)lk.hdr_count; i++) {
+        if (u16_get(lk.hdr_buf + i * 10) == (uint16_t)cp) {
+            found = i;
+            break;
+        }
+    }
+    if (found < 0) {
+        return 0;
+    }
+    {
+        const uint8_t *ent = lk.hdr_buf + found * 10;
+        uint16_t cov_off = u16_get(ent + 2);
+        uint16_t nxt_off;
+        if (found + 1 < (int)lk.hdr_count) {
+            nxt_off = u16_get(lk.hdr_buf + (found + 1) * 10 + 2);
+        } else {
+            nxt_off = (uint16_t)(lk.hdr_total - lk.hdr_cover_off);
+        }
+        if (nxt_off <= cov_off) {
+            return 0;
+        }
+        idx_off = cov_off;
+        r_len = (uint16_t)(nxt_off - cov_off);
+        if (w) *w = ent[4];
+        if (h) *h = ent[5];
+        if (adv) *adv = ent[6];
+        if (ox) *ox = (int8_t)ent[7];
+        if (oy) *oy = (int8_t)ent[8];
+    }
+    if (!rle_out) {
+        return 1;
+    }
+    ring = lk.hdr_buf + HDR_IDX_BYTES;
+    for (i = 0; i < HDR_SLOTS; i++) {
+        if (lk.hdr_slot_cp[i] == (uint16_t)cp) {
+            *rle_out = ring + lk.hdr_slot_off[i];
+            return 1;
+        }
+    }
+    if (r_len > HDR_RING_BYTES) {
+        return 0;
+    }
+    if ((uint32_t)lk.hdr_wr + r_len > HDR_RING_BYTES) {
+        lk.hdr_wr = 0u;
+    }
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off +
+                            (uint32_t)lk.hdr_cover_off + (uint32_t)idx_off,
+                            ring + lk.hdr_wr, r_len)) {
+        return 0;
+    }
+    /* Invalidate any previous slot whose range overlaps [lk.hdr_wr, lk.hdr_wr + r_len) */
+    for (i = 0; i < HDR_SLOTS; i++) {
+        if (lk.hdr_slot_cp[i] != 0u &&
+            lk.hdr_slot_off[i] < (uint16_t)(lk.hdr_wr + r_len) &&
+            lk.hdr_slot_end[i] > lk.hdr_wr) {
+            lk.hdr_slot_cp[i] = 0u;
+            evicted = 1;
+        }
+    }
+    if (lk.hdr_slot_cp[lk.hdr_slot_next] != 0u) {
+        evicted = 1;
+    }
+    lk.hdr_slot_cp[lk.hdr_slot_next] = (uint16_t)cp;
+    lk.hdr_slot_off[lk.hdr_slot_next] = lk.hdr_wr;
+    lk.hdr_slot_end[lk.hdr_slot_next] = (uint16_t)(lk.hdr_wr + r_len);
+    lk.hdr_slot_next = (uint8_t)((lk.hdr_slot_next + 1u) % HDR_SLOTS);
+    *rle_out = ring + lk.hdr_wr;
+    lk.hdr_wr = (uint16_t)(lk.hdr_wr + r_len);
+    if (evicted) {
+        ui_draw_invalidate();
+    }
+    return 1;
+}
+
+void link_begin_pic_sport(void) {
+    if (lk.dyn_kind == DYN_SPORT && lk.dyn_buf &&
+        (lk.load_need > 0u || lk.pic_ready_kind == DYN_SPORT)) {
+        return;
+    }
+    (void)begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
+}
+
+void link_leave_pic_sport(void) {
+    if (lk.dyn_kind == DYN_SPORT) {
+        free_dyn_buf();
+    }
+}
+
+int link_pic_sport_ready(void) {
+    return lk.dyn_kind == DYN_SPORT && lk.pic_ready_kind == DYN_SPORT &&
+           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+}
+
+const uint8_t *link_pic_sport_blob(uint16_t *entry_off) {
+    if (!link_pic_sport_ready()) return 0;
+    if (entry_off) *entry_off = lk.pic_entry;
+    return lk.dyn_buf;
+}
+
+void link_begin_pic_analog(void) {
+    if (lk.dyn_kind == DYN_ANALOG && lk.dyn_buf &&
+        (lk.load_need > 0u || lk.pic_ready_kind == DYN_ANALOG)) {
+        return;
+    }
+    (void)begin_pic_load(EXT_BLK_ASSET_ANALOG, PIC_MAGIC_ANALOG, DYN_ANALOG, 3072u);
+}
+
+void link_leave_pic_analog(void) {
+    if (lk.dyn_kind == DYN_ANALOG) {
+        free_dyn_buf();
+    }
+}
+
+int link_pic_analog_ready(void) {
+    return lk.dyn_kind == DYN_ANALOG && lk.pic_ready_kind == DYN_ANALOG &&
+           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+}
+
+const uint8_t *link_pic_analog_blob(uint16_t *entry_off) {
+    if (!link_pic_analog_ready()) return 0;
+    if (entry_off) *entry_off = lk.pic_entry;
+    return lk.dyn_buf;
+}
+
+void link_begin_pic_sys(void) {
+    if (lk.dyn_kind == DYN_SYS && lk.dyn_buf &&
+        (lk.load_need > 0u || lk.pic_ready_kind == DYN_SYS)) {
+        return;
+    }
+    (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
+}
+
+void link_leave_pic_sys(void) {
+    if (lk.dyn_kind == DYN_SYS) {
+        free_dyn_buf();
+    }
+}
+
+int link_pic_sys_ready(void) {
+    return lk.dyn_kind == DYN_SYS && lk.pic_ready_kind == DYN_SYS &&
+           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+}
+
+const uint8_t *link_pic_sys_blob(uint16_t *entry_off) {
+    if (!link_pic_sys_ready()) return 0;
+    if (entry_off) *entry_off = lk.pic_entry;
+    return lk.dyn_buf;
+}
+
+uint16_t link_img_gen(void) {
+    return lk.img_gen;
 }

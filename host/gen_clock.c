@@ -265,6 +265,14 @@ static int write_preview(const char *path, const digit_t *digits, int cell_w, in
     return 1;
 }
 
+static int song_quant2(int g) {
+    int v = (g * 15 + 32) / 64;
+    if (v >= 13) return 3;
+    if (v >= 8) return 2;
+    if (v >= 3) return 1;
+    return 0;
+}
+
 static int emit_cover(FILE *fp, const digit_t *g, int n, int *off_base, int *offs) {
     int i;
     int bytes = 0;
@@ -275,16 +283,13 @@ static int emit_cover(FILE *fp, const digit_t *g, int n, int *off_base, int *off
         offs[i] = *off_base;
         fprintf(fp, "    /* %d */\n", i);
         while (p < count) {
-            int v = (g[i].gray[p] * 15 + 32) / 64;
+            int v = song_quant2(g[i].gray[p]);
             int run = 1;
-            if (v > 15) v = 15;
-            while (p + run < count && run < 16) {
-                int nv = (g[i].gray[p + run] * 15 + 32) / 64;
-                if (nv > 15) nv = 15;
-                if (nv != v) break;
+            while (p + run < count && run < 64) {
+                if (song_quant2(g[i].gray[p + run]) != v) break;
                 run++;
             }
-            fprintf(fp, "0x%02X,", ((run - 1) << 4) | v);
+            fprintf(fp, "0x%02X,", ((run - 1) << 2) | v);
             bytes++;
             (*off_base)++;
             col++;
@@ -487,7 +492,7 @@ int main(int argc, char **argv) {
         static const uint32_t title_cp[] = {
             0x8FD0, 0x52A8, 0x6D88, 0x606F, 0x8BBE, 0x7F6E,
             0x97F3, 0x4E50, 0x5173, 0x4E8E, 0x4EAE, 0x5EA6,
-            0x65E0, 0x8FDE, 0x63A5
+            0x65E0
         };
         enum { TITLE_N = (int)(sizeof(title_cp) / sizeof(title_cp[0])), TITLE_EM = 40 };
         digit_t titles[TITLE_N];

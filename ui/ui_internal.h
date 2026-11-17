@@ -15,6 +15,7 @@ void ui_mem_free(void *ptr);
 uint32_t ui_mem_avail(void);
 
 void ui_anim_init(void);
+int ui_anim_closing(const ui_obj_t *obj);
 
 void ui_draw_init(void);
 void ui_draw_text(int16_t x, int16_t y, const char *utf8,

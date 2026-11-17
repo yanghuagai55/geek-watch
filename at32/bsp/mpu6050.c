@@ -11,6 +11,7 @@
 #define REG_DATA 0x3B
 
 static int ok;
+static uint8_t err_cnt;
 
 static int wr(uint8_t reg, uint8_t v) {
     return i2c_write(ADDR, reg, &v, 1);
@@ -23,22 +24,33 @@ int mpu6050_present(void) {
 }
 
 int mpu6050_init(void) {
+    static const uint8_t cfg[] = {
+        REG_PWR1,   0x01, /* 清 SLEEP + CLKSEL=1 (PLL X) */
+        REG_SMPLRT, 0x07, /* 1kHz / (1+7) = 125Hz */
+        REG_CONFIG, 0x03, /* DLPF 44Hz/42Hz */
+        REG_GYRO,   0x18, /* ±2000dps */
+        REG_ACCEL,  0x18  /* ±16g */
+    };
     uint8_t v;
     uint32_t t0;
+    int i;
+
     ok = 0;
-    if (!mpu6050_present()) return 0;
-    if (!wr(REG_PWR1, 0x80)) return 0;      /* DEVICE_RESET：清掉上次运行残留配置 */
+    err_cnt = 0;
+    if (!mpu6050_present() || !wr(REG_PWR1, 0x80)) return 0;
     t0 = hal_tick_ms();
     do {
         v = 0x80;
-        (void)i2c_read(ADDR, REG_PWR1, &v, 1);   /* 复位期间可能 NACK，视为未完成 */
+        (void)i2c_read(ADDR, REG_PWR1, &v, 1);
     } while ((v & 0x80) && (hal_tick_ms() - t0 < 100u));
-    if (!mpu6050_present()) return 0;       /* bit7 复位完成自动清零；超时读不回 ID 即失败 */
-    if (!wr(REG_PWR1, 0x01)) return 0;      /* 清 SLEEP 唤醒 + CLKSEL=1：PLL/X 陀螺，手册强烈推荐 */
-    if (!wr(REG_SMPLRT, 0x07)) return 0;    /* DLPF 开启时陀螺输出 1kHz：1kHz/(1+7)=125Hz */
-    if (!wr(REG_CONFIG, 0x03)) return 0;    /* DLPF_CFG=3：加速度 44Hz / 陀螺 42Hz */
-    if (!wr(REG_GYRO, 0x18)) return 0;      /* FS_SEL=3：±2000dps */
-    if (!wr(REG_ACCEL, 0x18)) return 0;     /* AFS_SEL=3：±16g */
+    /* 给 MPU6050 内部复位状态机留足稳定窗口再醒来配置 */
+    t0 = hal_tick_ms();
+    while ((hal_tick_ms() - t0) < 3u) {
+    }
+    if (!mpu6050_present()) return 0;
+    for (i = 0; i < (int)sizeof cfg; i += 2) {
+        if (!wr(cfg[i], cfg[i + 1])) return 0;
+    }
     ok = 1;
     return 1;
 }
@@ -48,7 +60,10 @@ int mpu6050_read(hal_imu_t *out) {
     int16_t ax, ay, az, gx, gy, gz, tp;
     int32_t t100;
     if (!out || !ok) return 0;
-    if (!i2c_read(ADDR, REG_DATA, b, 14)) return 0;   /* 突发读保证 14 字节同一采样时刻 */
+    if (!i2c_read(ADDR, REG_DATA, b, 14)) {
+        if (++err_cnt >= 10u) ok = 0;
+        return 0;
+    }
     ax = (int16_t)((b[0] << 8) | b[1]);
     ay = (int16_t)((b[2] << 8) | b[3]);
     az = (int16_t)((b[4] << 8) | b[5]);
@@ -56,6 +71,11 @@ int mpu6050_read(hal_imu_t *out) {
     gx = (int16_t)((b[8] << 8) | b[9]);
     gy = (int16_t)((b[10] << 8) | b[11]);
     gz = (int16_t)((b[12] << 8) | b[13]);
+    if ((ax | az | tp) == 0) {
+        if (++err_cnt >= 25u) ok = 0;
+        return 0;
+    }
+    err_cnt = 0;
     out->ax = (int16_t)((int32_t)ax * 1000 / 2048);   /* ±16g：2048 LSB/g -> mg */
     out->ay = (int16_t)((int32_t)ay * 1000 / 2048);
     out->az = (int16_t)((int32_t)az * 1000 / 2048);

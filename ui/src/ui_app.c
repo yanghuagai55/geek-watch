@@ -1,7 +1,8 @@
 #include "ui_internal.h"
 #include "ui_menu.h"
 #include "ui_icons.h"
-#include "about_art.h"
+#include "compass3d.h"
+#include "pic_mod.h"
 
 #include "hal.h"
 #include "sport.h"
@@ -16,10 +17,10 @@
 
 enum {
     HOME_N = 5,
-    SET_N = 9,
+    SET_N = 8,
     DETAIL_N = 3,
     ABOUT_N = 1,
-    MSG_N = LINK_EXT_MSG_MAX,
+    MSG_N = LINK_EXT_MSG_MAX + 1,
     M_BADGE_W = 680,
     M_BADGE_H = 220,
     M_BADGE_GAP = 16,
@@ -83,9 +84,16 @@ typedef struct app {
     uint8_t msg_prev_level;
     uint8_t music_was_open;
     uint8_t compass_was_open;
+    uint8_t about_was_open;
+    uint8_t sport_open_was;
+    uint8_t sport_pic_was;
+    uint8_t analog_open_was;
+    uint8_t sys_open_was;
     uint8_t sport_tab;
     ui_obj_t sport_scroll;
     uint8_t prev_mag_cal;
+    uint32_t i2c_scan_ms;
+    char i2c_scan_str[18];
     uint8_t dial_edit;
     uint8_t dial_pick;
     int16_t dial_pick_steps;
@@ -106,7 +114,7 @@ static uint16_t col_accent;
 static uint16_t col_line;
 
 static const char *const set_name[SET_N] = {"调试模式", "抬腕亮屏", "震动", "亮度",
-                                            "蓝牙", "状态灯", "熄屏", "关于", "通知清理"};
+                                            "蓝牙", "状态灯", "熄屏", "关于"};
 static const char *const bright_name[DETAIL_N] = {"低", "中", "高"};
 static const char *const screen_off_name[5] = {"关", "30秒", "1分钟", "2分钟", "5分钟"};
 static const uint16_t screen_off_sec[5] = {0, 30, 60, 120, 300};
@@ -204,14 +212,12 @@ static void home_art_rect(int *x, int *y, int *w, int *h) {
     *y = ty + (th - *h) / 2;
 }
 
+static void blue_card_bg(int x, int y, int w, int h, int hot, int radius, uint8_t a);
+
 static void home_tile(uint8_t a) {
     int x, y, w, h;
     home_icon_rect(&x, &y, &w, &h);
-    ui_draw_round((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
-                  (int16_t)(h / 4), col_line, a);
-    ui_draw_round((int16_t)(x + 1), (int16_t)(y + 1),
-                  (int16_t)(w - 2), (int16_t)(h - 2),
-                  (int16_t)(h / 4 - 1), col_blue_dim, a);
+    blue_card_bg(x, y, w, h, 0, h / 4, a);
 }
 
 static const char *const page_names[HOME_N] = {
@@ -277,6 +283,9 @@ static void slide_to(ui_obj_t *obj, int *focus, int dir, int n) {
     *focus = next;
 }
 
+#if defined(AT32_SLIM_ROM)
+__attribute__((noinline))
+#endif
 static void blue_card_bg(int x, int y, int w, int h, int hot, int radius, uint8_t a) {
     if (w < 8 || h < 8 || a == 0) {
         return;
@@ -288,6 +297,9 @@ static void blue_card_bg(int x, int y, int w, int h, int hot, int radius, uint8_
                   (int16_t)(radius - 1), col_blue_dim, a);
 }
 
+#if defined(AT32_SLIM_ROM)
+__attribute__((noinline))
+#endif
 static void blue_card_fg(int x, int y, int w, int h, int hot, uint8_t a) {
     if (w < 8 || h < 8 || a == 0 || !hot) {
         return;
@@ -297,7 +309,9 @@ static void blue_card_fg(int x, int y, int w, int h, int hot, uint8_t a) {
                   (int16_t)(h / 2), 1, col_ring, a);
 }
 
+#if !defined(AT32_SLIM_ROM)
 static int run_frame(void);
+#endif
 static void draw_face_app(uint8_t a);
 static void draw_sport_app(uint8_t a);
 static void draw_sport_child(uint8_t a);
@@ -626,8 +640,11 @@ static void draw_stack_ex(const ui_menu_t *menu, int level, int scroll, int n,
     char side[16];
 
     for (pass = 0; pass < 2; pass++) {
-        for (i = 0; i < n; i++) {
-            if (i == focus_vis) {
+        int k;
+        for (k = 0; k <= n; k++) {
+            int hot = (k == n);
+            i = hot ? focus_vis : k;
+            if (!hot && i == focus_vis) {
                 continue;
             }
             list_card_rect(scroll, n, i, &x, &y, &w, &h);
@@ -635,26 +652,13 @@ static void draw_stack_ex(const ui_menu_t *menu, int level, int scroll, int n,
                 continue;
             }
             if (pass == 0) {
-                blue_card_bg(x, y, w, h, 0, h / 4, a);
+                blue_card_bg(x, y, w, h, hot, h / 4, a);
             } else {
                 side[0] = 0;
                 if (side_fn) {
                     side_fn(i, side, sizeof side, ctx);
                 }
-                draw_labeled_card_fg(x, y, w, h, 0, names[i], side[0] ? side : 0, a);
-            }
-        }
-        list_card_rect(scroll, n, focus_vis, &x, &y, &w, &h);
-        if (y + h > band && y < UI_H) {
-            if (pass == 0) {
-                blue_card_bg(x, y, w, h, 1, h / 4, a);
-            } else {
-                side[0] = 0;
-                if (side_fn) {
-                    side_fn(focus_vis, side, sizeof side, ctx);
-                }
-                draw_labeled_card_fg(x, y, w, h, 1, names[focus_vis],
-                                     side[0] ? side : 0, a);
+                draw_labeled_card_fg(x, y, w, h, hot, names[i], side[0] ? side : 0, a);
             }
         }
         if (pass == 0) {
@@ -737,8 +741,10 @@ static int face_weekday(int y, int m, int d) {
 }
 
 static void poll_imu9_now(imu9_state_t *out, uint32_t now);
+#ifndef AT32_SLIM_ROM
 static void compass_vec(int deg_cw, int *dx_q8, int *dy_q8);
 static void compass_disc(int cx, int cy, int r, uint16_t col, uint8_t a);
+#endif
 static const char *compass_dir(uint16_t heading);
 
 static void face_comp_text(uint8_t kind, const hal_clock_t *clk,
@@ -859,9 +865,116 @@ static void draw_face_digital(const settings_t *s, const hal_clock_t *clock,
     }
 }
 
+#ifdef AT32_SLIM_ROM
+static void pic_api_fill(pic_mod_api_t *api, const settings_t *s,
+                         uint16_t fg, uint16_t ac, uint16_t bg,
+                         const char *top_line, const char *bot_line,
+                         const char *scan_line) {
+    static const pic_mod_api_t s_tmpl = {
+        .ui_w = UI_W,
+        .ui_h = UI_H,
+        .fill = ui_draw_fill,
+        .round = ui_draw_round,
+        .line = ui_draw_line,
+        .text = ui_draw_text,
+        .text_center = ui_text_draw_center,
+        .text_right = ui_text_draw_right,
+        .text_fit = ui_text_fit,
+        .text_w = ui_text_width,
+        .text_h = ui_text_height,
+        .song_draw = ui_song_draw,
+        .song_w = ui_song_width,
+        .song_h = ui_song_height,
+        .ease_in_out = ui_ease_in_out,
+        .clock_get = hal_clock_get,
+        .sport_get = sport_get,
+        .sport_bars = sport_get_bars,
+        .imu_get = imu9_get,
+        .baro_read = hal_baro_read,
+        .mag_name = hal_mag_name,
+        .get_fps = ui_app_get_fps,
+        .get_cpu_tenths = hal_cpu_tenths,
+        .line_w = ui_draw_line_w,
+    };
+    *api = s_tmpl;
+    api->col_bg = col_bg;
+    api->col_line = col_line;
+    api->col_accent = col_accent;
+    api->col_ring = col_ring;
+    api->col_text = col_text;
+    api->col_dim = col_dim;
+    api->col_surface = col_blue_dim;
+    api->col_blue_dim = col_blue_dim;
+    api->dial_fg = fg;
+    api->dial_ac = ac;
+    api->dial_bg = bg;
+    api->now_ms = hal_tick_ms();
+    api->reveal_ms = st ? st->reveal_ms : 0u;
+    api->dial_top = s->dial_top;
+    api->dial_bot = s->dial_bot;
+    api->dial_flags = s->dial_flags;
+    api->use_24h = s->use_24h;
+    api->bat_pct = hal_battery_pct();
+    api->bat_mv = hal_battery_mv();
+    api->lyric = link_media_lyric();
+    api->media_playing = (uint8_t)link_media_playing();
+    api->comp_top = top_line;
+    api->comp_bot = bot_line;
+    api->i2c_scan = scan_line;
+}
+
+__attribute__((noinline))
+static int pic_mod_exec(const uint8_t *blob, uint16_t entry_off,
+                        const settings_t *s, uint16_t fg, uint16_t ac, uint16_t bg,
+                        const char *top_line, const char *bot_line,
+                        const char *scan_line, uint8_t page_id,
+                        uint8_t mode, uint8_t a, int clear_bg) {
+    pic_mod_api_t api;
+    if (!blob) {
+        return 0;
+    }
+    pic_api_fill(&api, s, fg, ac, bg, top_line, bot_line, scan_line);
+    api.page_id = page_id;
+    __asm volatile("dsb\n\tisb" ::: "memory");
+    ((pic_mod_entry_t)((uintptr_t)(blob + entry_off) | 1u))(&api, mode, a, clear_bg);
+    return 1;
+}
+
+__attribute__((noinline))
+static int pic_mod_exec_std(const uint8_t *blob, uint16_t entry_off,
+                            const char *scan_line, uint8_t page_id,
+                            uint8_t mode, uint8_t a, int clear_bg) {
+    return pic_mod_exec(blob, entry_off, settings_get(), col_text, col_accent, col_bg,
+                        0, 0, scan_line, page_id, mode, a, clear_bg);
+}
+
+__attribute__((noinline))
+static void draw_face_clock_stub(const settings_t *s, const hal_clock_t *clock,
+                                 uint16_t fg, uint16_t bg, uint8_t a) {
+    char tbuf[8];
+    int disp_hr = s->use_24h ? (int)clock->hour
+                             : (((int)clock->hour % 12) ? ((int)clock->hour % 12) : 12);
+    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
+    snprintf(tbuf, sizeof tbuf, "%02d:%02u", disp_hr, clock->minute);
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2 - 12), tbuf, fg, a, 2);
+}
+#endif
+
 static void draw_face_analog(const settings_t *s, const hal_clock_t *clock,
                              const sport_stats_t *sport, const imu9_state_t *s9,
                              uint16_t fg, uint16_t ac, uint16_t bg, uint8_t a) {
+#ifdef AT32_SLIM_ROM
+    char top_line[36], bot_line[36];
+    uint16_t entry_off = 0u;
+    const uint8_t *blob = link_pic_analog_blob(&entry_off);
+
+    face_comp_text(s->dial_top, clock, sport, s9, 1, top_line, (int)sizeof top_line);
+    face_comp_text(s->dial_bot, clock, sport, s9, 0, bot_line, (int)sizeof bot_line);
+    if (pic_mod_exec(blob, entry_off, s, fg, ac, bg, top_line, bot_line, 0, 0u, 0u, a, 1)) {
+        return;
+    }
+    draw_face_clock_stub(s, clock, fg, bg, a);
+#else
     int cx = UI_W / 2;
     int cy = UI_H / 2 - UI_MY(15);
     int r = (UI_W < UI_H ? UI_W : UI_H) * 34 / 100;
@@ -913,11 +1026,24 @@ static void draw_face_analog(const settings_t *s, const hal_clock_t *clock,
         ui_text_fit(fitted, sizeof fitted, line, (int16_t)(UI_W - UI_MX(140)), 1);
         ui_text_draw_center((int16_t)cx, (int16_t)UI_MY(885), fitted, fg, a, 1);
     }
+#endif
 }
 
 static void draw_face_imu(const settings_t *s, const hal_clock_t *clock,
                           const sport_stats_t *sport, const imu9_state_t *s9,
                           uint16_t fg, uint16_t ac, uint16_t bg, uint8_t a) {
+#ifdef AT32_SLIM_ROM
+    char bot_line[36];
+    uint16_t entry_off = 0u;
+    const uint8_t *blob = link_pic_analog_blob(&entry_off);
+
+    face_comp_text(s->dial_bot == UI_DIAL_COMP_HDG ? UI_DIAL_COMP_STEP : s->dial_bot,
+                   clock, sport, s9, 0, bot_line, (int)sizeof bot_line);
+    if (pic_mod_exec(blob, entry_off, s, fg, ac, bg, 0, bot_line, 0, 0u, 1u, a, 1)) {
+        return;
+    }
+    draw_face_clock_stub(s, clock, fg, bg, a);
+#else
     int margin = UI_MX(M_MARGIN);
     int w = UI_W - margin * 2;
     int sc = UI_W >= 200 ? 3 : 2;
@@ -943,12 +1069,33 @@ static void draw_face_imu(const settings_t *s, const hal_clock_t *clock,
 
     ui_draw_round((int16_t)margin, (int16_t)horizon_y, (int16_t)w,
                   (int16_t)UI_MY(150), 6, col_blue_dim, a);
-    tilt = (int)s9->roll_d10 / 25;
-    if (tilt > 14) tilt = 14;
-    if (tilt < -14) tilt = -14;
-    ui_draw_line((int16_t)(margin + 8), (int16_t)(horizon_y + UI_MY(75) - tilt),
-                 (int16_t)(margin + w - 8), (int16_t)(horizon_y + UI_MY(75) + tilt),
-                 ac, a);
+    {
+        int mid_y = (int)horizon_y + (int)UI_MY(45);
+        int max_t = (int)UI_MY(36);
+        int max_p = (int)UI_MY(15);
+        int pitch_off = (int)s9->pitch_d10 / 50;
+        int is_level = (s9->roll_d10 >= -20 && s9->roll_d10 <= 20 &&
+                        s9->pitch_d10 >= -20 && s9->pitch_d10 <= 20);
+        uint16_t ref_c = is_level ? UI_COL_MINT : UI_COL_MUTED;
+        if (max_t < 4) max_t = 4;
+        if (max_p < 2) max_p = 2;
+        tilt = (int)s9->roll_d10 / 30;
+        if (tilt > max_t) tilt = max_t;
+        if (tilt < -max_t) tilt = -max_t;
+        if (pitch_off > max_p) pitch_off = max_p;
+        if (pitch_off < -max_p) pitch_off = -max_p;
+        /* Fixed level reference ticks at edges & center */
+        ui_draw_line((int16_t)(margin + 3), (int16_t)mid_y,
+                     (int16_t)(margin + 6), (int16_t)mid_y, ref_c, a);
+        ui_draw_line((int16_t)(margin + w - 7), (int16_t)mid_y,
+                     (int16_t)(margin + w - 4), (int16_t)mid_y, ref_c, a);
+        ui_draw_line((int16_t)(UI_W / 2 - 3), (int16_t)mid_y,
+                     (int16_t)(UI_W / 2 + 3), (int16_t)mid_y, ref_c, a);
+        /* Horizon line: watch left tilt (roll<0) lifts left end and drops right end (tilts right). */
+        ui_draw_line((int16_t)(margin + 8), (int16_t)(mid_y + pitch_off + tilt),
+                     (int16_t)(margin + w - 8), (int16_t)(mid_y + pitch_off - tilt),
+                     is_level ? UI_COL_MINT : ac, a);
+    }
     snprintf(line, sizeof line, "R %+d  P %+d",
              (int)(s9->roll_d10 / 10), (int)(s9->pitch_d10 / 10));
     ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(horizon_y + UI_MY(95)), line, fg, a, 1);
@@ -966,6 +1113,7 @@ static void draw_face_imu(const settings_t *s, const hal_clock_t *clock,
     if (line[0]) {
         ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)UI_MY(840), line, col_dim, a, 1);
     }
+#endif
 }
 
 static void draw_face_photo(const settings_t *s, const hal_clock_t *clock,
@@ -982,11 +1130,21 @@ static void draw_face_photo(const settings_t *s, const hal_clock_t *clock,
     char line[36];
     char fitted[36];
 
-    ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
-    if (s->img_ready && hal_ext_flash_present() && s->img_w > 0 && s->img_h > 0) {
-        ui_ext_image_draw((int16_t)((UI_W - s->img_w) / 2),
-                          (int16_t)((UI_H - s->img_h) / 2),
-                          s->img_w, s->img_h, link_ext_img_offset(), s->img_fmt, ac, a);
+    int has_img = s->img_ready && (s->img_on_chip || hal_ext_flash_present()) &&
+                  s->img_w > 0 && s->img_h > 0;
+    if (!has_img || a < 255 || s->img_w < UI_W || s->img_h < UI_H ||
+        s->img_fmt < UI_EXT_FMT_RGB565) {
+        ui_draw_fill(0, 0, UI_W, UI_H, bg, a);
+    }
+    if (has_img) {
+        ui_ext_image_draw_fast((int16_t)((UI_W - s->img_w) / 2),
+                               (int16_t)((UI_H - s->img_h) / 2),
+                               s->img_w, s->img_h,
+                               s->img_on_chip ? hal_int_img_ptr() : 0,
+                               link_ext_img_offset(),
+                               s->img_fmt,
+                               s->img_fmt == UI_EXT_FMT_1BPP ? ac : 0u,
+                               a, link_img_gen());
     } else {
         ui_draw_round((int16_t)UI_MX(120), (int16_t)UI_MY(140),
                       (int16_t)(UI_W - UI_MX(240)), (int16_t)(UI_H - UI_MY(280)),
@@ -1117,6 +1275,7 @@ static void draw_face_app(uint8_t a) {
     }
 }
 
+#if !defined(AT32_SLIM_ROM)
 /* 跑步采用外部 AI 按 ui/ICON_SVG_PROMPT.md 产出的关键帧（已人工预览验收）。
    ci: 0=主色(橙) 1=白 2=橙。脚着地时 y=42。 */
 static const uint16_t icon_pal[] = {
@@ -1139,8 +1298,10 @@ static const ui_svg_cmd_t run_svg[5][10] = {
 static int run_frame(void) {
     return (int)((hal_tick_ms() / 60u) % 5u);
 }
+#endif
 
 static void poll_imu9_now(imu9_state_t *out, uint32_t now) {
+#if !defined(__ARM_ARCH) && !defined(__thumb__)
     static uint32_t poll_ms;
 
     if ((now - poll_ms) >= 100u || poll_ms == 0u) {
@@ -1155,9 +1316,14 @@ static void poll_imu9_now(imu9_state_t *out, uint32_t now) {
             }
         }
     }
+#else
+    /* AT32 实机由 port_service() 在主循环与帧间隙唯一调度 50Hz I2C 采集，UI 渲染期绝不重复访问 I2C。 */
+    (void)now;
+#endif
     imu9_get(out);
 }
 
+#if !defined(AT32_SLIM_ROM)
 /* Quarter-wave sin(0..90deg) * 255 in 5-degree steps for compact ROM trig. */
 static const uint8_t compass_sin5[19] = {
     0, 22, 44, 66, 87, 108, 128, 146, 164, 180,
@@ -1191,6 +1357,7 @@ static const char *compass_dir_zh(uint16_t heading) {
     };
     return dirs[((heading + 22u) % 360u) / 45u];
 }
+#endif
 
 static void draw_sport_pager(int tab, uint8_t a) {
     int y = UI_MY(24);
@@ -1217,6 +1384,16 @@ static void draw_sport_pager(int tab, uint8_t a) {
 }
 
 static void draw_sport_steps(uint8_t a, int clear_bg) {
+#ifdef AT32_SLIM_ROM
+    uint16_t entry_off = 0u;
+    const uint8_t *blob = link_pic_sport_blob(&entry_off);
+    if (pic_mod_exec_std(blob, entry_off, 0, 0u, 0u, a, clear_bg)) {
+        return;
+    }
+    if (clear_bg && a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
+#else
     sport_stats_t ss;
     uint32_t bars[SPORT_BARS];
     hal_clock_t clk;
@@ -1299,8 +1476,10 @@ static void draw_sport_steps(uint8_t a, int clear_bg) {
              (unsigned long)ss.distance_m, (unsigned long)ss.calories);
     ui_text_fit(goal, sizeof goal, line, (int16_t)(UI_W - margin * 2), 1);
     ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)footer_y, goal, col_dim, a, 1);
+#endif
 }
 
+#if !defined(AT32_SLIM_ROM)
 static void compass_disc(int cx, int cy, int r, uint16_t col, uint8_t a) {
     ui_draw_round((int16_t)(cx - r), (int16_t)(cy - r),
                   (int16_t)(r * 2), (int16_t)(r * 2),
@@ -1319,9 +1498,57 @@ static void compass_needle(int cx, int cy, int dx, int dy, int len,
                      (int16_t)tx, (int16_t)ty, col, a);
     }
 }
+#endif
 
 /* 运动一级第二屏：本地 ROM 九轴指南针，全分辨率自适应并压缩点阵显示。 */
 static void draw_sport_compass(uint8_t a, int clear_bg) {
+#if defined(AT32_SLIM_ROM)
+    imu9_state_t s9;
+    poll_imu9_now(&s9, hal_tick_ms());
+    if (link_compass3d_ready()) {
+        uint16_t entry_off = 0u, total_sz = 0u;
+        const uint8_t *c3d = link_compass3d_blob(&entry_off, &total_sz);
+        if (c3d) {
+            static const compass3d_api_t s_c3d_tmpl = {
+                .ui_w = UI_W,
+                .ui_h = UI_H,
+                .fill = ui_draw_fill,
+                .round = ui_draw_round,
+                .line = ui_draw_line,
+                .text = ui_draw_text,
+                .text_center = ui_text_draw_center,
+                .text_h = ui_text_height,
+                .imu_get = imu9_get,
+                .imu_rot = imu9_get_rot,
+            };
+            compass3d_api_t api = s_c3d_tmpl;
+            api.col_bg = col_bg;
+            api.col_line = col_line;
+            api.col_accent = col_accent;
+            api.col_ring = col_ring;
+            api.col_text = col_text;
+            api.col_dim = col_dim;
+            api.now_ms = hal_tick_ms();
+#if defined(__ARM_ARCH) || defined(__thumb__)
+            __asm volatile("dsb\n\tisb" ::: "memory");
+            ((compass3d_entry_t)((uintptr_t)(c3d + entry_off) | 1u))(&api, a, clear_bg);
+#else
+            compass3d_render_c(&api, a, clear_bg);
+#endif
+            return;
+        }
+    }
+    {
+        uint16_t entry_off = 0u;
+        const uint8_t *sblob = link_pic_sport_blob(&entry_off);
+        if (pic_mod_exec_std(sblob, entry_off, 0, 0u, 2u, a, clear_bg)) {
+            return;
+        }
+    }
+    if (clear_bg && a == 255) {
+        ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+    }
+#else
     imu9_state_t s9;
     int sc = UI_W >= 200 ? 2 : 1;
     int margin = UI_MX(M_MARGIN);
@@ -1330,17 +1557,16 @@ static void draw_sport_compass(uint8_t a, int clear_bg) {
     int hdg_h = title_h * sc;
     int sub_y = UI_H - UI_MY(45) - title_h;
     int hdg_y = sub_y - UI_MY(24) - hdg_h;
+    int cx = UI_W >> 1;
     int dial_top = title_y + title_h + UI_MY(32);
     int dial_bot = hdg_y - UI_MY(24);
+    int cy = dial_top + ((dial_bot - dial_top) >> 1);
+    char line[24];
     int max_r = (dial_bot - dial_top) >> 1;
     int w_r = UI_W * 22 / 100;
     int r = (max_r < w_r) ? max_r : w_r;
     int ring_w = r >= 40 ? 3 : 2;
-    int cx = UI_W >> 1;
-    int cy = dial_top + ((dial_bot - dial_top) >> 1);
     int needle_deg, dx, dy, r_in, pw, hub_r, n_dot, k;
-    char line[24];
-
     if (r < 18) r = 18;
     r_in = r - ring_w;
     pw = r >= 40 ? 4 : 2;
@@ -1348,7 +1574,39 @@ static void draw_sport_compass(uint8_t a, int clear_bg) {
     n_dot = r >= 40 ? 4 : 2;
 
     poll_imu9_now(&s9, hal_tick_ms());
-    needle_deg = wrap_mod(s9.fused_axes ? -(int)s9.heading_deg : 0, 360);
+    if (link_compass3d_ready()) {
+        uint16_t entry_off = 0u, total_sz = 0u;
+        const uint8_t *c3d = link_compass3d_blob(&entry_off, &total_sz);
+        if (c3d) {
+            static const compass3d_api_t s_c3d_tmpl = {
+                .ui_w = UI_W,
+                .ui_h = UI_H,
+                .fill = ui_draw_fill,
+                .round = ui_draw_round,
+                .line = ui_draw_line,
+                .text = ui_draw_text,
+                .text_center = ui_text_draw_center,
+                .text_h = ui_text_height,
+                .imu_get = imu9_get,
+                .imu_rot = imu9_get_rot,
+            };
+            compass3d_api_t api = s_c3d_tmpl;
+            api.col_bg = col_bg;
+            api.col_line = col_line;
+            api.col_accent = col_accent;
+            api.col_ring = col_ring;
+            api.col_text = col_text;
+            api.col_dim = col_dim;
+            api.now_ms = hal_tick_ms();
+#if defined(__ARM_ARCH) || defined(__thumb__)
+            __asm volatile("dsb\n\tisb" ::: "memory");
+            ((compass3d_entry_t)((uintptr_t)(c3d + entry_off) | 1u))(&api, a, clear_bg);
+#else
+            compass3d_render_c(&api, a, clear_bg);
+#endif
+            return;
+        }
+    }
 
     if (clear_bg && a == 255) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
@@ -1358,8 +1616,14 @@ static void draw_sport_compass(uint8_t a, int clear_bg) {
                   (int16_t)(sc + 2), (int16_t)(title_h - 2),
                   1, (s9.mag_cal == 1) ? col_accent : col_ring, a);
     ui_draw_text((int16_t)(margin + sc + 5), (int16_t)title_y,
-                 "指南针", col_text, a, 1);
+                 "3D", col_text, a, 1);
+    if (link_compass_loading()) {
+        ui_draw_text((int16_t)(UI_W - margin - ui_text_width("3D", 1)),
+                     (int16_t)title_y, "3D", col_accent, a, 1);
+        return;
+    }
 
+    needle_deg = wrap_mod(s9.fused_axes ? -(int)s9.heading_deg : 0, 360);
     if (link_compass_asset_ready()) {
         int16_t aw = 0, ah = 0;
         const uint8_t *abits = link_compass_asset_mask(&aw, &ah);
@@ -1421,6 +1685,7 @@ static void draw_sport_compass(uint8_t a, int clear_bg) {
     }
     ui_text_draw_center((int16_t)cx, (int16_t)sub_y, line,
                         s9.mag_cal == 1 ? col_accent : col_dim, a, 1);
+#endif
 }
 
 static void draw_sport_app(uint8_t a) {
@@ -1459,6 +1724,20 @@ static void draw_sport_app(uint8_t a) {
 }
 
 static void draw_home_art(int page, uint8_t a) {
+#ifdef AT32_SLIM_ROM
+    uint16_t entry_off = 0u;
+    const uint8_t *blob = link_pic_sys_blob(&entry_off);
+
+    if (pic_mod_exec_std(blob, entry_off, 0, (uint8_t)page, 0u, a, 0)) {
+        return;
+    }
+    {
+        int x, y, w, h;
+        home_art_rect(&x, &y, &w, &h);
+        ui_draw_round((int16_t)(x + w / 4), (int16_t)(y + h / 4),
+                      (int16_t)(w / 2), (int16_t)(h / 2), 6, col_ring, a);
+    }
+#else
     int x, y, w, h;
     home_art_rect(&x, &y, &w, &h);
     if (page == UI_PAGE_MSG) {
@@ -1481,6 +1760,7 @@ static void draw_home_art(int page, uint8_t a) {
         ui_icon_music((int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h,
                       hal_tick_ms(), col_ring, col_accent, col_text, a);
     }
+#endif
 }
 
 static void draw_sport_child(uint8_t a) {
@@ -1501,6 +1781,7 @@ static void draw_sport_child(uint8_t a) {
     draw_header_anim("运动", scroll, a);
 }
 
+#if !defined(AT32_SLIM_ROM)
 static void fmt_deg(char *out, int cap, char tag, int d10) {
     int v = d10 < 0 ? -d10 : d10;
     char sg = d10 < 0 ? '-' : '+';
@@ -1511,6 +1792,7 @@ static void fmt_deg(char *out, int cap, char tag, int d10) {
         snprintf(out, (size_t)cap, "%c%c%d.%d", tag, sg, v / 10, v % 10);
     }
 }
+#endif
 
 static const char *compass_dir(uint16_t heading) {
     static const char *const dirs[8] = {
@@ -1519,9 +1801,32 @@ static const char *compass_dir(uint16_t heading) {
     return dirs[((heading + 22u) % 360u) / 45u];
 }
 
-/* 运动 -> 传感器数值。统一表体坐标系 9 轴融合姿态 + 对齐后 A/G/M，10Hz 刷新。
-   显示单位：A=0.1g，G=1dps，M=10mG，R/P/H=度；KEY2 启停磁校准，KEY3 归零。 */
 static void draw_sensor_page(uint8_t a) {
+#ifdef AT32_SLIM_ROM
+    uint32_t now = hal_tick_ms();
+    uint16_t entry_off = 0u;
+    const uint8_t *blob = link_pic_sport_blob(&entry_off);
+
+    if (st->i2c_scan_ms == 0u || (now - st->i2c_scan_ms) >= 3000u) {
+        uint8_t addrs[4];
+        int na, i, p;
+        st->i2c_scan_ms = now;
+        na = hal_i2c_scan(addrs, 4);
+        p = snprintf(st->i2c_scan_str, sizeof st->i2c_scan_str, "I2C");
+        if (na == 0) {
+            snprintf(st->i2c_scan_str + p, sizeof st->i2c_scan_str - (size_t)p, " --");
+        } else {
+            for (i = 0; i < na && p < (int)sizeof st->i2c_scan_str - 4; i++) {
+                p += snprintf(st->i2c_scan_str + p, sizeof st->i2c_scan_str - (size_t)p,
+                              " %02X", addrs[i]);
+            }
+        }
+    }
+    if (pic_mod_exec_std(blob, entry_off, st->i2c_scan_str, 0u, 1u, a, 1)) {
+        return;
+    }
+    ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
+#else
     static imu9_state_t s9;
     static uint32_t scan_ms;
     static char scan[20] = "I2C --";
@@ -1540,8 +1845,8 @@ static void draw_sensor_page(uint8_t a) {
     }
 
     poll_imu9_now(&s9, now);
-    /* 插拔模块后不用重启，1 秒重扫一次总线。 */
-    if ((now - scan_ms) >= 1000u) {
+    /* 插拔模块后不用重启，3 秒重扫一次总线以降低空地址 NACK 干扰。 */
+    if (scan_ms == 0u || (now - scan_ms) >= 3000u) {
         uint8_t addrs[4];
         int na, i, p;
 
@@ -1649,6 +1954,7 @@ static void draw_sensor_page(uint8_t a) {
 
     snprintf(line, sizeof line, "%s %s", scan, s9.mag_cal == 1 ? "K2ok" : "K2c");
     ui_draw_text((int16_t)x, (int16_t)(y + step * 6), line, col_dim, a, 1);
+#endif
 }
 
 static void draw_msg_card(int scroll, int count, int i, int hot,
@@ -1665,6 +1971,10 @@ static void draw_msg_card(int scroll, int count, int i, int hot,
     }
     if (pass == 0) {
         blue_card_bg(x, y, w, h, hot, h / 4, a);
+        return;
+    }
+    if (i == count - 1) {
+        draw_labeled_card_fg(x, y, w, h, hot, "清空通知", "!", a);
         return;
     }
     blue_card_fg(x, y, w, h, hot, a);
@@ -1696,13 +2006,15 @@ static void draw_msg_app(uint8_t a) {
     }
     if (ready) {
         for (pass = 0; pass < 2; pass++) {
-            for (i = 0; i < st->messages.count; i++) {
-                if (i == vis) {
+            int k;
+            for (k = 0; k <= st->messages.count; k++) {
+                int hot = (k == st->messages.count);
+                i = hot ? vis : k;
+                if (!hot && i == vis) {
                     continue;
                 }
-                draw_msg_card(scroll, st->messages.count, i, 0, band, pass, a);
+                draw_msg_card(scroll, st->messages.count, i, hot, band, pass, a);
             }
-            draw_msg_card(scroll, st->messages.count, vis, 1, band, pass, a);
             if (pass == 0) {
                 draw_list_ripple(&st->messages, UI_MENU_LIST,
                                  scroll, st->messages.count, a);
@@ -1710,22 +2022,12 @@ static void draw_msg_app(uint8_t a) {
         }
     } else if (!link_connected() || link_msg_list_empty() || st->messages.count == 0 ||
                (uint32_t)(hal_tick_ms() - st->reveal_ms) >= 1000u) {
-        if (link_msg_empty_asset_ready()) {
-            int16_t aw = 0, ah = 0;
-            const uint8_t *abits = link_msg_empty_asset_mask(&aw, &ah);
-            if (abits && aw > 0 && ah > 0) {
-                int my = band + (UI_H - band - ah - 20) / 2;
-                ui_mask1_draw((int16_t)((UI_W - aw) / 2), (int16_t)my,
-                              aw, ah, abits, UI_COL_MUTED_LIGHT, a);
-                ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(my + ah + 4),
-                                    link_connected() ? "暂无消息" : "无连接",
-                                    UI_COL_MUTED_LIGHT, a, 1);
-            }
-        } else {
-            ui_text_draw_center((int16_t)(UI_W / 2),
-                                (int16_t)(band + (UI_H - band - 16) / 2),
-                                "无消息", UI_COL_MUTED_LIGHT, a, 1);
-        }
+        int16_t ew = ui_song_width(UI_SONG_TITLE, "无消息");
+        int16_t eh = ui_song_height(UI_SONG_TITLE);
+        ui_song_draw(UI_SONG_TITLE,
+                     (int16_t)((UI_W - ew) / 2),
+                     (int16_t)(band + (UI_H - band - eh) / 2),
+                     "无消息", UI_COL_MUTED_LIGHT, a);
     }
     /* 其余情况是列表正在加载：保持空白，避免“无消息”闪一下。 */
     draw_header_anim("消息", scroll, a);
@@ -1743,7 +2045,6 @@ static void settings_side(int idx, char *buf, int cap) {
     case 4: v = s->bluetooth ? "开" : "关"; break;
     case 5: v = s->led_mode == 0 ? "关闭" : (s->led_mode == 2 ? "闪烁" : "常亮"); break;
     case 6: v = screen_off_name[s->screen_off <= 4 ? s->screen_off : 0]; break;
-    case 8: v = s->msg_auto_clear ? "开" : "关"; break;
     default: break;
     }
     if (v) {
@@ -1778,7 +2079,8 @@ static void draw_message_page(uint8_t a) {
         uint32_t ext_off = 0;
         link_img_preview_info(&iw, &ih, &fmt, &ext_off);
         ui_ext_image_draw((int16_t)((UI_W - iw) / 2), (int16_t)((UI_H - ih) / 2),
-                          iw, ih, ext_off, fmt, col_text, a);
+                          iw, ih, ext_off, fmt,
+                          fmt == UI_EXT_FMT_1BPP ? col_text : 0u, a);
         return;
     }
     if (link_msg_detail_ready()) {
@@ -1790,20 +2092,56 @@ static void draw_message_page(uint8_t a) {
 }
 
 static void draw_about_page(uint8_t a) {
-    int scroll = st->settings.child_scroll.x;
-    int top = header_band_h(0);
-    int y_img = top + UI_MY(20);
-    int y_t0 = y_img + ABOUT_ART_H + UI_MY(24);
-    int dy = UI_MY(125);
+    int band = header_band_h(256);
+    uint16_t tot = 0u;
+    const uint8_t *blob = link_about_blob(&tot);
 
-    if (dy < 18) dy = 18;
     ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
-    ui_mem_image_draw((int16_t)((UI_W - ABOUT_ART_W) / 2), (int16_t)y_img,
-                      ABOUT_ART_W, ABOUT_ART_H, about_art_pal4_rle, 1u, a);
-    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)y_t0, "AT32极客手表", col_ring, a, 1);
-    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(y_t0 + dy), "9轴+32K+1207马达", col_text, a, 1);
-    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(y_t0 + dy * 2), "Vibe神力大作业", col_dim, a, 1);
-    draw_header_anim("关于", scroll, a);
+    if (blob && tot >= 40u) {
+        const uint16_t line_cols[3] = { col_ring, col_text, col_dim };
+        uint8_t w0 = blob[4], h0 = blob[5];
+        uint16_t off0 = (uint16_t)blob[8] | ((uint16_t)blob[9] << 8);
+        int img_gap = UI_H >= 200 ? 6 : 3;
+        int line_gap = UI_H >= 200 ? 4 : 2;
+        int badge_res = UI_H >= 200 ? 22 : 16;
+        int tot_h = (int)h0 + img_gap + 2 * line_gap;
+        int y0, cy, i;
+
+        for (i = 0; i < 3; i++) {
+            tot_h += (int)blob[16 + i * 8 + 5];
+        }
+        y0 = band + (UI_H - band - badge_res - tot_h) / 2;
+        if (y0 < band + 1) {
+            y0 = band + 1;
+        }
+        ui_mem_image_draw((int16_t)((UI_W - (int)w0) / 2), (int16_t)y0,
+                          (int16_t)w0, (int16_t)h0,
+                          blob + off0, 1u, a);
+        cy = y0 + (int)h0 + img_gap;
+        for (i = 0; i < 3; i++) {
+            const uint8_t *d = blob + 16 + i * 8;
+            uint16_t ol = (uint16_t)d[0] | ((uint16_t)d[1] << 8);
+            uint16_t orr = (uint16_t)d[2] | ((uint16_t)d[3] << 8);
+            uint8_t gw = d[4], gh = d[5], wl = d[6];
+            uint8_t wr = (uint8_t)(gw - wl);
+            uint16_t c = line_cols[d[7] < 3u ? d[7] : 1u];
+            int lx = (UI_W - (int)gw) / 2;
+
+            ui_mask_rle_draw((int16_t)lx, (int16_t)cy, (int16_t)wl, (int16_t)gh,
+                             blob + ol, c, a);
+            if (wr > 0u) {
+                ui_mask_rle_draw((int16_t)(lx + wl), (int16_t)cy,
+                                 (int16_t)wr, (int16_t)gh,
+                                 blob + orr, c, a);
+            }
+            cy += (int)gh + line_gap;
+        }
+    } else if (!link_about_loading()) {
+        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(band + (UI_H - band) / 2),
+                            "Sync App", col_dim, a, 1);
+    }
+    /* “关于”按 0.5x 折叠比例以华文琥珀显示，腾出纵向空间给放大彩图与简介 */
+    draw_header_anim("关于", 256, a);
 }
 
 static void draw_detail(uint8_t a) {
@@ -1876,32 +2214,29 @@ static int draw_badge(void) {
     return badge_tick;
 }
 
-static ui_menu_t *live_menu(void) {
-    if (ui_menu_level(&st->settings) > UI_MENU_ICON || st->settings.zoom.scale > 0) {
-        return &st->settings;
-    }
-    if (ui_menu_level(&st->messages) > UI_MENU_ICON || st->messages.zoom.scale > 0) {
-        return &st->messages;
-    }
-    if (ui_menu_level(&st->sport) > UI_MENU_ICON || st->sport.zoom.scale > 0) {
-        return &st->sport;
-    }
-    if (ui_menu_level(&st->music) > UI_MENU_ICON || st->music.zoom.scale > 0) {
-        return &st->music;
-    }
-    if (st->focus == UI_PAGE_SETTINGS) {
-        return &st->settings;
-    }
-    if (st->focus == UI_PAGE_MSG) {
-        return &st->messages;
-    }
-    if (st->focus == UI_PAGE_SPORT) {
-        return &st->sport;
-    }
-    if (st->focus == UI_PAGE_MUSIC) {
-        return &st->music;
+static ui_menu_t *active_menu(void) {
+    ui_menu_t *const ms[4] = { &st->settings, &st->messages, &st->sport, &st->music };
+    int i;
+    for (i = 0; i < 4; i++) {
+        if (ui_menu_level(ms[i]) > UI_MENU_ICON || ms[i]->zoom.scale > 0) {
+            return ms[i];
+        }
     }
     return 0;
+}
+
+static ui_menu_t *live_menu(void) {
+    ui_menu_t *m = active_menu();
+    if (m) {
+        return m;
+    }
+    switch (st->focus) {
+    case UI_PAGE_SETTINGS: return &st->settings;
+    case UI_PAGE_MSG:      return &st->messages;
+    case UI_PAGE_SPORT:    return &st->sport;
+    case UI_PAGE_MUSIC:    return &st->music;
+    default:               return 0;
+    }
 }
 
 static void menu_list_state(const ui_menu_t *menu, int *level, int *scroll,
@@ -2008,12 +2343,6 @@ static void on_confirm(ui_menu_t *menu) {
         case 7:
             ui_menu_enter_child(menu, ABOUT_N);
             break;
-        case 8:
-            s->msg_auto_clear = (uint8_t)!s->msg_auto_clear;
-            if (s->msg_auto_clear) {
-                link_clear_ext_messages();
-            }
-            break;
         default:
             break;
         }
@@ -2035,6 +2364,11 @@ static void on_confirm(ui_menu_t *menu) {
         /* 列表还在加载或确实没有消息时，不进入二级页。 */
         if (!link_msg_list_ready() || menu->count <= 0 ||
             menu->focus >= menu->count) {
+            return;
+        }
+        if (menu->focus == menu->count - 1) {
+            rip_trigger_expand(menu, UI_MENU_LIST, menu->focus, 0);
+            link_clear_ext_messages();
             return;
         }
         rip_trigger_expand(menu, UI_MENU_LIST, menu->focus, 0);
@@ -2317,27 +2651,28 @@ void ui_app_open_music(void) {
     on_confirm(&st->music);
 }
 
-/* 消息应用是否处于打开状态（列表或详情）。 */
+/* 返回消息应用所处层级：0=未在消息界面，1=列表，2=详情。 */
 int ui_app_message_active(void) {
-    if (!st) {
+    if (!st || st->focus != UI_PAGE_MSG) {
         return 0;
     }
-    return st->focus == UI_PAGE_MSG &&
-           ui_menu_level(&st->messages) > UI_MENU_ICON;
+    return ui_menu_level(&st->messages);
 }
 
-/* 音乐应用是否处于打开状态。 */
+/* 音乐应用是否处于打开状态（退出回第 0 级缩放至 70 以下时提前视为关闭）。 */
 int ui_app_music_active(void) {
     if (!st) {
         return 0;
     }
     return st->focus == UI_PAGE_MUSIC &&
-           (ui_menu_level(&st->music) > UI_MENU_ICON || st->music.zoom.scale > 0);
+           ui_menu_level(&st->music) > UI_MENU_ICON &&
+           !(st->music.zoom.scale < 70 && ui_anim_closing(&st->music.zoom));
 }
 
-/* 手机下发 0x25：列表实际条数，限制焦点停留在有效行。 */
+/* 手机下发 0x25：列表实际条数；有消息时末尾附加“清除通知”操作行。 */
 void ui_app_set_message_count(int count) {
     int prev_focus;
+    int total_rows;
 
     if (!st) {
         return;
@@ -2345,16 +2680,17 @@ void ui_app_set_message_count(int count) {
     if (count < 0) {
         count = 0;
     }
-    if (count > MSG_N) {
-        count = MSG_N;
+    if (count > LINK_EXT_MSG_MAX) {
+        count = LINK_EXT_MSG_MAX;
     }
+    total_rows = count > 0 ? (count + 1) : 0;
     prev_focus = st->messages.focus;
-    st->messages.count = count;
-    if (st->messages.focus >= count) {
-        st->messages.focus = count > 0 ? count - 1 : 0;
+    st->messages.count = total_rows;
+    if (st->messages.focus >= total_rows) {
+        st->messages.focus = total_rows > 0 ? total_rows - 1 : 0;
     }
-    if (count == 0 || prev_focus != st->messages.focus ||
-        st->messages.scroll.x > (count - 1) * 256) {
+    if (total_rows == 0 || prev_focus != st->messages.focus ||
+        st->messages.scroll.x > (total_rows - 1) * 256) {
         ui_anim_stop(&st->messages.scroll, 0);
         st->messages.scroll.x = (int16_t)(st->messages.focus * 256);
     }
@@ -2494,14 +2830,16 @@ static void draw_pushed(ui_menu_t *menu) {
     if (t > 256) {
         t = 256;
     }
-    parent_s = 256 - t * 36 / 256;
-    parent_dx = -t * 28 / 256;
-    margin_x = (UI_W - UI_W * parent_s / 256) / 2;
-    margin_y = (UI_H - UI_H * parent_s / 256) / 2;
-    ui_draw_xform(parent_s, parent_dx + margin_x, margin_y);
-    draw_app_content(menu, 255);
-    ui_draw_xform(parent_s, parent_dx + margin_x, margin_y);
-    ui_draw_fill(0, 0, UI_W, UI_H, 0, (uint8_t)(t * 100 / 256));
+    if (t < 256) {
+        parent_s = 256 - t * 36 / 256;
+        parent_dx = -t * 28 / 256;
+        margin_x = (UI_W - UI_W * parent_s / 256) / 2;
+        margin_y = (UI_H - UI_H * parent_s / 256) / 2;
+        ui_draw_xform(parent_s, parent_dx + margin_x, margin_y);
+        draw_app_content(menu, 255);
+        ui_draw_xform(parent_s, parent_dx + margin_x, margin_y);
+        ui_draw_fill(0, 0, UI_W, UI_H, 0, (uint8_t)(t * 100 / 256));
+    }
     ui_draw_xform(256, UI_W - t * UI_W / 256, 0);
     if (menu == &st->sport) {
         if (st->sensor_open) {
@@ -2514,13 +2852,33 @@ static void draw_pushed(ui_menu_t *menu) {
     }
 }
 
+static int menu_closing(const ui_menu_t *m) {
+    return m->level == UI_MENU_LIST && m->zoom.scale < 70 &&
+           ui_anim_closing(&m->zoom);
+}
+
 static void msg_link_sync(void) {
     int level = st->messages.level;
-    int open = level != UI_MENU_ICON;
-    int music_open = st->music.level != UI_MENU_ICON;
-    int compass_open = (st->focus == UI_PAGE_SPORT &&
-                        ui_menu_level(&st->sport) == UI_MENU_LIST &&
+    ui_menu_t *act = active_menu();
+    int closing = act && menu_closing(act);
+    int open = (act == &st->messages && level != UI_MENU_ICON && !closing);
+    int music_open = (act == &st->music && st->music.level != UI_MENU_ICON && !closing);
+    int sport_open = (st->focus == UI_PAGE_SPORT && act == &st->sport &&
+                      st->sport.zoom.scale >= 70 && !closing);
+    int compass_open = (sport_open && ui_menu_level(&st->sport) == UI_MENU_LIST &&
                         (st->sport_tab == 1 || st->sport_scroll.x > 0));
+    int about_open = (st->focus == UI_PAGE_SETTINGS &&
+                      st->settings.child == 7 &&
+                      (st->settings.level == UI_MENU_CHILD || st->settings.push.x > 0));
+    int analog_open = (st->focus == UI_PAGE_FACE &&
+                       !ui_anim_busy(&st->scroll) && st->scroll.x == 0 &&
+                       !act &&
+                       (settings_get()->dial_id == UI_DIAL_ANALOG ||
+                        settings_get()->dial_id == UI_DIAL_IMU ||
+                        st->dial_edit || st->dial_zoom.scale > 0));
+    int sys_open = (!sport_open && !about_open && !analog_open && !open && !music_open);
+    int hdr_need = !compass_open;
+    int sport_pic_ready;
 
     /* 从详情返回列表时：若有外置 Flash 缓存将立即恢复列表缓冲，并通知手机刷新。 */
     if (st->msg_prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
@@ -2534,20 +2892,57 @@ static void msg_link_sync(void) {
         /* 离开音乐应用：释放媒体点阵动态 RAM 缓冲。 */
         link_leave_music();
     }
-    if (!st->compass_was_open && compass_open) {
-        /* 打开运动指南针：按需从 AT24C256 外部 ROM 加载 64x64 刻盘底图到动态 RAM；
-           未校准地磁时伴随双脉冲震动提醒用户校准。 */
-        imu9_state_t s9;
-        link_enter_compass();
-        imu9_get(&s9);
-        if (s9.mag_cal != 2u) {
-            vib_play(HAL_VIB_DOUBLE, 65u);
-        }
-    } else if (st->compass_was_open && !compass_open) {
-        /* 离开指南针：立刻释放动态 RAM。 */
+    if (st->compass_was_open && !compass_open) {
+        /* 离开指南针：先释放 C3D1 动态 RAM 再允许重新加载 SHD1 标题池。 */
         link_leave_compass();
     }
+    if (st->about_was_open && !about_open) {
+        /* 离开关于页：释放 ABT2 动态 RAM 缓冲。 */
+        link_leave_about();
+    }
+    if (st->sport_open_was && !sport_open) {
+        link_leave_pic_sport();
+    }
+    if (st->analog_open_was && !analog_open) {
+        link_leave_pic_analog();
+    }
+    if (st->sys_open_was && !sys_open) {
+        link_leave_pic_sys();
+    }
+    link_hdr_active(hdr_need);
+    if (sys_open && (!st->sys_open_was || !link_pic_sys_ready())) {
+        int icons_visible = (st->focus != UI_PAGE_FACE || st->scroll.x != 0 ||
+                             closing || st->about_was_open);
+        link_begin_pic_sys();
+        if (!st->sys_open_was && icons_visible) {
+            /* 退出至第 0 级桌面图标可见瞬间同步完成 SYS1 载入，避免闪出青色占位框。 */
+            link_asset_finish();
+        }
+    }
+    if (analog_open && (!st->analog_open_was || !link_pic_analog_ready())) {
+        link_begin_pic_analog();
+    }
+    if (about_open && (!st->about_was_open || !link_about_blob(0))) {
+        link_begin_about();
+    }
+    if (sport_open && (!st->sport_open_was ||
+                       (!link_pic_sport_ready() && !compass_open && !link_compass_loading()))) {
+        link_begin_pic_sport();
+    }
+    sport_pic_ready = link_pic_sport_ready();
+    if (sport_open && sport_pic_ready && !st->sport_pic_was) {
+        /* 模块增量载入完成时再起算柱状图揭幕动画，避免首帧被载入耗时吞掉。 */
+        st->reveal_ms = hal_tick_ms();
+    }
+    if (compass_open && (!st->compass_was_open || !link_compass3d_ready())) {
+        link_begin_compass();
+    }
+    st->about_was_open = (uint8_t)about_open;
     st->compass_was_open = (uint8_t)compass_open;
+    st->sport_open_was = (uint8_t)sport_open;
+    st->sport_pic_was = (uint8_t)sport_pic_ready;
+    st->analog_open_was = (uint8_t)analog_open;
+    st->sys_open_was = (uint8_t)sys_open;
     st->msg_was_open = (uint8_t)open;
     st->msg_prev_level = (uint8_t)level;
     st->music_was_open = (uint8_t)music_open;
@@ -2757,7 +3152,7 @@ void ui_frame(void) {
         if (s9.mag_cal == 2u && st->prev_mag_cal != 2u) {
             settings_t *cfg = settings_get();
             st->prev_mag_cal = 2u;
-            vib_play(HAL_VIB_DOUBLE, 65u);
+            vib_play(HAL_VIB_SINGLE, 130u);
             (void)settings_save_ext(cfg->cfg_source == UI_CFG_PRIO_APP
                                         ? UI_CFG_PRIO_APP
                                         : UI_CFG_PRIO_I2C);
@@ -2767,16 +3162,7 @@ void ui_frame(void) {
         }
     }
 
-    menu = 0;
-    if (ui_menu_level(&st->settings) > UI_MENU_ICON || st->settings.zoom.scale > 0) {
-        menu = &st->settings;
-    } else if (ui_menu_level(&st->messages) > UI_MENU_ICON || st->messages.zoom.scale > 0) {
-        menu = &st->messages;
-    } else if (ui_menu_level(&st->sport) > UI_MENU_ICON || st->sport.zoom.scale > 0) {
-        menu = &st->sport;
-    } else if (ui_menu_level(&st->music) > UI_MENU_ICON || st->music.zoom.scale > 0) {
-        menu = &st->music;
-    }
+    menu = active_menu();
     ui_draw_begin();
     if (menu && menu->level == UI_MENU_CHILD) {
         draw_pushed(menu);
@@ -2793,6 +3179,7 @@ void ui_frame(void) {
     /* ui_draw_flush 内部的 wait_display 已经保证传输结束。 */
     ui_render_get_stats(&render);
     fps_update(render.pixels, badge_tick);
+    link_asset_pump(576u);
     link_ack_flush();
     hal_meter_end();
     hal_frame_pace();
@@ -2829,6 +3216,11 @@ void ui_app_go_home(void) {
     if (st->music.level != UI_MENU_ICON) {
         link_leave_music();
     }
+    link_leave_compass();
+    link_leave_about();
+    link_leave_pic_sport();
+    link_leave_pic_analog();
+    link_hdr_active(0);
     reset_menu_home(&st->settings, SET_N);
     reset_menu_home(&st->messages, MSG_N);
     reset_menu_home(&st->sport, 1);
@@ -2836,6 +3228,11 @@ void ui_app_go_home(void) {
     st->msg_was_open = 0;
     st->msg_prev_level = UI_MENU_ICON;
     st->music_was_open = 0;
+    st->compass_was_open = 0;
+    st->about_was_open = 0;
+    st->sport_open_was = 0;
+    st->sport_pic_was = 0;
+    st->analog_open_was = 0;
     st->sensor_open = 0;
     dial_edit_reset();
     st->sport_tab = 0;

@@ -5,10 +5,20 @@
 
 /* PA8 接 AO3400A 低边 MOS 驱动 1207 转子马达（含 1N4148 续流）。
    转子马达需要足额直流高电平脉冲起转，按传统功能机场景提供单震/长震/双震/短信三连震。 */
-static uint8_t phase;
-static uint8_t pat;
-static uint16_t step_ms;
-static uint32_t next_at;
+static volatile uint8_t phase;
+static volatile uint8_t pat;
+static volatile uint16_t step_ms;
+static volatile uint32_t next_at;
+
+static uint32_t beep_irq_save(void) {
+    uint32_t mask;
+    __asm volatile("mrs %0, primask\n\tcpsid i" : "=r"(mask) :: "memory");
+    return mask;
+}
+
+static void beep_irq_restore(uint32_t mask) {
+    __asm volatile("msr primask, %0" :: "r"(mask) : "memory");
+}
 
 void beep_init(void) {
     gpio_init_type g;
@@ -27,16 +37,21 @@ void beep_init(void) {
 }
 
 void beep_set(uint16_t freq_hz, uint16_t ms) {
+    uint32_t now = hal_tick_ms();
+    uint32_t mask = beep_irq_save();
     if (ms == 0u) {
-        gpio_bits_reset(BEEP_PORT, BEEP_PIN);
         phase = 0u;
+        gpio_bits_reset(BEEP_PORT, BEEP_PIN);
+        beep_irq_restore(mask);
         return;
     }
-    gpio_bits_set(BEEP_PORT, BEEP_PIN);
+    phase = 0u;
     step_ms = ms;
     pat = (uint8_t)((freq_hz == 2u || freq_hz == 3u) ? freq_hz : 1u);
+    next_at = now + ms;
     phase = (uint8_t)(pat == 3u ? 5u : (pat == 2u ? 3u : 1u));
-    next_at = hal_tick_ms() + ms;
+    gpio_bits_set(BEEP_PORT, BEEP_PIN);
+    beep_irq_restore(mask);
 }
 
 void beep_tick(uint32_t now_ms) {
