@@ -101,7 +101,7 @@ class _MockTransport implements WatchTransport {
         if (id == 1) {
           done = chunk >= 3;
           if (done) _assetFlags |= 0x01;
-        } else if (id >= 3 && id <= 8) {
+        } else if (id >= 3 && id <= 10) {
           final totalLen = frame.length >= 7 ? (frame[5] | (frame[6] << 8)) : 0;
           done = totalLen > 0 && ((chunk + 1) * 128 >= totalLen);
           if (done) {

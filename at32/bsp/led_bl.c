@@ -83,20 +83,12 @@ void backlight_init(void) {
 
     TMR3->pr = BL_PWM_PERIOD - 1u;
     TMR3->div = 0u;
-    TMR3->swevt_bit.ovfswtr = TRUE;
-    TMR3->ctrl1_bit.cnt_dir = TMR_COUNT_UP;
-    TMR3->ctrl1_bit.prben = TRUE;
-    TMR3->cm2_output_bit.c3c = FALSE;
-    TMR3->cm2_output_bit.c3octrl = TMR_OUTPUT_CONTROL_PWM_MODE_A;
-    TMR3->cm2_output_bit.c3oben = TRUE;
-    TMR3->ctrl2_bit.c3ios = FALSE;
-    TMR3->ctrl2_bit.c3cios = FALSE;
-    TMR3->cctrl_bit.c3p = TMR_OUTPUT_ACTIVE_HIGH;
-    TMR3->cctrl_bit.c3cp = TMR_OUTPUT_ACTIVE_HIGH;
-    TMR3->cctrl_bit.c3cen = FALSE;
-    TMR3->cctrl_bit.c3en = TRUE;
+    TMR3->swevt = 1u;
+    TMR3->cm2 = 0x0068u;   /* ch3 PWM_MODE_A (6<<4) | ch3oben (1<<3) */
+    TMR3->ctrl2 = 0u;
+    TMR3->cctrl = 0x0100u; /* ch3en = 1, active high */
     TMR3->c3dt = BL_PWM_PERIOD;
-    TMR3->ctrl1_bit.tmren = TRUE;
+    TMR3->ctrl1 = 0x0081u; /* prben | tmren */
 }
 
 void backlight_set(uint8_t level) {

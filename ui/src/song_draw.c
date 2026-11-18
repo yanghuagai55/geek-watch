@@ -8,31 +8,6 @@ static int song_fallback_scale(int face) {
     return face == 1 ? 3 : 2;
 }
 
-static uint32_t utf8_next(const char **ps) {
-    const unsigned char *s = (const unsigned char *)*ps;
-
-    if (*s == 0) {
-        return 0;
-    }
-    if (*s < 0x80) {
-        *ps += 1;
-        return *s;
-    }
-    if ((*s & 0xE0) == 0xC0 && s[1]) {
-        uint32_t cp = ((uint32_t)(*s & 0x1F) << 6) | (s[1] & 0x3F);
-        *ps += 2;
-        return cp;
-    }
-    if ((*s & 0xF0) == 0xE0 && s[1] && s[2]) {
-        uint32_t cp = ((uint32_t)(*s & 0x0F) << 12) |
-                      ((uint32_t)(s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-        *ps += 3;
-        return cp;
-    }
-    *ps += 1;
-    return 0;
-}
-
 static const song_glyph_t *find_song(int face, uint32_t cp) {
     int i;
 
@@ -52,7 +27,7 @@ int16_t ui_song_width(int face, const char *utf8) {
         return 0;
     }
     while (*s) {
-        uint32_t cp = utf8_next(&s);
+        uint32_t cp = ui_utf8_next(&s);
         const song_glyph_t *g = find_song(face, cp);
         if (g) {
             width += g->advance;
@@ -73,10 +48,14 @@ int16_t ui_song_height(int face) {
     if (face < 0 || face > 1) {
         return 0;
     }
+#ifdef AT32_SLIM_ROM
+    return face == 1 ? 47 : 38;
+#else
     if (song_line_h[face] > 0) {
         return (int16_t)song_line_h[face];
     }
     return (int16_t)(16 * song_fallback_scale(face));
+#endif
 }
 
 void ui_song_draw(int face, int16_t x, int16_t y, const char *utf8,
@@ -89,7 +68,7 @@ void ui_song_draw(int face, int16_t x, int16_t y, const char *utf8,
     }
     while (*s) {
         const char *start = s;
-        uint32_t cp = utf8_next(&s);
+        uint32_t cp = ui_utf8_next(&s);
         const song_glyph_t *g = find_song(face, cp);
         if (g && g->w && g->h) {
             ui_mask_rle_draw((int16_t)(pen + g->x), (int16_t)(y + g->y),

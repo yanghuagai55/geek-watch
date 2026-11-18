@@ -2300,14 +2300,16 @@ class _FlashPartitionCard extends StatelessWidget {
           _PartitionRow(
             color: const Color(0xFFF5B759),
             range: '0x0300 · 按需小程序与字库 (0x2F)',
-            title: 'SYS1(动画图标) / SHD1(23 枚华文琥珀) / SPR1 / ANL1 / C3D1 / ABT2',
+            title: 'SYS1(动画图标) / SHD1(23 枚华文琥珀) / SPR1 / ANL1 / C3D1 / ABT2 / MUS1',
             size: (() {
               final f = controller.extPoolState?.assetFlags ?? 0;
+              final f2 = controller.extPoolState?.assetFlags2 ?? 0;
               var ready = 0;
               for (final b in const [0x02, 0x04, 0x08, 0x20, 0x40, 0x80]) {
                 if ((f & b) != 0) ready++;
               }
-              return '$ready / 6 已就绪';
+              if ((f2 & 0x01) != 0) ready++;
+              return '$ready / 7 已就绪';
             })(),
           ),
           const SizedBox(height: 8),
@@ -2329,7 +2331,7 @@ class _FlashPartitionCard extends StatelessWidget {
                   messenger.showSnackBar(
                     SnackBar(
                       content: Text(
-                        ok ? '已全量同步 6 项片外小程序、字库与关于资源 (0x2F)。' : '请先连接手表后再同步。',
+                        ok ? '已全量同步 7 项片外小程序、字库与关于资源 (0x2F)。' : '请先连接手表后再同步。',
                       ),
                     ),
                   );

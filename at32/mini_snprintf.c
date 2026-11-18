@@ -131,16 +131,3 @@ int __wrap_snprintf(char *buf, size_t cap, const char *fmt, ...) {
     return (int)o.pos;
 }
 
-__attribute__((used))
-int __wrap_atexit(void (*fn)(void)) {
-    (void)fn;
-    return 0;
-}
-
-__attribute__((used))
-void __wrap_exit(int code) {
-    (void)code;
-    for (;;) {
-    }
-}
-

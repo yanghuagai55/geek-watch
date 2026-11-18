@@ -3,148 +3,84 @@
 
 #include <stdio.h>
 
-/* GY-273/GY-271 常见两种芯片，寄存器布局不同：
-     QMC5883L  7 位地址 0x0D，ID 寄存器 0x0D 读回 0xFF
-     QMC5883P  7 位地址 0x2C，ID 寄存器 0x00 读回 0x80
-   上电自动探测，谁应答就用谁的初始化/读数流程。 */
-#define ADDR_L 0x0D
-#define ADDR_P 0x2C
+/* 硬件实际焊装为矽睿 QMC5883P（7 位地址 0x2C，CHIPID[0x00] = 0x80）。
+   按官方数据手册 Rev.E §7.1 正常模式例程初始化：
+     0x29 = 0x06（定义 X/Y/Z 轴符号极性）
+     0x0B = 0x08（Set/Reset 开启，量程 ±8G = 3750 LSB/G）
+     0x0A = 0xCD（Normal 模式，ODR=200Hz，OSR1=8，OSR2=8） */
+#define ADDR_P       0x2C
+#define P_REG_ID     0x00
+#define P_REG_DATA   0x01
+#define P_REG_STATUS 0x09
+#define P_REG_CTRL1  0x0A
+#define P_REG_CTRL2  0x0B
+#define P_REG_SIGN   0x29
 
-#define L_REG_DATA     0x00
-#define L_REG_STATUS   0x06
-#define L_REG_CTRL1    0x09
-#define L_REG_CTRL2    0x0A
-#define L_REG_SETRESET 0x0B
-#define L_REG_ID       0x0D
-
-#define P_REG_ID      0x00
-#define P_REG_DATA    0x01
-#define P_REG_STATUS  0x09
-#define P_REG_CTRL1   0x0A
-#define P_REG_CTRL2   0x0B
-
-static int ok;
-static int chip;   /* 0=无, 1=QMC5883L, 2=QMC5883P */
-static uint8_t addr;
-
-static int rd(uint8_t reg, uint8_t *v) {
-    return i2c_read(addr, reg, v, 1);
-}
-
-static int wr(uint8_t reg, uint8_t v) {
-    return i2c_write(addr, reg, &v, 1);
-}
+static uint8_t ok;
+static uint8_t err_cnt;
 
 int qmc5883l_chip(void) {
-    return chip;
+    return ok ? 2 : 0;
 }
 
 int qmc5883l_present(void) {
     uint8_t id = 0;
-
-    chip = 0;
-    addr = ADDR_L;
-    if (i2c_read(ADDR_L, L_REG_ID, &id, 1) && id == 0xFF) {
-        chip = 1;
-        return 1;
-    }
-    addr = ADDR_P;
-    id = 0;
-    if (i2c_read(ADDR_P, P_REG_ID, &id, 1) && id == 0x80) {
-        chip = 2;
-        return 1;
-    }
-    return 0;
-}
-
-static int init_l(void) {
-    uint8_t v;
-    uint32_t t0;
-
-    if (!wr(L_REG_CTRL2, 0x80)) return 0;     /* SOFT_RST */
-    t0 = hal_tick_ms();
-    do {
-        v = 0x80;
-        (void)rd(L_REG_CTRL2, &v);
-    } while ((v & 0x80) && (hal_tick_ms() - t0 < 5u));
-    if (!wr(L_REG_SETRESET, 0x01)) return 0;  /* 手册强制 0x0B=0x01 */
-    if (!wr(L_REG_CTRL1, 0x19)) return 0;     /* OSR512 | ±8G | 100Hz | 连续 */
-    return 1;
-}
-
-static int init_p(void) {
-    uint8_t id = 0;
-
-    /* 按 QMC5883P 手册 7.1 正常模式例程：0x29 轴符号 -> 0x0B -> 0x0A。
-       不要先软复位：这块模块复位后紧随的配置会被清掉（实测 C1/C2 读回 0）。 */
-    if (!wr(0x29, 0x06)) return 0;            /* X/Y/Z 轴符号 */
-    if (!wr(P_REG_CTRL2, 0x08)) return 0;     /* set/reset on | ±8G */
-    if (!wr(P_REG_CTRL1, 0xCD)) return 0;     /* normal | 200Hz | OSR8 | DSR8 */
-    if (!rd(P_REG_ID, &id) || id != 0x80) return 0;
-    return 1;
+    return i2c_read(ADDR_P, P_REG_ID, &id, 1) && id == 0x80u;
 }
 
 int qmc5883l_init(void) {
-    ok = 0;
+    static const uint8_t cfg[] = {
+        P_REG_SIGN,  0x06,
+        P_REG_CTRL2, 0x08,
+        P_REG_CTRL1, 0xCD
+    };
+    int i;
+
+    ok = 0u;
+    err_cnt = 0u;
     if (!qmc5883l_present()) return 0;
-    if (chip == 1) {
-        if (!init_l()) return 0;
-    } else {
-        if (!init_p()) return 0;
+    for (i = 0; i < (int)sizeof cfg; i += 2) {
+        if (!i2c_write(ADDR_P, cfg[i], &cfg[i + 1], 1)) return 0;
     }
-    ok = 1;
+    if (!qmc5883l_present()) return 0;
+    ok = 1u;
     return 1;
 }
 
 int qmc5883l_read(hal_mag_t *out) {
     uint8_t b[6];
-    uint8_t st = 0;
     int16_t x, y, z;
 
-    if (!out || !ok || chip == 0) return 0;
-    if (!rd(chip == 1 ? L_REG_STATUS : P_REG_STATUS, &st) || (st & 0x03u) != 0x01u) {
+    if (!out || !ok) return 0;
+    /* Normal 200Hz 连续更新且读取期间内部自动锁存 0x01..0x06，直接一次读 6 字节 */
+    if (!i2c_read(ADDR_P, P_REG_DATA, b, 6)) {
+        if (++err_cnt >= 10u) ok = 0u;
         return 0;
     }
-    if (!i2c_read(addr, chip == 1 ? L_REG_DATA : P_REG_DATA, b, 6)) return 0;
+    err_cnt = 0u;
     x = (int16_t)((b[1] << 8) | b[0]);
     y = (int16_t)((b[3] << 8) | b[2]);
     z = (int16_t)((b[5] << 8) | b[4]);
-    if (chip == 1) {
-        out->x = (int16_t)(x / 3);
-        out->y = (int16_t)(y / 3);
-        out->z = (int16_t)(z / 3);
-    } else {
-        out->x = (int16_t)((int32_t)x * 4 / 15);
-        out->y = (int16_t)((int32_t)y * 4 / 15);
-        out->z = (int16_t)((int32_t)z * 4 / 15);
-    }
+    /* ±8G：3750 LSB/G -> mG = raw * 1000 / 3750 = raw * 4 / 15 */
+    out->x = (int16_t)((int32_t)x * 4 / 15);
+    out->y = (int16_t)((int32_t)y * 4 / 15);
+    out->z = (int16_t)((int32_t)z * 4 / 15);
     return 1;
 }
 
 void qmc5883l_debug(char *out, int cap) {
-    uint8_t id = 0, st = 0, c1 = 0, c2 = 0, sr = 0;
+    uint8_t id = 0, st = 0, c1 = 0, c2 = 0;
 
     if (!out || cap <= 0) return;
     if (!qmc5883l_present()) {
         snprintf(out, (size_t)cap, "QMC=NONE");
         return;
     }
-    if (chip == 1) {
-        (void)rd(L_REG_ID, &id);
-        (void)rd(L_REG_STATUS, &st);
-        (void)rd(L_REG_CTRL1, &c1);
-        (void)rd(L_REG_CTRL2, &c2);
-        (void)rd(L_REG_SETRESET, &sr);
-        snprintf(out, (size_t)cap,
-                 "QMC5883L@0D;ID=%02X;ST=%02X;C1=%02X;C2=%02X;SR=%02X",
-                 id, st, c1, c2, sr);
-    } else {
-        (void)rd(P_REG_ID, &id);
-        (void)rd(P_REG_STATUS, &st);
-        (void)rd(P_REG_CTRL1, &c1);
-        (void)rd(P_REG_CTRL2, &c2);
-        snprintf(out, (size_t)cap,
-                 "QMC5883P@2C;ID=%02X;ST=%02X;C1=%02X;C2=%02X",
-                 id, st, c1, c2);
-    }
+    (void)i2c_read(ADDR_P, P_REG_ID, &id, 1);
+    (void)i2c_read(ADDR_P, P_REG_STATUS, &st, 1);
+    (void)i2c_read(ADDR_P, P_REG_CTRL1, &c1, 1);
+    (void)i2c_read(ADDR_P, P_REG_CTRL2, &c2, 1);
+    snprintf(out, (size_t)cap,
+             "QMC5883P@2C;ID=%02X;ST=%02X;C1=%02X;C2=%02X",
+             id, st, c1, c2);
 }

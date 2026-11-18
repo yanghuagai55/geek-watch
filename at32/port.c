@@ -113,8 +113,7 @@ static void clock_setup(void) {
     uint32_t n;
     uint32_t pll_ok = 0;
 
-    crm_reset();
-    /* 120MHz 需要 3 个等待周期（厂商模板同值）。 */
+    /* 120MHz 需要 3 个等待周期（Reset_Handler 中 SystemInit 已完成 CRM 复位）。 */
     flash_psr_set(FLASH_WAIT_CYCLE_3);
     /* 复位后 SCLK = HICK/6 = 8MHz，先按 8MHz 打节拍。 */
     systick_on(8000u);
@@ -221,22 +220,12 @@ static void gpio_setup(void) {
 }
 
 static void spi_setup(void) {
-    spi_init_type spi_init_struct;
-
     crm_periph_clock_enable(CRM_SPI1_PERIPH_CLOCK, TRUE);
     crm_periph_clock_enable(CRM_DMA1_PERIPH_CLOCK, TRUE);
 
-    spi_default_para_init(&spi_init_struct);
-    spi_init_struct.transmission_mode = SPI_TRANSMIT_FULL_DUPLEX;
-    spi_init_struct.master_slave_mode = SPI_MODE_MASTER;
-    spi_init_struct.mclk_freq_division = SPI_CLK_DIV;
-    spi_init_struct.first_bit_transmission = SPI_FIRST_BIT_MSB;
-    spi_init_struct.frame_bit_num = SPI_FRAME_8BIT;
-    spi_init_struct.clock_polarity = SPI_CLOCK_POLARITY_LOW;
-    spi_init_struct.clock_phase = SPI_CLOCK_PHASE_1EDGE;
-    spi_init_struct.cs_mode_selection = SPI_CS_SOFTWARE_MODE;
-    spi_init(SPI1, &spi_init_struct);
-    spi_enable(SPI1, TRUE);
+    /* 8-bit, Master, SW CS (SWCSEN|SWCSIL), Mode 0, MSB first, DIV_4, SPIEN */
+    SPI1->ctrl2 = 0u;
+    SPI1->ctrl1 = (uint16_t)(0x0344u | ((uint32_t)SPI_CLK_DIV << 3));
 
     /* 像素走 DMA1 通道 3（SPI1_TX，固定映射） */
     dma_reset(DMA1_CHANNEL3);
@@ -602,12 +591,13 @@ void hal_display_set_clock(uint8_t mhz) {
 }
 
 void hal_frame_pace(void) {
+    /* 保证即使重负载动画帧（>=16ms）每帧也能推进 1 个 64B 片外资产块，不饥饿。 */
+    link_asset_pump(64u);
     for(;;) {
         ui_service();
         if((tick_ms - pace_ms) >= 16u) {
             break;
         }
-        /* 片外 Flash 资源只吃帧间空闲：64B 约 1.6ms，不会把动画帧拉长。 */
         link_asset_pump(64u);
         hal_idle();
     }
@@ -674,10 +664,10 @@ void board_init(void) {
 
 /* ---- 传感器/执行器 HAL 包装 ---- */
 /* 按实物模块焊装方位（D:\下载\IMG_20261115_130804.jpg）统一映射到手表右手系：
-   +X = 屏幕右，+Y = 屏幕上（12点方向），+Z = 朝屏幕外（平放指天）。
+   +X = 屏幕右（3点方向），+Y = 屏幕上（12点方向），+Z = 朝屏幕外（平放指天）。
    - GY-521 MPU6050(0x68)：Pin1 在右上 (+X_mpu=-Y_b, +Y_mpu=+X_b, +Z_mpu=+Z_b)
-   - GY-273 QMC5883P(0x2C)：Pin1 在右上，按手册 Fig.2 旋转 90°CW
-     (+X_qmc=+Y_b, +Y_qmc=-X_b, +Z_qmc=+Z_b)；若为 QMC5883L(0x0D) 按丝印 (-mx,-my,+mz)。 */
+   - GY-273 QMC5883P(0x2C)：写入 0x29=0x06 轴极性后，原始输出 (+X,+Y,+Z)
+     已与手表右手系 (+X_b,+Y_b,+Z_b) 原生同向对齐，无需再做 90° 旋转。 */
 static void board_align_imu(hal_imu_t *s) {
     int16_t rx = s->ax, ry = s->ay;
     int16_t gx = s->gx, gy = s->gy;
@@ -685,17 +675,6 @@ static void board_align_imu(hal_imu_t *s) {
     s->ay = (int16_t)-rx;
     s->gx = gy;
     s->gy = (int16_t)-gx;
-}
-
-static void board_align_mag(hal_mag_t *m, int chip) {
-    int16_t rx = m->x, ry = m->y;
-    if(chip == 2) {         /* QMC5883P @ 0x2C */
-        m->x = (int16_t)-ry;
-        m->y = rx;
-    } else if(chip == 1) {  /* QMC5883L @ 0x0D */
-        m->x = (int16_t)-rx;
-        m->y = (int16_t)-ry;
-    }
 }
 
 int hal_imu_read(hal_imu_t *out) {
@@ -707,11 +686,7 @@ int hal_imu_read(hal_imu_t *out) {
 }
 
 int hal_mag_read(hal_mag_t *out) {
-    if(!out || !qmc5883l_read(out)) {
-        return 0;
-    }
-    board_align_mag(out, qmc5883l_chip());
-    return 1;
+    return out && qmc5883l_read(out);
 }
 
 int hal_baro_read(hal_baro_t *out) {
@@ -761,14 +736,17 @@ int hal_debug_snapshot(char *out, int cap) {
     imu9_get(&s9);
 #if defined(AT32_SLIM_ROM)
     n = snprintf(out, (size_t)cap,
-                 "M%d Q%d AX%u A%d,%d,%d G%d,%d,%d M%d,%d,%d R%d P%d H%u",
-                 mpu6050_present(), qmc5883l_chip(),
-                 (unsigned)s9.fused_axes,
+                 "MPU=%u;%s;A=%d,%d,%d;G=%d,%d,%d;M=%d,%d,%d;9AX=%u;RPY=%d,%d,%u;BAT=%u;CAL=%u,%u",
+                 (unsigned)s9.imu_ok,
+                 qmc5883l_chip() ? "QMC5883P@2C" : "QMC=NONE",
                  s9.ax, s9.ay, s9.az,
                  s9.gx, s9.gy, s9.gz,
                  s9.mx, s9.my, s9.mz,
+                 (unsigned)s9.fused_axes,
                  s9.roll_d10 / 10, s9.pitch_d10 / 10,
-                 (unsigned)s9.heading_deg);
+                 (unsigned)s9.heading_deg,
+                 (unsigned)g_battery_mv,
+                 (unsigned)s9.mag_cal, (unsigned)s9.gyro_cal);
     if (n < 0) n = 0;
     if (n >= cap) n = cap - 1;
     for (i = 0; i < n && i < (int)sizeof g_debug_line - 1; i++) {
@@ -812,10 +790,7 @@ int hal_debug_snapshot(char *out, int cap) {
 }
 
 const char *hal_mag_name(void) {
-    int c = qmc5883l_chip();
-    if(c == 1) return "QMC5883L";
-    if(c == 2) return "QMC5883P";
-    return "--";
+    return qmc5883l_chip() ? "QMC5883P" : "--";
 }
 
 int hal_ble_connected(void) {
@@ -928,14 +903,19 @@ const char *hal_clock_src(void) {
 }
 
 /* 帧空隙里的协作服务：串口解析 + 周期采样计步 + 传感器掉线热恢复（20ms 节拍）。
-   由 main.c 通过 ui_set_service 挂上。采样节流到 ~50Hz。 */
+   由 main.c 通过 ui_set_service 挂上。采样节流到 ~50Hz。
+   刷屏分带 DMA 期间（display_active=1）不重入，避免 I2C 阻塞打断 SPI 流水线或释放渲染缓冲。 */
 void port_service(void) {
     static uint32_t sensor_ms;
     static uint8_t imu_miss, mag_miss;
-    uint32_t now = tick_ms;
+    uint32_t now;
     hal_imu_t imu;
     hal_mag_t mag;
 
+    if(display_active) {
+        return;
+    }
+    now = tick_ms;
     link_poll();
     if((now - sensor_ms) >= 20u) {
         int imu_ok = hal_imu_read(&imu);

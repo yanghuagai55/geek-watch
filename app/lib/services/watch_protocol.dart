@@ -463,53 +463,108 @@ class WatchSensorData {
       return <int>[v0, v1, v2];
     }
 
-    for (final rawToken in body.split(';')) {
-      final token = rawToken.trim();
-      if (token.isEmpty) continue;
-      if (token.startsWith('MPU=')) {
-        mpuOk = token.substring(4) == '1';
-        hasTelemetry = true;
-      } else if (token.startsWith('QMC') || token.startsWith('MAG')) {
-        magChip = token;
-        if (token.contains('@')) magOk = true;
-      } else if (token.startsWith('A=')) {
-        final v = parseTriplet(token.substring(2));
-        if (v != null) {
-          ax = v[0];
-          ay = v[1];
-          az = v[2];
+    if (body.contains(';')) {
+      for (final rawToken in body.split(';')) {
+        final token = rawToken.trim();
+        if (token.isEmpty) continue;
+        if (token.startsWith('MPU=')) {
+          mpuOk = token.substring(4) == '1';
           hasTelemetry = true;
+        } else if (token.startsWith('QMC') || token.startsWith('MAG')) {
+          magChip = token;
+          if (token.contains('@')) magOk = true;
+        } else if (token.startsWith('A=')) {
+          final v = parseTriplet(token.substring(2));
+          if (v != null) {
+            ax = v[0];
+            ay = v[1];
+            az = v[2];
+            hasTelemetry = true;
+          }
+        } else if (token.startsWith('M=')) {
+          final v = parseTriplet(token.substring(2));
+          if (v != null) {
+            mx = v[0];
+            my = v[1];
+            mz = v[2];
+            hasMagVec = true;
+            hasTelemetry = true;
+          }
+        } else if (token.startsWith('9AX=')) {
+          final parsed = int.tryParse(token.substring(4).trim());
+          if (parsed != null) {
+            fusedAxes = parsed;
+            hasTelemetry = true;
+          }
+        } else if (token.startsWith('RPY=')) {
+          final v = parseTriplet(token.substring(4));
+          if (v != null) {
+            rollDeg = v[0].toDouble();
+            pitchDeg = v[1].toDouble();
+            headingDeg = ((v[2] % 360) + 360) % 360.0;
+            hasTelemetry = true;
+          }
+        } else if (token.startsWith('BAT=')) {
+          final mv = int.tryParse(token.substring(4).trim());
+          if (mv != null) batteryMv = mv;
+        } else if (token.startsWith('CAL=')) {
+          final parts = token.substring(4).split(',');
+          if (parts.isNotEmpty) magCalState = int.tryParse(parts[0].trim());
+          if (parts.length > 1) gyroCalState = int.tryParse(parts[1].trim());
         }
-      } else if (token.startsWith('M=')) {
-        final v = parseTriplet(token.substring(2));
-        if (v != null) {
-          mx = v[0];
-          my = v[1];
-          mz = v[2];
-          hasMagVec = true;
-          hasTelemetry = true;
+      }
+    } else {
+      // 兼容 SLIM 空格分隔格式：M1 Q2 AX9 A8,-98,1078 G0,1,1 M716,349,-611 R0 P-5 H292
+      var mCount = 0;
+      for (final rawToken in body.split(RegExp(r'\s+'))) {
+        final token = rawToken.trim();
+        if (token.isEmpty) continue;
+        if (token.startsWith('AX')) {
+          final parsed = int.tryParse(token.substring(2));
+          if (parsed != null) {
+            fusedAxes = parsed;
+            hasTelemetry = true;
+          }
+        } else if (token.startsWith('A')) {
+          final v = parseTriplet(token.substring(1));
+          if (v != null) {
+            ax = v[0];
+            ay = v[1];
+            az = v[2];
+            hasTelemetry = true;
+          }
+        } else if (token.startsWith('Q')) {
+          final q = int.tryParse(token.substring(1)) ?? 0;
+          magOk = q > 0;
+          magChip = q == 2 ? 'QMC5883P@2C' : (q == 1 ? 'QMC5883L@0D' : 'QMC=NONE');
+        } else if (token.startsWith('M')) {
+          mCount++;
+          if (mCount == 1 && !token.contains(',')) {
+            mpuOk = token.substring(1) == '1';
+            hasTelemetry = true;
+          } else {
+            final v = parseTriplet(token.substring(1));
+            if (v != null) {
+              mx = v[0];
+              my = v[1];
+              mz = v[2];
+              hasMagVec = true;
+              hasTelemetry = true;
+            }
+          }
+        } else if (token.startsWith('R')) {
+          final r = int.tryParse(token.substring(1));
+          if (r != null) rollDeg = r.toDouble();
+        } else if (token.startsWith('P')) {
+          final p = int.tryParse(token.substring(1));
+          if (p != null) pitchDeg = p.toDouble();
+        } else if (token.startsWith('H')) {
+          final h = int.tryParse(token.substring(1));
+          if (h != null) {
+            headingDeg = ((h % 360) + 360) % 360.0;
+            hasTelemetry = true;
+          }
         }
-      } else if (token.startsWith('9AX=')) {
-        final parsed = int.tryParse(token.substring(4).trim());
-        if (parsed != null) {
-          fusedAxes = parsed;
-          hasTelemetry = true;
-        }
-      } else if (token.startsWith('RPY=')) {
-        final v = parseTriplet(token.substring(4));
-        if (v != null) {
-          rollDeg = v[0].toDouble();
-          pitchDeg = v[1].toDouble();
-          headingDeg = ((v[2] % 360) + 360) % 360.0;
-          hasTelemetry = true;
-        }
-      } else if (token.startsWith('BAT=')) {
-        final mv = int.tryParse(token.substring(4).trim());
-        if (mv != null) batteryMv = mv;
-      } else if (token.startsWith('CAL=')) {
-        final parts = token.substring(4).split(',');
-        if (parts.isNotEmpty) magCalState = int.tryParse(parts[0].trim());
-        if (parts.length > 1) gyroCalState = int.tryParse(parts[1].trim());
       }
     }
 
@@ -688,7 +743,7 @@ class WatchConfigBundle {
   }
 }
 
-/// AT24C256 统一外置动态 ROM Pool 状态（0x2E，12/13 字节）。
+/// AT24C256 统一外置动态 ROM Pool 状态（0x2E，12/13/14 字节）。
 class WatchExtPoolState {
   const WatchExtPoolState({
     required this.poolTotal,
@@ -699,7 +754,9 @@ class WatchExtPoolState {
     required this.msgCount,
     required this.msgMax,
     this.assetFlags = 0,
+    this.assetFlags2 = 0,
     this.hasAssetFlags = false,
+    this.hasAssetFlags2 = false,
   });
 
   final int poolTotal;
@@ -710,7 +767,9 @@ class WatchExtPoolState {
   final int msgCount;
   final int msgMax;
   final int assetFlags;
+  final int assetFlags2;
   final bool hasAssetFlags;
+  final bool hasAssetFlags2;
 
   bool get hasSysModAsset => hasAssetFlags && (assetFlags & 0x02) != 0;
   bool get hasCompass3dAsset => hasAssetFlags && (assetFlags & 0x04) != 0;
@@ -719,6 +778,7 @@ class WatchExtPoolState {
   bool get hasHdrAsset => hasAssetFlags && (assetFlags & 0x20) != 0;
   bool get hasSportModAsset => hasAssetFlags && (assetFlags & 0x40) != 0;
   bool get hasAnalogModAsset => hasAssetFlags && (assetFlags & 0x80) != 0;
+  bool get hasMusicModAsset => hasAssetFlags2 && (assetFlags2 & 0x01) != 0;
 
   static WatchExtPoolState? fromFrame(WatchFrame frame) {
     final d = frame.data;
@@ -733,7 +793,9 @@ class WatchExtPoolState {
       msgCount: d[10],
       msgMax: d[11],
       assetFlags: d.length >= 13 ? d[12] : 0,
+      assetFlags2: d.length >= 14 ? d[13] : 0,
       hasAssetFlags: d.length >= 13,
+      hasAssetFlags2: d.length >= 14,
     );
   }
 }

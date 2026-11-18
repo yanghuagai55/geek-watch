@@ -72,7 +72,7 @@ IMU_NOINLINE static int32_t div_s64_u32(int64_t num, uint32_t den) {
 IMU_NOINLINE static uint32_t isqrt64(uint64_t x) {
     uint64_t op = x;
     uint64_t res = 0;
-    uint64_t one = (uint64_t)1 << 62;
+    uint64_t one = (x >> 32) ? ((uint64_t)1 << 62) : ((uint64_t)1 << 30);
 
     while (one > op) {
         one >>= 2;
@@ -155,21 +155,23 @@ static void cross_q14(const int32_t a[3], const int32_t b[3], int32_t out[3]) {
 }
 
 IMU_NOINLINE static void quat_normalize_q24(void) {
-    uint64_t n2 = (uint64_t)((int64_t)g_ctx.q0 * g_ctx.q0 +
-                             (int64_t)g_ctx.q1 * g_ctx.q1 +
-                             (int64_t)g_ctx.q2 * g_ctx.q2 +
-                             (int64_t)g_ctx.q3 * g_ctx.q3);
-    uint32_t n = isqrt64(n2);
+    int32_t *q = &g_ctx.q0;
+    uint64_t n2 = 0u;
+    uint32_t n;
+    int i;
 
-    if (n == 0) {
+    for (i = 0; i < 4; i++) {
+        n2 += (uint64_t)((int64_t)q[i] * q[i]);
+    }
+    n = isqrt64(n2);
+    if (n == 0u) {
         g_ctx.q0 = Q24_ONE;
         g_ctx.q1 = g_ctx.q2 = g_ctx.q3 = 0;
         return;
     }
-    g_ctx.q0 = div_s64_u32((int64_t)g_ctx.q0 * Q24_ONE, n);
-    g_ctx.q1 = div_s64_u32((int64_t)g_ctx.q1 * Q24_ONE, n);
-    g_ctx.q2 = div_s64_u32((int64_t)g_ctx.q2 * Q24_ONE, n);
-    g_ctx.q3 = div_s64_u32((int64_t)g_ctx.q3 * Q24_ONE, n);
+    for (i = 0; i < 4; i++) {
+        q[i] = div_s64_u32((int64_t)q[i] * Q24_ONE, n);
+    }
 }
 
 /* 由正交旋转阵 R (Q14, Body->ENU) 按 Shepperd 方法转换到 Q24 四元数 */

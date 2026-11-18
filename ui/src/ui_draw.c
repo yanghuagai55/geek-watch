@@ -66,7 +66,7 @@ static int heal_pending;
 static int clip_x0, clip_x1, clip_y1;
 static ui_render_stats_t stats;
 static uint16_t dropped;
-static int tf_s = 256;
+static int tf_s;
 static int tf_ox;
 static int tf_oy;
 
@@ -116,7 +116,7 @@ static int pic_add(const void *p) {
     return pic_n++;
 }
 
-static uint32_t utf8_next(const char **ps) {
+uint32_t ui_utf8_next(const char **ps) {
     const unsigned char *s = (const unsigned char *)*ps;
 
     if (*s == 0) {
@@ -138,15 +138,13 @@ static uint32_t utf8_next(const char **ps) {
         return cp;
     }
     if ((*s & 0xF8) == 0xF0 && s[1] && s[2] && s[3]) {
-        uint32_t cp = ((uint32_t)(*s & 0x07) << 18) |
-                      ((uint32_t)(s[1] & 0x3F) << 12) |
-                      ((uint32_t)(s[2] & 0x3F) << 6) | (s[3] & 0x3F);
         *ps += 4;
-        return cp;
+        return 0xFFFDu;
     }
     *ps += 1;
-    return 0xFFFD;
+    return 0xFFFDu;
 }
+#define utf8_next ui_utf8_next
 
 void ui_draw_init(void) {
     items = ui_mem_alloc(sizeof(draw_item_t) * ITEM_MAX, 4);
@@ -198,12 +196,13 @@ void ui_draw_get_xform(int *scale256, int *ox, int *oy) {
     if (oy) *oy = tf_oy;
 }
 
-void ui_draw_fill(int16_t x, int16_t y, int16_t w, int16_t h,
-                  uint16_t color, uint8_t opacity) {
+static draw_item_t *alloc_item(int16_t x, int16_t y, int16_t w, int16_t h,
+                               uint16_t color, uint16_t str_off,
+                               uint8_t kind, uint8_t opacity, uint8_t scale) {
     draw_item_t *it;
 
-    if (!items || !item_space() || w <= 0 || h <= 0 || opacity == 0) {
-        return;
+    if (!items || !item_space() || opacity == 0) {
+        return 0;
     }
     it = &items[item_n++];
     it->x = x;
@@ -211,18 +210,25 @@ void ui_draw_fill(int16_t x, int16_t y, int16_t w, int16_t h,
     it->w = w;
     it->h = h;
     it->color = color;
-    it->str_off = 0;
-    it->kind = KIND_FILL;
+    it->str_off = str_off;
+    it->kind = kind;
     it->opacity = opacity;
-    it->scale = 0;
+    it->scale = scale;
     stamp(it);
+    return it;
+}
+
+void ui_draw_fill(int16_t x, int16_t y, int16_t w, int16_t h,
+                  uint16_t color, uint8_t opacity) {
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    (void)alloc_item(x, y, w, h, color, 0u, KIND_FILL, opacity, 0u);
 }
 
 void ui_draw_round(int16_t x, int16_t y, int16_t w, int16_t h, int16_t radius,
                    uint16_t color, uint8_t opacity) {
-    draw_item_t *it;
-
-    if (!items || !item_space() || w <= 0 || h <= 0 || opacity == 0) {
+    if (w <= 0 || h <= 0) {
         return;
     }
     if (radius < 0) {
@@ -234,17 +240,7 @@ void ui_draw_round(int16_t x, int16_t y, int16_t w, int16_t h, int16_t radius,
     if (radius > h / 2) {
         radius = (int16_t)(h / 2);
     }
-    it = &items[item_n++];
-    it->x = x;
-    it->y = y;
-    it->w = w;
-    it->h = h;
-    it->color = color;
-    it->str_off = 0;
-    it->kind = KIND_ROUND;
-    it->opacity = opacity;
-    it->scale = (uint8_t)radius;
-    stamp(it);
+    (void)alloc_item(x, y, w, h, color, 0u, KIND_ROUND, opacity, (uint8_t)radius);
 }
 
 void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
@@ -252,7 +248,7 @@ void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
                     uint16_t color, uint8_t opacity) {
     draw_item_t *it;
 
-    if (!items || !item_space() || w <= 0 || h <= 0 || rip_r <= 0 || opacity == 0) {
+    if (w <= 0 || h <= 0 || rip_r <= 0) {
         return;
     }
     if (radius < 0) {
@@ -267,38 +263,15 @@ void ui_draw_ripple(int16_t x, int16_t y, int16_t w, int16_t h,
     if (rip_r > 2048) {
         rip_r = 2048;
     }
-    it = &items[item_n++];
-    it->x = x;
-    it->y = y;
-    it->w = w;
-    it->h = h;
-    it->color = color;
-    it->str_off = (uint16_t)rip_r;
-    it->kind = KIND_RIPPLE;
-    it->opacity = opacity;
-    it->scale = (uint8_t)radius;
-    stamp(it);
-    it->pal_off = (uint16_t)cy;
+    it = alloc_item(x, y, w, h, color, (uint16_t)rip_r, KIND_RIPPLE, opacity, (uint8_t)radius);
+    if (it) {
+        it->pal_off = (uint16_t)cy;
+    }
 }
 
 static void line_item_add(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                           uint8_t width, uint16_t color, uint8_t opacity) {
-    draw_item_t *it;
-
-    if (!items || !item_space() || opacity == 0) {
-        return;
-    }
-    it = &items[item_n++];
-    it->x = x0;
-    it->y = y0;
-    it->w = x1;
-    it->h = y1;
-    it->color = color;
-    it->str_off = 0;
-    it->kind = KIND_LINE;
-    it->opacity = opacity;
-    it->scale = width;
-    stamp(it);
+    (void)alloc_item(x0, y0, x1, y1, color, 0u, KIND_LINE, opacity, width);
 }
 
 void ui_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
@@ -313,10 +286,9 @@ void ui_draw_line_w(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
 
 void ui_draw_text(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale) {
-    draw_item_t *it;
     int len = 0;
 
-    if (!items || !strs || !utf8 || !item_space() || opacity == 0) {
+    if (!strs || !utf8 || opacity == 0) {
         return;
     }
     while (utf8[len]) {
@@ -326,17 +298,9 @@ void ui_draw_text(int16_t x, int16_t y, const char *utf8,
         dropped++;
         return;
     }
-    it = &items[item_n++];
-    it->x = x;
-    it->y = y;
-    it->w = 0;
-    it->h = 0;
-    it->color = color;
-    it->str_off = (uint16_t)str_n;
-    it->kind = KIND_TEXT;
-    it->opacity = opacity;
-    it->scale = scale ? scale : 1;
-    stamp(it);
+    if (!alloc_item(x, y, 0, 0, color, (uint16_t)str_n, KIND_TEXT, opacity, scale ? scale : 1u)) {
+        return;
+    }
     while (*utf8) {
         strs[str_n++] = *utf8++;
     }
@@ -394,54 +358,32 @@ void ui_svg_draw(int16_t x, int16_t y, uint8_t scale,
 }
 #endif
 
-void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
-                   uint8_t scale, const uint16_t *rgb565, uint8_t opacity) {
-    draw_item_t *it;
+static void pic_item_add(int16_t x, int16_t y, int16_t w, int16_t h,
+                         const void *ptr, uint16_t color,
+                         uint8_t kind, uint8_t opacity, uint8_t scale) {
     int ref;
 
-    if (!items || !rgb565 || w <= 0 || h <= 0 || !item_space() || opacity == 0) {
+    if (!items || !ptr || w <= 0 || h <= 0 || item_n >= ITEM_MAX || opacity == 0) {
+        if (items && ptr && w > 0 && h > 0 && opacity != 0 && item_n >= ITEM_MAX) {
+            dropped++;
+        }
         return;
     }
-    ref = pic_add(rgb565);
+    ref = pic_add(ptr);
     if (ref < 0) {
         return;
     }
-    it = &items[item_n++];
-    it->x = x;
-    it->y = y;
-    it->w = w;
-    it->h = h;
-    it->color = 0;
-    it->str_off = (uint16_t)ref;
-    it->kind = KIND_IMAGE;
-    it->opacity = opacity;
-    it->scale = scale ? scale : 1;
-    stamp(it);
+    (void)alloc_item(x, y, w, h, color, (uint16_t)ref, kind, opacity, scale ? scale : 1u);
+}
+
+void ui_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
+                   uint8_t scale, const uint16_t *rgb565, uint8_t opacity) {
+    pic_item_add(x, y, w, h, rgb565, 0u, KIND_IMAGE, opacity, scale);
 }
 
 void ui_mask_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                   const uint8_t *cover4, uint16_t color, uint8_t opacity) {
-    draw_item_t *it;
-    int ref;
-
-    if (!items || !cover4 || w <= 0 || h <= 0 || !item_space() || opacity == 0) {
-        return;
-    }
-    ref = pic_add(cover4);
-    if (ref < 0) {
-        return;
-    }
-    it = &items[item_n++];
-    it->x = x;
-    it->y = y;
-    it->w = w;
-    it->h = h;
-    it->color = color;
-    it->str_off = (uint16_t)ref;
-    it->kind = KIND_MASK;
-    it->opacity = opacity;
-    it->scale = 1;
-    stamp(it);
+    pic_item_add(x, y, w, h, cover4, color, KIND_MASK, opacity, 1u);
 }
 
 void ui_mask_rle_draw(int16_t x, int16_t y, int16_t w, int16_t h,
@@ -1029,27 +971,7 @@ static void raster_mask(const draw_item_t *it, int band_y) {
 
 void ui_mask1_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                    const uint8_t *bits, uint16_t color, uint8_t opacity) {
-    draw_item_t *it;
-    int ref;
-
-    if (!items || !bits || w <= 0 || h <= 0 || !item_space() || opacity == 0) {
-        return;
-    }
-    ref = pic_add(bits);
-    if (ref < 0) {
-        return;
-    }
-    it = &items[item_n++];
-    it->x = x;
-    it->y = y;
-    it->w = w;
-    it->h = h;
-    it->color = color;
-    it->str_off = (uint16_t)ref;
-    it->kind = KIND_MASK1;
-    it->opacity = opacity;
-    it->scale = 1;
-    stamp(it);
+    pic_item_add(x, y, w, h, bits, color, KIND_MASK1, opacity, 1u);
 }
 
 void ui_mask1_draw_clip(int16_t x, int16_t y, int16_t w, int16_t h,

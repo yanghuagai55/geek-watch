@@ -2741,87 +2741,85 @@ int link_hdr_lookup(uint32_t cp, int16_t *w, int16_t *h, int16_t *adv,
     return 1;
 }
 
-void link_begin_pic_sport(void) {
-    if (lk.dyn_kind == DYN_SPORT && lk.dyn_buf &&
-        (lk.load_need > 0u || lk.pic_ready_kind == DYN_SPORT)) {
+static void pic_dyn_begin(uint8_t blk_id, uint32_t magic, uint8_t kind, uint16_t max_bytes) {
+    if (lk.load_kind == kind && lk.load_need > 0u) {
         return;
     }
-    if (!begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u)) {
+    if (lk.dyn_kind == kind && lk.dyn_buf &&
+        (lk.load_need > 0u || (lk.pic_ready_kind == kind && lk.pic_entry >= 12u))) {
+        return;
+    }
+    if (!begin_pic_load(blk_id, magic, kind, max_bytes) && kind == DYN_SPORT) {
         /* SPR1 需要 3.4KB 连续块；碎片化时先退掉标题/字模缓存再试。 */
         free_hdr_buf();
         font_cache_free();
-        (void)begin_pic_load(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
+        (void)begin_pic_load(blk_id, magic, kind, max_bytes);
     }
+}
+
+static void pic_dyn_leave(uint8_t kind) {
+    if (lk.dyn_kind == kind) {
+        free_dyn_buf();
+    }
+}
+
+static int pic_dyn_ready(uint8_t kind) {
+    return lk.dyn_kind == kind && lk.pic_ready_kind == kind &&
+           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+}
+
+static const uint8_t *pic_dyn_blob(uint8_t kind, uint16_t *entry_off) {
+    if (!pic_dyn_ready(kind)) return 0;
+    if (entry_off) *entry_off = lk.pic_entry;
+    return lk.dyn_buf;
+}
+
+void link_begin_pic_sport(void) {
+    pic_dyn_begin(EXT_BLK_ASSET_SPORT, PIC_MAGIC_SPORT, DYN_SPORT, 4608u);
 }
 
 void link_leave_pic_sport(void) {
-    if (lk.dyn_kind == DYN_SPORT) {
-        free_dyn_buf();
-    }
+    pic_dyn_leave(DYN_SPORT);
 }
 
 int link_pic_sport_ready(void) {
-    return lk.dyn_kind == DYN_SPORT && lk.pic_ready_kind == DYN_SPORT &&
-           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+    return pic_dyn_ready(DYN_SPORT);
 }
 
 const uint8_t *link_pic_sport_blob(uint16_t *entry_off) {
-    if (!link_pic_sport_ready()) return 0;
-    if (entry_off) *entry_off = lk.pic_entry;
-    return lk.dyn_buf;
+    return pic_dyn_blob(DYN_SPORT, entry_off);
 }
 
 void link_begin_pic_analog(void) {
-    if (lk.dyn_kind == DYN_ANALOG && lk.dyn_buf &&
-        (lk.load_need > 0u || lk.pic_ready_kind == DYN_ANALOG)) {
-        return;
-    }
-    (void)begin_pic_load(EXT_BLK_ASSET_ANALOG, PIC_MAGIC_ANALOG, DYN_ANALOG, 3072u);
+    pic_dyn_begin(EXT_BLK_ASSET_ANALOG, PIC_MAGIC_ANALOG, DYN_ANALOG, 3072u);
 }
 
 void link_leave_pic_analog(void) {
-    if (lk.dyn_kind == DYN_ANALOG) {
-        free_dyn_buf();
-    }
+    pic_dyn_leave(DYN_ANALOG);
 }
 
 int link_pic_analog_ready(void) {
-    return lk.dyn_kind == DYN_ANALOG && lk.pic_ready_kind == DYN_ANALOG &&
-           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+    return pic_dyn_ready(DYN_ANALOG);
 }
 
 const uint8_t *link_pic_analog_blob(uint16_t *entry_off) {
-    if (!link_pic_analog_ready()) return 0;
-    if (entry_off) *entry_off = lk.pic_entry;
-    return lk.dyn_buf;
+    return pic_dyn_blob(DYN_ANALOG, entry_off);
 }
 
 void link_begin_pic_sys(void) {
-    if (lk.load_kind == DYN_SYS && lk.load_need > 0u) {
-        return;
-    }
-    if (lk.dyn_kind == DYN_SYS && lk.dyn_buf && lk.pic_ready_kind == DYN_SYS &&
-        lk.pic_entry >= 12u) {
-        return;
-    }
-    (void)begin_pic_load(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
+    pic_dyn_begin(EXT_BLK_ASSET_SYS, PIC_MAGIC_SYS, DYN_SYS, 4096u);
 }
 
 int link_pic_sys_ready(void) {
-    return lk.dyn_kind == DYN_SYS && lk.pic_ready_kind == DYN_SYS &&
-           lk.dyn_buf != 0 && lk.load_need == 0u && lk.pic_entry >= 12u;
+    return pic_dyn_ready(DYN_SYS);
 }
 
 const uint8_t *link_pic_sys_blob(uint16_t *entry_off) {
-    if (!link_pic_sys_ready()) return 0;
-    if (entry_off) *entry_off = lk.pic_entry;
-    return lk.dyn_buf;
+    return pic_dyn_blob(DYN_SYS, entry_off);
 }
 
 void link_leave_pic_sys(void) {
-    if (lk.dyn_kind == DYN_SYS) {
-        free_dyn_buf();
-    }
+    pic_dyn_leave(DYN_SYS);
 }
 
 void link_begin_pic_music(void) {
@@ -2848,31 +2846,26 @@ const uint8_t *link_pic_music_blob(uint16_t *entry_off) {
     return lk.mus_buf;
 }
 
-/* 片外中文点阵字模：按字形偏移读 40B（单字 RLE 最大 34B），6 槽环形缓存。 */
-enum { FONT_EXT_SLOTS = 6, FONT_EXT_BYTES = 40 };
-static struct {
-    uint16_t off;
-    uint8_t *buf;
-} font_cache[FONT_EXT_SLOTS];
+/* 片外中文点阵字模：按字形偏移读 36B（单字 RLE 最大 34B），10 槽环形缓存。
+   10 槽足以容纳单屏全部片外汉字（如运动子菜单 8 个片外汉字），彻底消除帧内抖动。 */
+enum { FONT_EXT_SLOTS = 10, FONT_EXT_BYTES = 36 };
+static uint8_t *font_cache_mem;
+static uint16_t font_cache_off[FONT_EXT_SLOTS];
 static uint8_t font_cache_next;
 
 static void font_cache_flush(void) {
     int i;
     for (i = 0; i < FONT_EXT_SLOTS; i++) {
-        font_cache[i].off = 0xFFFFu;
+        font_cache_off[i] = 0xFFFFu;
     }
 }
 
 static void font_cache_free(void) {
-    int i;
-
-    if (font_cache[0].buf) {
-        ui_mem_free(font_cache[0].buf);
+    if (font_cache_mem) {
+        ui_mem_free(font_cache_mem);
+        font_cache_mem = 0;
     }
-    for (i = 0; i < FONT_EXT_SLOTS; i++) {
-        font_cache[i].buf = 0;
-        font_cache[i].off = 0xFFFFu;
-    }
+    font_cache_flush();
     font_cache_next = 0u;
 }
 
@@ -2880,44 +2873,38 @@ const uint8_t *link_font_ext_bits(uint16_t off) {
     const ext_blk_t *b = &lk.ext_dir.blks[EXT_BLK_ASSET_FONT];
     uint16_t total = ui_font_ext_total();
     uint16_t n;
-    int i, slot = -1;
+    uint8_t *dst;
+    int i, slot;
 
     if (b->len == 0u || off >= total || total > b->len) {
         return 0;
     }
-    for (i = 0; i < FONT_EXT_SLOTS; i++) {
-        if (font_cache[i].buf && font_cache[i].off == off) {
-            return font_cache[i].buf;
-        }
-        if (!font_cache[i].buf && slot < 0) {
-            slot = i;
-        }
-    }
-    if (!font_cache[0].buf) {
-        uint8_t *mem = (uint8_t *)ui_mem_alloc(FONT_EXT_SLOTS * FONT_EXT_BYTES, 4);
-        if (!mem) {
+    if (!font_cache_mem) {
+        font_cache_mem = (uint8_t *)ui_mem_alloc(FONT_EXT_SLOTS * FONT_EXT_BYTES, 4);
+        if (!font_cache_mem) {
             return 0;
         }
-        for (i = 0; i < FONT_EXT_SLOTS; i++) {
-            font_cache[i].buf = mem + (uint16_t)i * FONT_EXT_BYTES;
-            font_cache[i].off = 0xFFFFu;
-        }
-        slot = 0;
-    } else if (slot < 0) {
-        slot = font_cache_next;
-        font_cache_next = (uint8_t)((font_cache_next + 1u) % FONT_EXT_SLOTS);
+        font_cache_flush();
+        font_cache_next = 0u;
     }
+    for (i = 0; i < FONT_EXT_SLOTS; i++) {
+        if (font_cache_off[i] == off) {
+            return font_cache_mem + (uint16_t)i * FONT_EXT_BYTES;
+        }
+    }
+    slot = font_cache_next;
+    font_cache_next = (uint8_t)((font_cache_next + 1u) % FONT_EXT_SLOTS);
+    dst = font_cache_mem + (uint16_t)slot * FONT_EXT_BYTES;
     n = (uint16_t)(total - off);
     if (n > FONT_EXT_BYTES) {
         n = FONT_EXT_BYTES;
     }
-    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off + off,
-                            font_cache[slot].buf, n)) {
-        font_cache[slot].off = 0xFFFFu;
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off + off, dst, n)) {
+        font_cache_off[slot] = 0xFFFFu;
         return 0;
     }
-    font_cache[slot].off = off;
-    return font_cache[slot].buf;
+    font_cache_off[slot] = off;
+    return dst;
 }
 
 uint16_t link_img_gen(void) {

@@ -14,37 +14,27 @@
 #define I2C_TO_LONG   40000u
 
 static void pins_i2c(void) {
-    gpio_init_type g;
-
-    gpio_pin_mux_config(I2C_PORT, GPIO_PINS_SOURCE9, GPIO_MUX_4);
-    gpio_pin_mux_config(I2C_PORT, GPIO_PINS_SOURCE10, GPIO_MUX_4);
-    gpio_default_para_init(&g);
-    g.gpio_pins = I2C_SCL_PIN | I2C_SDA_PIN;
-    g.gpio_mode = GPIO_MODE_MUX;
-    g.gpio_out_type = GPIO_OUTPUT_OPEN_DRAIN;
-    g.gpio_pull = GPIO_PULL_UP;
-    g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-    gpio_init(I2C_PORT, &g);
+    /* PA9=SCL, PA10=SDA: MUX4, open-drain, pull-up, stronger drive */
+    GPIOA->muxh = (GPIOA->muxh & ~0x00000FF0u) | 0x00000440u;
+    GPIOA->cfgr = (GPIOA->cfgr & ~(0xFu << 18)) | (0xAu << 18);
+    GPIOA->omode |= (1u << 9) | (1u << 10);
+    GPIOA->pull = (GPIOA->pull & ~(0xFu << 18)) | (0x5u << 18);
+    GPIOA->odrvr &= ~(0xFu << 18);
 }
 
 static void hw_start(void) {
     /* APB1 = 120MHz；400kHz 快速模式 2:1 -> speed = 120M/(400k*3) = 100 */
-    I2C_HW->ctrl1_bit.i2cen = 0;
-    I2C_HW->ctrl1_bit.reset = 1;
-    I2C_HW->ctrl1_bit.reset = 0;
-    I2C_HW->ctrl2_bit.clkfreq = 120;
-    I2C_HW->clkctrl_bit.speed = 100;
-    I2C_HW->clkctrl_bit.dutymode = 0;
-    I2C_HW->clkctrl_bit.speedmode = 1;
-    I2C_HW->tmrise_bit.risetime = 37;
-    I2C_HW->ctrl1_bit.stretch = 0;   /* 0 = 允许从机拉低 SCL 做时钟延展 */
-    I2C_HW->ctrl1_bit.acken = 1;
-    I2C_HW->ctrl1_bit.i2cen = 1;
+    I2C_HW->ctrl1 = 0x8000u;         /* reset = 1 */
+    I2C_HW->ctrl1 = 0u;              /* reset = 0 */
+    I2C_HW->ctrl2 = 120u;
+    I2C_HW->clkctrl = 0x8000u | 100u;/* speedmode = 1, dutymode = 0, speed = 100 */
+    I2C_HW->tmrise = 37u;
+    I2C_HW->ctrl1 = 0x0401u;         /* acken = 1, stretch = 0, i2cen = 1 */
 }
 
 /* 从机异常（如 MPU6050 被复位打断）时可能把 SDA 一直拉低，只复位 I2C
    外设解锁不了总线。临时把 PA9/PA10 切成 GPIO 开漏，打 9 个 SCL 时钟
-   再补一个 STOP，然后再切回 I2C 复用。 */
+   再补一个标准 STOP，然后再切回 I2C 复用。 */
 static void bus_delay(void) {
     volatile int d = 0;
     while (d < 200) {
@@ -55,6 +45,7 @@ static void bus_delay(void) {
 static void bus_clear(void) {
     int i;
 
+    I2C_HW->ctrl1 = 0u;
     GPIOA->cfgr = (GPIOA->cfgr & ~(0xFu << 18)) | (0x5u << 18);
     GPIOA->omode |= (1u << 9) | (1u << 10);
     GPIOA->odt |= (1u << 9) | (1u << 10);
@@ -65,9 +56,14 @@ static void bus_clear(void) {
         GPIOA->odt |= (1u << 9);
         bus_delay();
     }
+    /* 标准 STOP：先在 SCL 低电平时拉低 SDA，再释放 SCL 高，最后释放 SDA 高 */
+    GPIOA->odt &= ~(1u << 9);
+    bus_delay();
     GPIOA->odt &= ~(1u << 10);
     bus_delay();
-    GPIOA->odt |= (1u << 9) | (1u << 10);
+    GPIOA->odt |= (1u << 9);
+    bus_delay();
+    GPIOA->odt |= (1u << 10);
     bus_delay();
     pins_i2c();
 }
@@ -86,24 +82,24 @@ void i2c_recover(void) {
 }
 
 static void clear_err(void) {
-    /* sts1 低位标志写 0 清除；ACKFAIL 是粘滞位，不清会让后续事务全部秒失败。 */
-    I2C_HW->sts1 = (uint16_t)~(I2C_ACKFAIL_FLAG | I2C_BUSERR_FLAG |
-                               I2C_ARLOST_FLAG | I2C_OUF_FLAG);
+    /* sts1 高 8 位错误标志均为 rc_w0（写 0 清除），低 8 位只读不受影响。 */
+    I2C_HW->sts1 = 0u;
 }
 
 static int wait_idle(void) {
     uint32_t n = I2C_TO_LONG;
-    while ((I2C_HW->sts2 & 0x2u) != 0u && --n != 0u) {
+    while (((I2C_HW->sts2 & 0x2u) != 0u || (I2C_HW->ctrl1 & 0x300u) != 0u) && --n != 0u) {
     }
     return n != 0u;
 }
 
 static int wait_set(uint32_t flag) {
     uint32_t n = I2C_TO_SHORT;
+    uint32_t s;
 
-    while ((I2C_HW->sts1 & flag) == 0u) {
-        if ((I2C_HW->sts1 & (I2C_BUSERR_FLAG | I2C_ARLOST_FLAG |
-                            I2C_ACKFAIL_FLAG | I2C_OUF_FLAG)) != 0u || --n == 0u) {
+    while (((s = I2C_HW->sts1) & flag) == 0u) {
+        if ((s & (I2C_BUSERR_FLAG | I2C_ARLOST_FLAG |
+                  I2C_ACKFAIL_FLAG | I2C_OUF_FLAG)) != 0u || --n == 0u) {
             return 0;
         }
     }
@@ -111,7 +107,6 @@ static int wait_set(uint32_t flag) {
 }
 
 static void clear_addr(void) {
-    I2C_HW->sts1 = 0xFFFFu;
     (void)I2C_HW->sts1;
     (void)I2C_HW->sts2;
 }
@@ -122,8 +117,7 @@ static int start_cond(uint8_t addr7, int rd) {
         return 0;
     }
     /* 直接写整个 DT，不要用 dt_bit.dt 位域赋值：位域会编译成“读-改-写”，
-       发送缓冲为空时读 DT 会触发 underflow，随后写入的值被硬件丢弃，
-       表现为 MPU6050 的配置寄存器永远写不进去（PWR1 有时能写）。 */
+       发送缓冲为空时读 DT 会触发 underflow，随后写入的值被硬件丢弃。 */
     I2C_HW->dt = (uint32_t)(((uint32_t)addr7 << 1) | (uint32_t)(rd ? 1 : 0));
     if (!wait_set(I2C_ADDR7F_FLAG)) {
         return 0;
@@ -148,6 +142,19 @@ static int wait_tdc(void) {
 
 static void stop_cond(void) {
     I2C_HW->ctrl1_bit.genstop = 1;
+}
+
+static void stop_end(void) {
+    if ((I2C_HW->sts2 & 0x3u) != 0u) {
+        I2C_HW->ctrl1_bit.genstop = 1;
+    }
+    if ((I2C_HW->ctrl1 & 0x100u) != 0u) {
+        I2C_HW->ctrl1_bit.genstart = 0;
+    }
+    clear_err();
+    if (!wait_idle()) {
+        i2c_recover();
+    }
 }
 
 static int get_bytes(uint8_t *dst, int n) {
@@ -213,8 +220,7 @@ static int xfer(uint8_t addr7, uint16_t reg, int reg16,
     I2C_HW->ctrl1_bit.mackctrl = 0;
     I2C_HW->ctrl1_bit.acken = 1;
     if (!start_cond(addr7, 0)) {
-        stop_cond();
-        return 0;
+        goto fail;
     }
     if (reg16 && !put_byte((uint8_t)(reg >> 8))) {
         goto fail;
@@ -231,23 +237,19 @@ static int xfer(uint8_t addr7, uint16_t reg, int reg16,
         if (!wait_tdc()) {
             goto fail;
         }
-    } else {
-        if (!wait_tdc()) {
-            goto fail;
-        }
-        if (!start_cond(addr7, 1)) {
-            goto fail;
-        }
-        if (!get_bytes(rd, n)) {
-            goto fail;
-        }
+        stop_end();
         return 1;
     }
-    stop_cond();
+    if (n <= 0 || !wait_tdc() || !start_cond(addr7, 1) || !get_bytes(rd, n)) {
+        goto fail;
+    }
+    if (!wait_idle()) {
+        i2c_recover();
+    }
     return 1;
 
 fail:
-    stop_cond();
+    stop_end();
     return 0;
 }
 
@@ -258,8 +260,10 @@ int i2c_probe(uint8_t addr7) {
         i2c_recover();
         return 0;
     }
+    clear_err();
+    I2C_HW->ctrl1_bit.mackctrl = 0;
     ok = start_cond(addr7, 0);
-    stop_cond();
+    stop_end();
     return ok;
 }
 

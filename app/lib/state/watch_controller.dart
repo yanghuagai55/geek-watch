@@ -622,10 +622,14 @@ class WatchController extends ChangeNotifier {
       _syncMediaPolling();
     }
     notifyListeners();
+    final f1 = pool.assetFlags | (_syncedAssetMask & 0xFF);
+    final f2 = pool.hasAssetFlags2
+        ? (pool.assetFlags2 | ((_syncedAssetMask >> 8) & 0x01))
+        : 0x01;
     if (pool.hasAssetFlags &&
         !_syncingAssets &&
-        ((pool.assetFlags | _syncedAssetMask) & 0xEF) != 0xEF) {
-      unawaited(_syncMissingExtAssets(pool.assetFlags | _syncedAssetMask));
+        ((f1 & 0xEF) != 0xEF || (f2 & 0x01) == 0)) {
+      unawaited(_syncMissingExtAssets(f1 | ((f2 & 0x01) << 8)));
     }
   }
 
@@ -687,6 +691,9 @@ class WatchController extends ChangeNotifier {
       }
       if ((presentFlags & 0x02) == 0 && connected) {
         await _syncBlobAsset(active, 0x02, 8, 'assets/blobs/sys_mod_m4.bin');
+      }
+      if ((presentFlags & 0x100) == 0 && connected) {
+        await _syncBlobAsset(active, 0x100, 10, 'assets/blobs/music_mod_m4.bin');
       }
     } catch (_) {
       // 资源下发属后台增强，失败不打断主链路，下次重连或查询 0x2E 可重试。

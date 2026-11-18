@@ -5,6 +5,7 @@
 #include <string.h>
 
 static uint8_t flash_addr;
+static uint8_t flash_probed;
 
 /* 等待 EEPROM 内部页编程完成（FRAM 首次即 ACK；EEPROM 典型 2..5ms）。 */
 static int wait_ready(void) {
@@ -12,7 +13,7 @@ static int wait_ready(void) {
     if (!flash_addr) {
         return 0;
     }
-    for (tries = 0; tries < 450; tries++) {
+    for (tries = 0; tries < 500; tries++) {
         if (i2c_probe(flash_addr)) {
             return 1;
         }
@@ -22,12 +23,9 @@ static int wait_ready(void) {
 
 int ext_flash_init(void) {
     uint8_t a;
-    flash_addr = 0;
-    if (i2c_probe(EXT_FLASH_ADDR)) {
-        flash_addr = EXT_FLASH_ADDR;
-        return 1;
-    }
-    for (a = 0x51u; a <= 0x57u; a++) {
+    flash_probed = 1u;
+    flash_addr = 0u;
+    for (a = EXT_FLASH_ADDR; a <= 0x57u; a++) {
         if (i2c_probe(a)) {
             flash_addr = a;
             return 1;
@@ -37,10 +35,10 @@ int ext_flash_init(void) {
 }
 
 int ext_flash_present(void) {
-    if (flash_addr && i2c_probe(flash_addr)) {
-        return 1;
+    if (!flash_probed) {
+        return ext_flash_init();
     }
-    return ext_flash_init();
+    return flash_addr != 0u;
 }
 
 uint8_t ext_flash_addr(void) {
@@ -54,13 +52,13 @@ int ext_flash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
     if (len == 0) {
         return 1;
     }
-    if (!flash_addr && !ext_flash_init()) {
+    if (!ext_flash_present()) {
         return 0;
     }
-    if (!wait_ready()) {
-        return 0;
+    if (i2c_read16(flash_addr, (uint16_t)offset, dst, (int)len)) {
+        return 1;
     }
-    return i2c_read16(flash_addr, (uint16_t)offset, dst, (int)len);
+    return wait_ready() && i2c_read16(flash_addr, (uint16_t)offset, dst, (int)len);
 }
 
 int ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
@@ -70,7 +68,7 @@ int ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
     if (len == 0) {
         return 1;
     }
-    if (!flash_addr && !ext_flash_init()) {
+    if (!ext_flash_present()) {
         return 0;
     }
     while (len > 0) {
@@ -86,8 +84,7 @@ int ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
         src += chunk;
         len -= chunk;
     }
-    (void)wait_ready();
-    return 1;
+    return wait_ready();
 }
 
 int ext_flash_erase(uint32_t offset, uint32_t len) {

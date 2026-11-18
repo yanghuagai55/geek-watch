@@ -744,7 +744,7 @@ static void draw_face_pair(int x, int y, int value, uint16_t color, uint8_t a) {
 }
 
 static int face_weekday(int y, int m, int d) {
-    static const int t[12] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    static const uint8_t t[12] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
     if (m < 3) {
         y--;
     }

@@ -18,6 +18,7 @@ void ui_anim_init(void);
 int ui_anim_closing(const ui_obj_t *obj);
 
 void ui_draw_init(void);
+uint32_t ui_utf8_next(const char **ps);
 void ui_draw_text(int16_t x, int16_t y, const char *utf8,
                   uint16_t color, uint8_t opacity, uint8_t scale);
 void ui_mask_draw(int16_t x, int16_t y, int16_t w, int16_t h,

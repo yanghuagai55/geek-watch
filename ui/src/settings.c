@@ -15,12 +15,12 @@
 static settings_t st;
 static uint32_t cfg_seq;
 static uint8_t cfg_active_slot;
-static uint16_t clk_year = 2026u;
-static uint8_t clk_month = 1u;
-static uint8_t clk_day = 1u;
-static uint8_t clk_hour = 0u;
-static uint8_t clk_min = 0u;
-static uint8_t clk_recorded = 0u;
+static uint16_t clk_year;
+static uint8_t clk_month;
+static uint8_t clk_day;
+static uint8_t clk_hour;
+static uint8_t clk_min;
+static uint8_t clk_recorded;
 
 static void put_u16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xFFu);

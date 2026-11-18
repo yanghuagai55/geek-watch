@@ -220,15 +220,14 @@ class WatchLinkService : Service() {
     /** Flutter 侧发送原始 A5 帧。 */
     fun send(bytes: ByteArray, done: (Boolean) -> Unit) {
         worker.execute {
-            // 抓屏会把整块 framebuffer 按裸流回传，等点阵更新完再请求，
-            // 否则会抓到只换了 1~3 块的半帧标题。
-            if (isSnapshotRequest(bytes)) {
-                val deadline = SystemClock.uptimeMillis() + 10_000
-                while (bitmapBusy.get() &&
-                    SystemClock.uptimeMillis() < deadline
-                ) {
-                    Thread.sleep(10)
-                }
+            // 抓屏会把整块 framebuffer 按裸流回传；无论抓屏请求还是普通命令，
+            // 都先避让正在进行的点阵下发或 0x11 图像回传，避免 write() 因 imageGuard 直接返回 false。
+            val deadline = SystemClock.uptimeMillis() + 10_000
+            while (((isSnapshotRequest(bytes) && bitmapBusy.get()) ||
+                    scanner.imageGuardActive()) &&
+                SystemClock.uptimeMillis() < deadline
+            ) {
+                Thread.sleep(15)
             }
             val ok = writeOrReport(bytes)
             mainHandler.post { done(ok) }
