@@ -757,10 +757,15 @@ int hal_debug_snapshot(char *out, int cap) {
     na = hal_i2c_scan(addrs, (int)sizeof addrs);
     imu9_get(&s9);
 #if defined(AT32_SLIM_ROM)
-    n = snprintf(out, (size_t)cap, "I2C%d M%d Q%d 9AX=%u H%u B%u",
-                 na, mpu6050_present(), qmc5883l_chip(),
+    n = snprintf(out, (size_t)cap,
+                 "M%d Q%d AX%u A%d,%d,%d G%d,%d,%d M%d,%d,%d R%d P%d H%u",
+                 mpu6050_present(), qmc5883l_chip(),
                  (unsigned)s9.fused_axes,
-                 (unsigned)s9.heading_deg, (unsigned)g_battery_mv);
+                 s9.ax, s9.ay, s9.az,
+                 s9.gx, s9.gy, s9.gz,
+                 s9.mx, s9.my, s9.mz,
+                 s9.roll_d10 / 10, s9.pitch_d10 / 10,
+                 (unsigned)s9.heading_deg);
     if (n < 0) n = 0;
     if (n >= cap) n = cap - 1;
     for (i = 0; i < n && i < (int)sizeof g_debug_line - 1; i++) {
