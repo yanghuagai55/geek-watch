@@ -1,328 +1,260 @@
-# AT32 手表 UI · 可移植动画核心
+# AT32 手表 UI
 
-纯 C99 的嵌入式 UI / 动画核心 + 一个 **AT32F421K8T7** 参考端口，驱动 1.8" ST7735S
-128×160 RGB565 彩屏。仿 Apple 手表风格：无界翻页、缩放进入、缓动动画、彩色矢量图标。
-核心与硬件完全解耦（`ui/` 只依赖 `ui/hal.h`），可整包移植到其它 MCU / 屏幕。
-PC 端提供 **WinUI 3 调试启动器**（`host/winui/`）和命令行 `host/ble_tool.py`。
+![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-14.3%2F16KB-green) ![flash](https://img.shields.io/badge/flash-53.9%2F64KB-orange) ![fps](https://img.shields.io/badge/FPS-partial--refresh-brightgreen)
 
-![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-10.0%2F16KB-green) ![flash](https://img.shields.io/badge/flash-61.1%2F64KB-orange) ![fps](https://img.shields.io/badge/FPS-full--frame--count-brightgreen)
+纯 C99 的界面和动画核心，加上一块 **AT32F421K8T7** 上的参考端口。屏是 1.8 寸 ST7735S，128×160，RGB565。左右翻页，点进去放大，再点一层从右边盖上来。核心只依赖 `ui/hal.h`，换板子时重写这一层。
+
+下面先看界面怎么动，再看这块表在 16 KB 内存里怎么把画面送出去，最后是构建、烧录和调试。动图在 `动图/`。可以交互着看的解说页是 [底层架构.html](底层架构.html)。
+
+## 界面
+
+五页围成一圈：表盘、运动、消息、设置、音乐。表盘长按可以换数字、指针、九轴和相册四种。另外四页各是一枚会动的圆角图标。确定键按下之后图标放大成整页，再进一层时新页面从右边盖上来，背后的列表缩小并压暗。右上角一直有电量。颜色是暖白、薄荷和琥珀，底是黑的。
+
+表盘上只有冒号和秒针在动，其余行不送。
+
+| 冒号 | 秒针 |
+| --- | --- |
+| <img src="动图/冒号呼吸.gif" width="168" alt="冒号呼吸"> | <img src="动图/秒针.gif" width="168" alt="秒针"> |
+
+四个主页图标各自循环。点进去就是整页。
+
+| 跑步 | 信封 | 齿轮 | 音符 |
+| --- | --- | --- | --- |
+| <img src="动图/跑步图标.gif" width="168" alt="跑步图标"> | <img src="动图/信封开合.gif" width="168" alt="信封开合"> | <img src="动图/齿轮旋转.gif" width="168" alt="齿轮旋转"> | <img src="动图/音符摆动.gif" width="168" alt="音符摆动"> |
+
+| 进入运动 | 进入消息 | 进入设置 | 进入音乐 |
+| --- | --- | --- | --- |
+| <img src="动图/打开运动.gif" width="168" alt="打开运动"> | <img src="动图/打开消息.gif" width="168" alt="打开消息"> | <img src="动图/打开设置.gif" width="168" alt="打开设置"> | <img src="动图/打开音乐.gif" width="168" alt="打开音乐"> |
+
+运动里有今日步数和两小时一根的柱子，滑过去是三维指南针，再进去是传感器。指南针的刻度和指针跟着九轴姿态转。消息正文是手机发来的点阵。设置里可以改抬腕、震动、亮度、熄屏，调试打开后底部多一行内存、CPU 和帧率。音乐页的柱子不分析音频，只在播放时起伏，用来添一点气氛。表盘上短按确定也可以播放或暂停。
+
+| 3D 指南针 | 音乐柱状图 |
+| --- | --- |
+| <img src="动图/3D指南针.gif" width="168" alt="3D指南针"> | <img src="动图/均衡器.gif" width="168" alt="音乐页柱状图"> |
+| 航向、俯仰和横滚随手腕变化 | 播放时上下起伏 |
+
+| 运动子页 | 消息详情 | 亮度 | 关于 |
+| --- | --- | --- | --- |
+| <img src="动图/堆叠进入运动菜单.gif" width="168" alt="进入运动子菜单"> | <img src="动图/堆叠进入消息详情.gif" width="168" alt="进入消息详情"> | <img src="动图/堆叠进入亮度.gif" width="168" alt="进入亮度"> | <img src="动图/堆叠进入关于.gif" width="168" alt="进入关于"> |
 
 ## 特性
 
-- **低内存局部刷新**：全宽 4 行脏条带 + 双缓冲 + 历史签名，静止时零传输、收敛自愈一帧。
-- **异步 SPI DMA**（15MHz，DMA1 Ch3），完成门控 TC+TXE+!BSY；空闲 WFI，cooperative service hook。
-- **可移植核心**：`ui/` 无芯片头文件、无 malloc、纯整数；编译为 `libui.a` 直接复用。
-- **动画系统**：预设 slide/fade/zoom/stack + 可复用缓动 `ui_ease_in_out`（LVGL MIT 整数移植）。
-- **彩色矢量图标**：`ui_svg_cmd_t`（线段+圆盘）+ 每命令调色板索引 `ci` + 粗线圆帽；
-  跑步 / 圆角信封（开盖→信纸弹出落最顶层→倒放）/ 旋转齿轮。
-- **字体按需打包**：消息字模默认子集（`full` 全量）；华文琥珀标题/时钟字可选（`nosong` 回退小字模）。
-- **调试 overlay**：整片 SRAM / CPU / 完整帧 FPS 单行角标，覆盖式绘制，不推动任何页面布局。
-- **蓝牙调试协议**：`A5 命令 长度 数据 异或`，校时 / 消息 / 歌词 / 按键 / 亮度 / 截屏回传 / 回主页 / 性能遥测 / 传感器快照。
-- **WinUI 3 调试台**：默认经典 SPP 自动连接，连接后自动校时、回表盘主页并抓屏；RAM / CPU / FPS 1 Hz 环形仪表；BLE / SPP / 串口 / 演示四通道；抓屏保存 PNG、传感器快照、日志与设置。
-- **运动与传感器**：计步、抬腕、运动柱状图；“传感器数值”页 10Hz 显示 MPU6050 加速度/陀螺/温度与 QMC5883L/P 三轴磁场，并每秒重扫 I2C。
-- **电源与状态**：PA1 电池检测 + 右上角常驻电量图标；状态灯常亮/闪烁/关闭；熄屏 30s/1m/2m/5m，按键或抬腕唤醒。
+- **局部刷新**：屏幕切成 40 条、每条 4 行。变过的行整宽送出，没变的行不画也不传。静止后再补一次全屏，盖掉面板上偶发的写错。
+- **异步 SPI DMA**：SPI1，15 或 30 MHz，DMA1 通道 3。完成要同时看到传输完成、发送空、总线不忙。空闲进 `WFI`。
+- **可移植核心**：`ui/` 没有芯片头文件，没有 `malloc`，没有浮点。编译成 `libui.a` 就能换板。
+- **动画**：滑动、淡入淡出、缩放、列表堆叠。同时最多 4 个属性在动。缓动是整数三次曲线。
+- **图标**：矢量线段和圆盘，可以带颜色下标。跑步、信封、齿轮、音符有自己的循环。
+- **字**：设置常用字留在片内。其余中文在外置字库里按需取。标题和表盘大数字用华文琥珀。消息正文由手机做成点阵再发下来。
+- **调试角标**：一行盖在底部，显示整片 SRAM、CPU 和帧率，不把页面往上顶。
+- **蓝牙帧**：`A5 命令 长度 数据 异或`。校时、消息、歌词、按键、亮度、截屏、性能、传感器都走这一条串口。
+- **运动**：计步、抬腕、12 根柱子。三维指南针跟着九轴姿态转。传感器页显示加速度、陀螺、磁场和融合后的航向。
+- **电源**：PA1 电池分压，右上角电量。背光 20 kHz PWM。熄屏 30 秒 / 1 分 / 2 分 / 5 分，按键或抬腕把背光拉回来。
 
 ## 硬件
 
 | 项 | 说明 |
 | --- | --- |
-| MCU | AT32F421K8T7，LQFP-32，Cortex-M4 120MHz，64KB Flash / 16KB SRAM |
-| 时钟 | 外部 8MHz 晶振 ×15 = 120MHz；晶振不起振时回退内部 HICK（48/2×5） |
-| 屏幕 | 1.8" ST7735S，128×160，SPI1 + DMA1 通道 3，模块内部 CS 接地 |
-| 接线 | SCK PA5 / MOSI PA7 / RES PA4 / DC PA6 / 背光 PB0 |
-| 串口 | USART2，TX PA2 / RX PA3，115200 8N1（接 HC-04 / HC-08 透传） |
-| 按键 | PA11 / PA12 / PA15，上拉输入，按下为低 |
-| 电池检测 | PA1 / ADC1_IN1，R1=R2=100k 分压（×2），100nF 滤波 |
-| I2C 传感器 | PA9/PA10：MPU6050 `0x68`、QMC5883P `0x2C`（兼容 QMC5883L `0x0D`）、BMP580 `0x46` |
-| 状态灯 | PB3，高电平点亮；PB1 为 BLE 状态输入 |
+| MCU | AT32F421K8T7，LQFP-32，Cortex-M4，无硬件浮点，最高 120 MHz |
+| 存储 | 片内 64 KB Flash、16 KB SRAM。代码区 55 KB，末尾 9 KB 是自定义表盘热槽 |
+| 时钟 | 外部 8 MHz × 15 = 120 MHz。晶振失败则内部 HICK 48/2 × 5，仍是 120 MHz |
+| 屏幕 | 1.8 寸 ST7735S，128×160。SCK PA5 / MOSI PA7 / RES PA4 / DC PA6 / 背光 PB0。模块 CS 内部接地 |
+| 串口 | USART2，TX PA2 / RX PA3，115200 8N1，接蓝牙透传 |
+| 按键 | PA11 上一项 / PA12 确定 / PA15 下一项。上拉，按下为低 |
+| 电池 | PA1，ADC1_IN1。100 kΩ + 100 kΩ，读数 ×2 |
+| I2C | PA9 SCL / PA10 SDA，I2C1 主机 400 kHz。MPU6050 `0x68`、QMC5883P `0x2C`、外置存储 `0x50`。这条总线和屏幕抢同一个 DMA 通道，所以 I2C 不用 DMA |
+| 其他 | PB3 状态灯。PB1 蓝牙连接状态。PA8 驱动 1207 震动马达。PA0 麦克风座已接成模拟输入，当前固件不采集 |
 
-当前构建：Flash **61,500 B / 65,536 B**（剩余 **4,036 B**），静态 RAM **12,232 B / 16 KB**
-（调试角标含当前栈，通常显示 `R11/16K`）。FPS 是每秒「从顶部到底部完整传输完成」的画面数；
-静止、局部刷新和只跑 UI 主循环不再计入，完整自愈/截屏重绘会计入。
+最近一次链接：片内镜像约 **55160** 字节，落在 55 KB 代码区里，还剩约 1 KB。静态 RAM **14656 / 16384** 字节，栈大约还剩 1.7 KB。调试角标里的 `R15/16K` 就是这片 SRAM 加上当前栈。
+
+窗口地址不要改成对称偏移。这块面板的起点不加偏移，列终点 +2，行终点 +1。窄列窗口会画成梳齿，所以脏区再小也按整行送。
+
+## 底层
+
+没有操作系统。`main` 里初始化板子和界面，然后一直调用 `ui_frame()`。一帧的预算是 16 ms。
+
+一帧里的顺序是固定的：解析已经收到的串口字节，看按键边沿，处理熄屏和抬腕，推进动画，决定这一页可以占用哪一块 SRAM，把绘图命令录进一张最多 80 条的表，再只光栅化变过的横条。DMA 送出一条的时候，CPU 可以画下一条。应答 `ok` / `bad` 等画面送完才发出去，避免插进截屏字节。帧与帧之间如果串口是空的、屏也没在传，CPU 执行 `WFI`。这段空闲每次最多从外置存储读 64 字节，用来把当前页的绘制程序装进 SRAM。
+
+全屏 RGB565 是 40960 字节，16 KB 内存放不下一帧缓冲。内存里只有两块 1024 字节的条带（128 × 4 × 2）。每一条绘图命令都有一个哈希和包围盒。和上一帧相比没变的命令不产生脏区。变了的话，旧位置和新位置都要重画，这样字挪走之后旧的那一块会被擦掉。
+
+SRAM 里的动态池是 12608 字节，其中双缓冲占 2048 字节。主菜单图标、指针表盘、运动页、音乐页、三维指南针是放在外置存储里的 Thumb 小程序，走进哪一页才装进同一块连续内存。放大动画还没过 70/255 时，主页图标仍在画，这块内存先留给主菜单模块。关于页的彩图如果一次装不下，就按 4 行从外置存储流式贴。
+
+外置 32 KB 的现况：
+
+| 起始 | 长度 | 内容 |
+| --- | --- | --- |
+| `0x0000` | 256 B | 设置双槽 |
+| `0x0100` | 512 B | 目录双槽，带 CRC |
+| `0x0300` | 32000 B | 动态池。表盘和程序从低地址往上，消息和媒体从高地址往下 |
+
+片内 `0x0800DC00` 起的 9 KB 是表盘热槽。自定义图放得下就写进这里，之后 CPU 直接读，不再每次走 I2C。
+
+传感器在屏 DMA 空闲时采样，大约 50 Hz。计步和抬腕、九轴融合都是整数。融合用 Q24 四元数，没有软浮点。姿态轴在进界面之前已经扳成手表坐标：屏幕右是 +X，屏幕上是 +Y，屏幕外是 +Z。
 
 ## 目录
 
 ```
 ui/            可移植核心（hal.h 为唯一硬件边界）
-  ui.h         公共 API（分组 + 集成示例）
-  hal.h        硬件抽象：每个板子写一份同名实现
-  ui_icons.h   动画图标接口
-  ICON_SVG_PROMPT.md  外部 AI 生成图标数据的格式规格
-  src/         核心实现 + 字模表（font_data*.c / song_data*.c）
-at32/          AT32F421K8T7 参考端口（port.c / build.bat / 链接脚本 / 启动文件）
-host/          PC 模拟器 / 回归 / 预览 / 字模工具 / 蓝牙调试台
-  winui/       WinUI 3 调试启动器（默认 SPP、自动校时、实时遥测）
-tools/         OpenOCD 等（不入库）
+  ui.h         公共 API
+  hal.h        每个板子写一份同名实现
+  src/         绘制、动画、协议、字模
+at32/          AT32F421 端口（port.c、build.bat、链接脚本）
+host/          PC 模拟、回归、字模工具、蓝牙调试
+  winui/       WinUI 3 调试台
 ```
 
 ## 固件构建
 
-需要 `arm-none-eabi-gcc`（默认 `D:\dev\arm-none-eabi-gcc\bin`，可用 `ARM_GCC_BIN` 覆盖）。
+需要 `arm-none-eabi-gcc`。默认路径 `D:\dev\arm-none-eabi-gcc\bin`，可以用环境变量 `ARM_GCC_BIN` 改。
 
 ```bat
-at32\build.bat                 :: 默认：子集字模 + 华文琥珀   (~61.1KB/64KB)
-at32\build.bat nosong          :: 丢华文琥珀，回退小字模      (~45.5KB/64KB)
+at32\build.bat
 ```
 
-> `full`（完整消息字模）当前会超出 64KB 片内 Flash，需要外部字库或压缩后再用。
+默认就是精简构建：`AT32_SLIM_ROM`，设置常用字留在片内，页面绘制尽量放到外置模块里。产物是 `at32/obj/watch.elf`、`watch.bin` 和 `at32/obj/libui.a`。
 
-产物：`at32/obj/watch.elf` / `watch.bin`，以及可复用归档 `at32/obj/libui.a`。
+完整消息字模超出 64 KB，不要打开 `full` 再期望它能链进这颗芯片。
 
 ## 烧录
 
-用 pyOCD + CMSIS-DAP（PWLINK2 / DAPLink 均可）：
+pyOCD + CMSIS-DAP（PWLINK2 / DAPLink 都可以）：
 
 ```bash
 pyocd flash --pack at32/packs/ArteryTek.AT32F421_DFP.2.2.0.pack \
     -t _at32f421k8t7 -u <探针UID> at32/obj/watch.bin
 ```
 
-> 官方 DFP 里 `Dname` 带前导 `-`，pyOCD 会把目标名解析成 `_at32f421k8t7`；
-> 用这个带下划线的名字即可直接烧录，不需要重新打包。
+官方设备包里的目标名带前导 `-`，pyOCD 会解析成 `_at32f421k8t7`。用这个带下划线的名字即可。
 
-SWD 只接 PA13(SWDIO) / PA14(SWCLK) / GND / 3V3，探针同时给板子供电。
+SWD 只接 PA13（SWDIO）、PA14（SWCLK）、GND、3V3。探针可以同时给板子供电。
 
-## 调试工具（PC 端）
+## 调试工具
 
-### WinUI 3 调试启动器（推荐）
+### WinUI 3
 
-`host/winui/At32Debugger.csproj`，需要 .NET 8 SDK 与 Windows App SDK。
+`host/winui/At32Debugger.csproj`，需要 .NET 8 SDK 和 Windows App SDK。
 
 ```bat
 cd host\winui
 dotnet build At32Debugger.csproj -c Debug -p:Platform=x64
-bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\At32Debugger.exe
 ```
 
-- 启动默认经典 SPP 自动连接；连接后自动校时（`01`）、回表盘主页（`0A`）并抓屏显示在主页右侧。
-- 主页实时遥测：RAM / CPU / FPS 环形仪表，1 Hz 从 `12` 性能帧读取；断开自动清空。
-- 页面：主页 / 调试 / 屏幕 / 日志 / 设置 / 关于；支持 BLE、经典 SPP、串口和演示四种链路。
-- 支持抓屏保存 PNG、传感器快照、消息 / 歌词、按键、亮度、原始命令、监听口、解除 BLE 配对。
-- 无系统标题栏（Win11 圆角），标题栏与应用图标使用 `Assets/app.ico` / `app.png`。
+启动后默认走经典 SPP。连上以后自动校时、回到表盘并抓一帧屏。主页每秒读一次性能帧，显示 RAM、CPU 和帧率。也可以切到 BLE、串口或演示。抓屏能存成 PNG。
 
-### 命令行 ble_tool.py
+### 命令行
 
-`host/ble_tool.py`（三种链路 + 旁路 COM 监听）。
-
-- **主链路**：默认经典 SPP（`04:26:01:08:02:0C` 通道 1）；`--ble` 走 BLE；`--port COM7` 走串口。
-- **旁路监听口**：`--mon-port COM7` 额外打开一个 COM 口，用来观察模块 UART 或从 UART 发数据，和主链路互不影响。
-- **日志**：`mon` 输出 `[SPP 收] 41 54 0D 0A  |AT..|` 这种 hex + ASCII 双格式，前缀标明通道和方向。
-- 抓屏实测：**HC-04 BLE 3.7 秒/帧**（≈11KB/s），经典 SPP 约 **4 秒/帧**；HC-08 只有 151B/s，不建议。
+`host/ble_tool.py`。默认经典 SPP，地址 `04:26:01:08:02:0C`，通道 1。`--ble` 走 BLE，`--port COM7` 走串口。`--mon-port` 可以另开一个口看模块的 UART。
 
 ```bash
-# 经典 SPP（默认链路，实测最稳）
 python host/ble_tool.py ping
 python host/ble_tool.py time
 python host/ble_tool.py msg 0 "HELLO WATCH"
 python host/ble_tool.py music "DEMO LYRIC" 1
 python host/ble_tool.py snap host/obj/shot.bmp
-python host/ble_tool.py demo
 
-# 串口：CH340 直连手表 PA2/PA3，或模块测试架
 python host/ble_tool.py --port COM7 ping
-
-# BLE
 python host/ble_tool.py --ble ping
-
-# 测试架：PC 走经典连模块，同时监听/发送模块 UART（COM7）
-python host/ble_tool.py --mon-port COM7 mon
-python host/ble_tool.py --crlf --mon-port COM7 comsend "456"
 ```
 
-- 抓屏：128×160 RGB565，40,964 字节，经典 SPP 约 **3.8~4.5 秒/帧**。
-- 消息：UTF-8 按字符截断到 23 字节，自动避免半个汉字。
-- 音乐：`lyric` 歌词、`state 0|1` 播放态；手表按键会反向发 `0x10` 播放/暂停/上一首/下一首。
-- 蓝牙按键注入只在调试模式生效，`key` / `longkey` 会自动先发 `debug 1`；`longkey 2` 用于从子页返回。
+抓屏一帧 40964 字节。经典 SPP 大约 4 秒，HC-04 的 BLE 大约 3.7 秒，CH340 有线大约 1 到 2 秒。HC-08 只有大约 151 字节/秒，不适合传画面。
+
+按键注入只在调试模式生效。`key` 和 `longkey` 会先打开调试。`longkey 2` 是从子页返回。
 
 ### 协议
 
 ```
-帧 = A5 命令 长度 数据... 异或        异或从 A5 算到数据末尾
-合法帧回 "ok"，校验错回 "bad"
-
-01 校时   年低 年高 月 日 时 分 秒
-02 消息   槽号 0..2 + UTF-8
-03 歌词   UTF-8
-04 播放态 0 暂停 1 播放
-05 亮度   0/1/2
-06 要画面 无数据，下一帧回一张 128×160 RGB565
-07 按键   位掩码 1=上一项 2=确定 4=下一项（需边沿：按下后必须发 0 松开）
-08 调试   1 开 0 关
-09 要性能 无数据，下一帧回 12
-0A 回主页 无数据，关闭子页/菜单并回到表盘
-0B 点阵   块号 0..3 + 128 字节 1bpp（128×32，共 512 字节，自动打开音乐页）
-10 控制   手表→PC：1 播放 2 暂停 3 下一首 4 上一首
-11 画面   A5 11 FF 长度3 宽2 高2 像素... 异或
-12 性能   手表→PC：8×u32；[6] 低16=整片 SRAM 已用、高16=CPU×10，[7] 低16=SRAM 总量、高16=完整帧 FPS
-13 传感器 无数据，回一行 DBG ...（I2C 扫描 / QMC 寄存器 / 电池），不回 ok
+帧 = A5  命令  长度  数据...  异或
+异或从 A5 算到数据末尾
+合法帧回 ok，校验错回 bad。ok 在这一帧画面送完之后才发出
 ```
 
-## 快速开始（PC 模拟，无需硬件）
+常用命令：
 
-需要 MSVC BuildTools（`cl`）与 Python（Pillow 用于拼预览图）。
+| 命令 | 方向 | 作用 |
+| --- | --- | --- |
+| `01` | 手机 → 表 | 校时。年小端、月、日、时、分、秒 |
+| `03` `04` | 手机 → 表 | 歌词；播放态 0 暂停 / 1 播放 |
+| `05` `08` | 手机 → 表 | 亮度 0/1/2；调试角标开关 |
+| `06` | 手机 → 表 | 下一帧把整屏 RGB565 从串口送回 |
+| `07` | 手机 → 表 | 按键电平。必须先按下再发 0 松开，才会形成边沿 |
+| `09` `12` | 表 → 手机 | 要性能 / 性能包。含 SRAM 用量、CPU×10、帧率 |
+| `0A` | 手机 → 表 | 关掉子页，回到表盘 |
+| `0B` | 手机 → 表 | 曲名点阵，4 块 × 128 字节，128×32 |
+| `10` | 表 → 手机 | 播放、暂停、下一首、上一首 |
+| `11` | 表 → 手机 | 截屏像素 |
+| `13` | 手机 → 表 | 传感器快照。回一行 `DBG ...`，不回 `ok` |
+| `22`–`25` | 手机 → 表 | 消息列表点阵、详情点阵、清空、条数 |
+| `28` `29` | 手机 → 表 | 外置图片的宽高格式，然后是分块数据 |
+| `2F` | 手机 → 表 | 写入可执行模块或片外字库 |
 
-**首次克隆先自举字模**（字模表不入库，见「许可与字体」）：
+`07` 的位是 1 上一项、2 确定、4 下一项。自己写脚本时不要只发按下：
+
+```
+A5 07 01 04 a7
+A5 07 01 00 a3
+```
+
+## 在电脑上跑
+
+需要 MSVC 的 `cl`，以及 Pillow（用来拼预览图）。字模表不入库，第一次要先生成：
 
 ```bat
-host\build.bat regen          :: 光栅字模（需本地字体）
-python host\subset_font.py    :: 生成默认子集（完整表留 font_data_full.c）
+host\build.bat regen
+python host\subset_font.py
+host\build.bat
+host\watch_ui.exe
+host\watch_ui.exe --check
 ```
 
-然后：
+窗口里左右翻页，回车进入，长按返回。`--check` 含脏区和全屏是否等价。
 
-```bat
-host\build.bat                 :: 构建 128x160 与 240x240 模拟器
-host\watch_ui.exe              :: 交互窗口：左右翻页 / 回车进入 / 长按返回
-host\watch_ui.exe --check      :: 行为 + 渲染回归（含脏/全量等价）
-host\watch_ui.exe --snapshot out.bmp r   :: 无头截屏（r=右翻一页）
-```
+## 移植
 
-## 移植到其它板子
+1. 按 `ui/hal.h` 实现 tick、idle、时钟、串口、按键、`hal_display_flush` / `busy`、帧节拍。
+2. 链接 `libui.a`，然后 `ui_init(); for (;;) ui_frame();`。
+3. 不用自带的五页时，改为 `ui_core_init()`，循环里 `ui_draw_begin()`、绘制、`ui_draw_flush()`。
 
-1. 照 `ui/hal.h` 写一份端口（tick / idle / clock / link / key / display flush+busy / meter / pace）。
-2. 链接 `libui.a`（或 `ui/src/*.c`），`ui_init(); for(;;) ui_frame();`。
-3. 自定义页不用 demo：`ui_core_init();` 循环里 `ui_draw_begin(); … ui_draw_flush();`。
-   示例见 `ui/ui.h` 顶部注释。屏幕尺寸用 `HAL_LCD_W/H`，布局用千分比 `UI_MX/UI_MY`。
-
-约束：C99、无 malloc、纯整数、`ui/` 不 include 芯片头；SVG/像素缓冲须静态存活到帧刷完。
-
-## 图标 / 动画协作流程
-
-1. 用 `ui/ICON_SVG_PROMPT.md` 的规格喂给任意强 AI 产出 C 数据。
-2. 放进 `host/gemini_icons.h`，跑 `host/icon_preview.c` 用**真实渲染器**出预览图验收。
-3. 只集成被认可的部分到 `ui/src/ui_app.c` / `ui_icons.c`，跑回归后烧录肉眼确认。
+约束：C99，无 malloc，纯整数。`ui/` 不包含芯片头。图片和矢量数据要活到这一帧刷完。
 
 ## 测试
 
 ```bat
 host\watch_ui.exe --check & host\watch_ui_240.exe --check
-host\build.bat --odd & host\obj\watch_ui_odd.exe --check   :: 128x163 奇数高
-cd host && python benchmark_device.py --port COM5          :: 实机性能/截屏
+host\build.bat --odd & host\obj\watch_ui_odd.exe --check
+cd host && python benchmark_device.py --port COM5
 ```
 
-## 已知问题与绕开办法
+第三行是实机。`--odd` 用 128×163，用来确认条带高不能整除屏幕高度时仍然对齐。
 
-### 1. 经典 SPP：系统分配的 COM 口打不开（改用 RFCOMM socket，已跑通）
+## 已知问题
 
-现象：`COM8` 打开 5.2 秒后报「信号灯超时时间已到」，`COM9` 直接卡死不返回。
+### 经典蓝牙不要走系统分配的 COM 口
 
-实测排查（2026-11-13，Intel 无线网卡 + Win11 + HC-04D）：
+Windows 给 SPP 分配的虚拟串口会超时或卡死。驱动和配对是好的，裸 RFCOMM 套接字连通道 1 可以通，ping 大约 81 ms。命令行和 WinUI 走的都是这条。
 
-| 检查项 | 结果 |
-| --- | --- |
-| 设备管理器 `Bluetooth Device (RFCOMM Protocol TDI)` | Status=OK，ProblemCode=0（驱动正常） |
-| 配对记录 | 经典（`04260108020c`）与 BLE（`c4260108020c`）各一条，均在 |
-| WinRT 强制 RFCOMM 连接 | `connection_status` 从 0 变 1，链路能建立 |
-| 重启蓝牙无线电（`Radio.set_state_async`） | 无效 |
-| 打开系统 SPP COM 口 | 仍然 5.2s 超时 / 卡死 |
-| **裸 RFCOMM socket（`AF_BTH` + `BTPROTO_RFCOMM`，通道 1）** | ✅ **连上并稳定收发，ping 81 ms** |
+HC-04 同一时刻只服务一个无线对端。手机连着的时候电脑连不上。先在系统蓝牙里断开手机。
 
-结论：**驱动和模块都没问题，坏的是 Windows 给 SPP 分配的虚拟 COM 口。**
-不要走 COM 口，直接用 RFCOMM socket 连模块的通道 1 —— 命令行和 WinUI 调试器都是这么实现的。
+推荐顺序：经典 SPP 套接字，然后 BLE，然后 CH340 有线（CH340 TX → PA3，RX → PA2，共地，115200）。
 
-```bash
-python host/ble_tool.py ping        # 默认经典 SPP（RFCOMM 通道 1）
-```
+### BLE 能连上但通知起不来
 
-注意：HC-04 是双模模块，同一时刻只服务一个无线对端 —— 手机连着时 PC 连不上，
-模块也会停止广播。先彻底断开手机（系统蓝牙里断开/忽略）再连。
-
-**三条链路（按推荐顺序）**
-
-1. **经典 SPP socket**：默认，`python host/ble_tool.py ping`；抓屏约 4 秒/帧。
-2. **BLE**：`python host/ble_tool.py --ble ping`，WinRT 直连，抓屏 3.7 秒/帧。
-3. **CH340 有线**：`CH340 TX→PA3`、`CH340 RX→PA2`、`GND`，
-   `python host/ble_tool.py --port COMx ping`（115200），抓屏 1~2 秒/帧，不受蓝牙任何问题影响。
-4. 不要试图在「设置」里反复配对 —— 配对记录没问题，问题在 COM 口这一层。
-
-### 2. BLE 能连上但收不到数据（`start notify ... Unreachable`）
-
-Windows 缓存了旧的 GATT 句柄（句柄号常见为 `0035`）。
-
-**真正有效的做法：解除系统配对 —— 不需要管理员权限**
+Windows 缓存了旧的 GATT 句柄。断电和重启电脑蓝牙都没用。解除配对即可，不需要管理员：
 
 ```bash
 python host/ble_tool.py --addr C4:26:01:08:02:0C unpair
 ```
 
-实测对比（2026-11-13）：
+### 按键点一下没反应
 
-| 做法 | 结果 |
-| --- | --- |
-| 板子断电 3 秒再上电 | ❌ 仍然 `Unreachable` |
-| 重启蓝牙无线电（`Radio.set_state_async` OFF→ON） | ❌ 无效 |
-| **`unpair_async()` 解除 BLE 配对** | ✅ **立刻恢复，ping 108 ms** |
-| 管理员删注册表 bond | ✅ 有效，但需要提权，现在没必要 |
+协议是边沿。只发按下不会再触发一次，必须再发一帧全 0 的松开。`ble_tool.py key 4` 已经包含按下和 90 ms 后的松开。
 
-旧 GUI 已移除；WinUI 启动器启动时会自动连接一次，遇到 `Unreachable` 仍先执行上面的 `unpair`。
+### 调试角标挡住页面点
 
-仍然不行再按顺序兜底：断电重启 → 关开蓝牙 → 管理员删 bond：
-
-```powershell
-reg delete "HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\c4260108020c" /f
-```
-
-最后兜底：换 CH340 有线。
-
-### 3. 按键点一下没反应
-
-协议里的按键是**边沿触发**：只发「按下」不生效第二次，必须先按下再松开。
-
-```
-A5 07 01 04 a7     ← 按下“下一项”
-A5 07 01 00 a3     ← 90ms 后松开
-```
-
-`host/ble_tool.py key 4`（或 `longkey 2`）已经按这个实现（按下 + 90ms 松开）；
-自己写脚本时别只发按下那一帧。
-
-### 4. 调试角标会遮住页面点
-
-角标是**覆盖式**单行条（`R11/16K C0% 60`），压在屏幕最底部，不参与布局计算，
-所以 0 级界面不会因为开调试而整体上移；代价是调试模式下面点数被它挡住。
-`R` 是整片 SRAM 已用/总量（含当前栈），不再是 UI 内存池的 6.6KB。
-
-### 5. BLE 能连上但收不到 UART 数据（经典 SPP 已通）
-
-现象：`ble_tool.py ping` 能连上 HC-04BLE，`start_notify` 成功，但收不到 `ok`；
-`mon` 监听时复位手表也收不到 `boot`。
-
-实测（2026-11-13）：
-
-| 检查 | 结果 |
-| --- | --- |
-| 固件 USART2 115200 | 无数据 |
-| 固件 USART2 9600 | 无数据 |
-| `unpair` 后重连 | 无数据 |
-| 复位时 `mon` | 无数据 |
-| SWD 读 `g_sensor_ok` / `g_i2c_found` | 正常，手表在跑 |
-| **经典 SPP（`--spp`）** | **ping / 校时 / 消息 / 音乐 / 抓屏 / 传感器全部通过** |
-
-结论：**经典 SPP 链路已经可用**，优先用 `--spp 04:26:01:08:02:0C`；
-BLE 侧仍然收不到 UART 数据，问题在模块 UART→FFE1 的转发/接线，后续再查。
-SPP 抓屏 40,964 字节约 4 秒，消息页、音乐页均已用实机截图确认。
-
-## 存储扩展（待接）
-
-- 计划：**AT24C256**（32KB，I2C，挂 PA9/PA10，地址 `0x50~0x57`），模块未到货。
-- 优先存：设置持久化、指南针校准、步数历史、日志；I2C 400kHz 约 40KB/s，不适合每帧读字库。
-- 当前链接进固件的字库约 **24KB**（`song_data` 15.3KB + `font_data` 8.7KB）。
-  32KB EEPROM 未压缩基本会被字库占满，设置/日志空间很少；字库仍需压缩或等 SPI NOR。
-- 可选压缩：逐字形 RLE（省 5~9KB）或 heatshrink 分块（省 7~12KB），需要块索引/缓存。
+角标是盖上去的一行，不参加排版。打开之后主页不会上移，底部的点会被挡住。`R` 是整片 SRAM，含当前栈。
 
 ## 许可与字体
 
-- **固件与 PC 工具（`ui/`、`at32/`、`host/`）：MIT**，见 [LICENSE](LICENSE)。`ui_ease_in_out` 为 LVGL（MIT）缓动的整数移植，已注明出处。
-- **Flutter 配套应用（`app/`）：GPL-3.0-or-later**，见 [app/LICENSE](app/LICENSE)。原因是竖屏导航使用了 FlClash 的 `prism_ui`（同为 GPL-3.0-or-later），完整来源与修改说明见 [app/THIRD_PARTY_NOTICES.md](app/THIRD_PARTY_NOTICES.md)。分发 `app/` 二进制时须同时提供对应完整源码。
-- **字模表不入库**：`ui/src/font_data.c` / `font_data_full.c` / `song_data.c` 已 gitignore。
-  历史表光栅自商业字体（华文琥珀 STHupo、SimSun/Consolas），不可公开传播；克隆后按上文自举生成。
-- **推荐开源字体（自举/替换用，均允许光栅再分发）**：
-  - 标题/时钟显示字：**ZCOOL QingKe HuangYou（站酷庆科黄油体，OFL）**。
-  - 小字中文：**Noto Sans SC / Source Han Sans（OFL）**。
-  - 小字 ASCII：**Inter（OFL）**，仓库已带 `host/fonts/Inter-Medium.ttf`。
-  用这些字体重新光栅后，字模表即可安全入库。工具：
-  `host/gen_font.c`（点阵）、`host/gen_clock.c`（显示字）、`host/subset_font.py`（子集）。
+固件和 PC 工具（`ui/`、`at32/`、`host/`）是 MIT。`ui_ease_in_out` 来自 LVGL 缓动的整数移植。
 
-## 相关文档
+Flutter 配套应用（`app/`）是 GPL-3.0-or-later，因为用了 FlClash 的 `prism_ui`。分发这个应用的二进制时要带上对应源码。
 
-- 图标格式：`ui/ICON_SVG_PROMPT.md`
+字模表不入库。历史表从商业字体光栅而来，不能公开传。克隆之后用 `host/gen_font.c`、`host/gen_clock.c`、`host/subset_font.py` 在本地生成。若要入库，换站酷庆科黄油体、思源黑体或 Inter 重新光栅。
