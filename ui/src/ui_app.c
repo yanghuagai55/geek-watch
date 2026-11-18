@@ -92,8 +92,6 @@ typedef struct app {
     uint8_t sport_tab;
     ui_obj_t sport_scroll;
     uint8_t prev_mag_cal;
-    uint32_t i2c_scan_ms;
-    char i2c_scan_str[18];
     uint8_t dial_edit;
     uint8_t dial_pick;
     int16_t dial_pick_steps;
@@ -953,6 +951,8 @@ static int pic_mod_exec(const uint8_t *blob, uint16_t entry_off,
     return 1;
 }
 
+static void draw_loading(uint8_t a);
+
 __attribute__((noinline))
 static int pic_mod_exec_std(const uint8_t *blob, uint16_t entry_off,
                             const char *scan_line, uint8_t page_id,
@@ -963,8 +963,7 @@ static int pic_mod_exec_std(const uint8_t *blob, uint16_t entry_off,
         if (clear_bg && a == 255u) {
             ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
         }
-        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2),
-                            "...", col_dim, a, 1);
+        draw_loading(a);
     }
     return ok;
 }
@@ -1345,7 +1344,7 @@ static void poll_imu9_now(imu9_state_t *out, uint32_t now) {
 }
 
 /* 统一加载占位：ASCII 字库自带，不依赖片外字形/资源包。
-   两个调用点共用一份，避免 -Os 在每个页面重复展开文字绘制。 */
+   各加载态共用一份，避免 -Os 在每个页面重复展开文字绘制。 */
 #if defined(__GNUC__)
 __attribute__((noinline))
 #endif
@@ -3327,11 +3326,13 @@ static void msg_link_sync(void) {
     if (compass_open && (!st->compass_was_open || !link_compass3d_ready())) {
         link_begin_compass();
     }
+#ifdef AT32_SLIM_ROM
     if (about_open && !st->about_was_open) {
         /* 此时 SYS1 / 音乐 / 消息缓冲已经按当前页面释放，再抢 RAM 才不会
            出现“彩图抢到、文字抢不到”。push 动画首帧前完成。 */
         (void)about_prepare();
     }
+#endif
     st->about_was_open = (uint8_t)about_open;
     st->compass_was_open = (uint8_t)compass_open;
     st->sport_open_was = (uint8_t)sport_open;

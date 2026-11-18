@@ -98,37 +98,44 @@ static int wait_idle(void) {
     return n != 0u;
 }
 
-static int start_cond(uint8_t addr7, int rd) {
+static int wait_set(uint32_t flag) {
     uint32_t n = I2C_TO_SHORT;
 
-    I2C_HW->ctrl1_bit.genstart = 1;
-    while ((I2C_HW->sts1 & I2C_STARTF_FLAG) == 0u && --n != 0u) {
+    while ((I2C_HW->sts1 & flag) == 0u) {
+        if ((I2C_HW->sts1 & (I2C_BUSERR_FLAG | I2C_ARLOST_FLAG |
+                            I2C_ACKFAIL_FLAG | I2C_OUF_FLAG)) != 0u || --n == 0u) {
+            return 0;
+        }
     }
-    if (n == 0u) {
+    return 1;
+}
+
+static void clear_addr(void) {
+    I2C_HW->sts1 = 0xFFFFu;
+    (void)I2C_HW->sts1;
+    (void)I2C_HW->sts2;
+}
+
+static int start_cond(uint8_t addr7, int rd) {
+    I2C_HW->ctrl1_bit.genstart = 1;
+    if (!wait_set(I2C_STARTF_FLAG)) {
         return 0;
     }
     /* 直接写整个 DT，不要用 dt_bit.dt 位域赋值：位域会编译成“读-改-写”，
        发送缓冲为空时读 DT 会触发 underflow，随后写入的值被硬件丢弃，
        表现为 MPU6050 的配置寄存器永远写不进去（PWR1 有时能写）。 */
     I2C_HW->dt = (uint32_t)(((uint32_t)addr7 << 1) | (uint32_t)(rd ? 1 : 0));
-    n = I2C_TO_SHORT;
-    while ((I2C_HW->sts1 & I2C_ADDR7F_FLAG) == 0u && --n != 0u) {
-    }
-    if (n == 0u || (I2C_HW->sts1 & I2C_ACKFAIL_FLAG) != 0u) {
-        clear_err();
+    if (!wait_set(I2C_ADDR7F_FLAG)) {
         return 0;
     }
-    (void)I2C_HW->sts1;
-    (void)I2C_HW->sts2;
+    if (!rd) {
+        clear_addr();
+    }
     return 1;
 }
 
 static int put_byte(uint8_t b) {
-    uint32_t n = I2C_TO_SHORT;
-
-    while ((I2C_HW->sts1 & I2C_TDBE_FLAG) == 0u && --n != 0u) {
-    }
-    if (n == 0u) {
+    if (!wait_set(I2C_TDBE_FLAG)) {
         return 0;
     }
     I2C_HW->dt = b;
@@ -136,40 +143,61 @@ static int put_byte(uint8_t b) {
 }
 
 static int wait_tdc(void) {
-    uint32_t n = I2C_TO_SHORT;
-    while ((I2C_HW->sts1 & I2C_TDC_FLAG) == 0u && --n != 0u) {
-    }
-    return n != 0u;
+    return wait_set(I2C_TDC_FLAG);
 }
 
 static void stop_cond(void) {
-    uint32_t n = I2C_TO_SHORT;
-
     I2C_HW->ctrl1_bit.genstop = 1;
-    while ((I2C_HW->sts1 & I2C_STOPF_FLAG) == 0u && --n != 0u) {
-    }
-    I2C_HW->sts1 = 0xFFFFu;
-    I2C_HW->ctrl1_bit.i2cen = 1;
 }
 
 static int get_bytes(uint8_t *dst, int n) {
-    int i;
+    int left = n;
 
-    I2C_HW->ctrl1_bit.acken = 1;
-    for (i = 0; i < n; i++) {
-        uint32_t t = I2C_TO_SHORT;
-        if (i == n - 1) {
-            I2C_HW->ctrl1_bit.acken = 0;
-        }
-        while ((I2C_HW->sts1 & I2C_RDBF_FLAG) == 0u && --t != 0u) {
-        }
-        if (t == 0u) {
-            I2C_HW->ctrl1_bit.acken = 1;
+    if (n == 1) {
+        I2C_HW->ctrl1_bit.acken = 0;
+        clear_addr();
+        stop_cond();
+    } else if (n == 2) {
+        I2C_HW->ctrl1_bit.mackctrl = 1;
+        I2C_HW->ctrl1_bit.acken = 0;
+        clear_addr();
+    } else {
+        I2C_HW->ctrl1_bit.acken = 1;
+        clear_addr();
+    }
+
+    while (left > 3) {
+        if (!wait_set(I2C_RDBF_FLAG)) {
             return 0;
         }
-        dst[i] = (uint8_t)I2C_HW->dt_bit.dt;
+        *dst++ = (uint8_t)I2C_HW->dt;
+        left--;
     }
-    I2C_HW->ctrl1_bit.acken = 1;
+    if (left == 3) {
+        if (!wait_set(I2C_TDC_FLAG)) {
+            return 0;
+        }
+        I2C_HW->ctrl1_bit.acken = 0;
+        *dst++ = (uint8_t)I2C_HW->dt;
+        if (!wait_set(I2C_TDC_FLAG)) {
+            return 0;
+        }
+        stop_cond();
+        dst[0] = (uint8_t)I2C_HW->dt;
+        dst[1] = (uint8_t)I2C_HW->dt;
+    } else if (left == 2) {
+        if (!wait_set(I2C_TDC_FLAG)) {
+            return 0;
+        }
+        stop_cond();
+        dst[0] = (uint8_t)I2C_HW->dt;
+        dst[1] = (uint8_t)I2C_HW->dt;
+    } else {
+        if (!wait_set(I2C_RDBF_FLAG)) {
+            return 0;
+        }
+        *dst = (uint8_t)I2C_HW->dt;
+    }
     return 1;
 }
 
@@ -182,6 +210,8 @@ static int xfer(uint8_t addr7, uint16_t reg, int reg16,
         return 0;
     }
     clear_err();
+    I2C_HW->ctrl1_bit.mackctrl = 0;
+    I2C_HW->ctrl1_bit.acken = 1;
     if (!start_cond(addr7, 0)) {
         stop_cond();
         return 0;
@@ -211,6 +241,7 @@ static int xfer(uint8_t addr7, uint16_t reg, int reg16,
         if (!get_bytes(rd, n)) {
             goto fail;
         }
+        return 1;
     }
     stop_cond();
     return 1;

@@ -96,44 +96,29 @@ int qmc5883l_init(void) {
     return 1;
 }
 
-static int read_l(hal_mag_t *out) {
-    uint8_t b[6];
-    uint8_t st = 0;
-    int16_t x, y, z;
-
-    if (!rd(L_REG_STATUS, &st)) return 0;
-    if (!(st & 0x01)) return 0;               /* DRDY=0 */
-    if (!i2c_read(addr, L_REG_DATA, b, 6)) return 0;
-    x = (int16_t)((b[1] << 8) | b[0]);
-    y = (int16_t)((b[3] << 8) | b[2]);
-    z = (int16_t)((b[5] << 8) | b[4]);
-    out->x = (int16_t)(x / 3);                /* ±8G：3000 LSB/G -> mG */
-    out->y = (int16_t)(y / 3);
-    out->z = (int16_t)(z / 3);
-    return 1;
-}
-
-static int read_p(hal_mag_t *out) {
-    uint8_t b[6];
-    uint8_t st = 0;
-    int16_t x, y, z;
-
-    if (!rd(P_REG_STATUS, &st)) return 0;
-    if (!(st & 0x01)) return 0;               /* DRDY=0 */
-    if (!i2c_read(addr, P_REG_DATA, b, 6)) return 0;
-    x = (int16_t)((b[1] << 8) | b[0]);
-    y = (int16_t)((b[3] << 8) | b[2]);
-    z = (int16_t)((b[5] << 8) | b[4]);
-    /* ±8G：3750 LSB/G -> mG 为 raw * 1000 / 3750 = raw * 4 / 15 */
-    out->x = (int16_t)((int32_t)x * 4 / 15);
-    out->y = (int16_t)((int32_t)y * 4 / 15);
-    out->z = (int16_t)((int32_t)z * 4 / 15);
-    return 1;
-}
-
 int qmc5883l_read(hal_mag_t *out) {
+    uint8_t b[6];
+    uint8_t st = 0;
+    int16_t x, y, z;
+
     if (!out || !ok || chip == 0) return 0;
-    return chip == 1 ? read_l(out) : read_p(out);
+    if (!rd(chip == 1 ? L_REG_STATUS : P_REG_STATUS, &st) || (st & 0x03u) != 0x01u) {
+        return 0;
+    }
+    if (!i2c_read(addr, chip == 1 ? L_REG_DATA : P_REG_DATA, b, 6)) return 0;
+    x = (int16_t)((b[1] << 8) | b[0]);
+    y = (int16_t)((b[3] << 8) | b[2]);
+    z = (int16_t)((b[5] << 8) | b[4]);
+    if (chip == 1) {
+        out->x = (int16_t)(x / 3);
+        out->y = (int16_t)(y / 3);
+        out->z = (int16_t)(z / 3);
+    } else {
+        out->x = (int16_t)((int32_t)x * 4 / 15);
+        out->y = (int16_t)((int32_t)y * 4 / 15);
+        out->z = (int16_t)((int32_t)z * 4 / 15);
+    }
+    return 1;
 }
 
 void qmc5883l_debug(char *out, int cap) {

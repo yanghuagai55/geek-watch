@@ -742,19 +742,22 @@ int hal_i2c_scan(uint8_t *out, int max) {
     return n;
 }
 
-/* 蓝牙 0x13 调试快照。复用 hal_i2c_scan 节省体积，支持热插拔即时体现。 */
+/* 蓝牙 0x13 调试快照；完整构建附带 I2C 地址扫描。 */
 int hal_debug_snapshot(char *out, int cap) {
-    uint8_t addrs[6];
-    int na, i, n = 0;
+    int i, n = 0;
     imu9_state_t s9;
 #if !defined(AT32_SLIM_ROM)
+    uint8_t addrs[6];
+    int na;
     char qbuf[64];
 #endif
 
     if(!out || cap < 32) {
         return 0;
     }
+#if !defined(AT32_SLIM_ROM)
     na = hal_i2c_scan(addrs, (int)sizeof addrs);
+#endif
     imu9_get(&s9);
 #if defined(AT32_SLIM_ROM)
     n = snprintf(out, (size_t)cap,
@@ -938,10 +941,11 @@ void port_service(void) {
         int imu_ok = hal_imu_read(&imu);
         int mag_ok = hal_mag_read(&mag);
         sensor_ms = now;
+        g_imu_read_ok = (uint8_t)imu_ok;
+        g_mag_read_ok = (uint8_t)mag_ok;
         if(imu_ok) {
             imu_miss = 0u;
             sport_feed(&imu, now);
-            g_imu_read_ok = 1;
             g_imu_ax = imu.ax;
             g_imu_ay = imu.ay;
             g_imu_az = imu.az;
@@ -959,7 +963,6 @@ void port_service(void) {
         }
         if(mag_ok) {
             mag_miss = 0u;
-            g_mag_read_ok = 1;
             g_mag_x = mag.x;
             g_mag_y = mag.y;
             g_mag_z = mag.z;
