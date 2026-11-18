@@ -1344,6 +1344,16 @@ static void poll_imu9_now(imu9_state_t *out, uint32_t now) {
     imu9_get(out);
 }
 
+/* 统一加载占位：ASCII 字库自带，不依赖片外字形/资源包。
+   两个调用点共用一份，避免 -Os 在每个页面重复展开文字绘制。 */
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+static void draw_loading(uint8_t a) {
+    ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)((UI_H - 16) / 2),
+                        "LOADING", col_dim, a, 1);
+}
+
 #if !defined(AT32_SLIM_ROM)
 /* Quarter-wave sin(0..90deg) * 255 in 5-degree steps for compact ROM trig. */
 static const uint8_t compass_sin5[19] = {
@@ -1730,6 +1740,7 @@ static void draw_sport_compass(uint8_t a, int clear_bg) {
     {
         uint16_t entry_off = 0u;
         const uint8_t *sblob = link_pic_sport_blob(&entry_off);
+
         if (pic_mod_exec_std(sblob, entry_off, 0, 0u, 2u, a, clear_bg)) {
             return;
         }
@@ -1997,26 +2008,11 @@ static const char *compass_dir(uint16_t heading) {
 
 static void draw_sensor_page(uint8_t a) {
 #ifdef AT32_SLIM_ROM
-    uint32_t now = hal_tick_ms();
     uint16_t entry_off = 0u;
     const uint8_t *blob = link_pic_sport_blob(&entry_off);
 
-    if (st->i2c_scan_ms == 0u || (now - st->i2c_scan_ms) >= 3000u) {
-        uint8_t addrs[4];
-        int na, i, p;
-        st->i2c_scan_ms = now;
-        na = hal_i2c_scan(addrs, 4);
-        p = snprintf(st->i2c_scan_str, sizeof st->i2c_scan_str, "I2C");
-        if (na == 0) {
-            snprintf(st->i2c_scan_str + p, sizeof st->i2c_scan_str - (size_t)p, " --");
-        } else {
-            for (i = 0; i < na && p < (int)sizeof st->i2c_scan_str - 4; i++) {
-                p += snprintf(st->i2c_scan_str + p, sizeof st->i2c_scan_str - (size_t)p,
-                              " %02X", addrs[i]);
-            }
-        }
-    }
-    if (pic_mod_exec_std(blob, entry_off, st->i2c_scan_str, 0u, 1u, a, 1)) {
+    /* 总线地址改由 BLE 0x13 快照查看，这里不再每 3 秒重扫（省 Flash）。 */
+    if (pic_mod_exec_std(blob, entry_off, "I2C", 0u, 1u, a, 1)) {
         return;
     }
 #else
@@ -2171,8 +2167,10 @@ static void draw_msg_card(int scroll, int count, int i, int hot,
         return;
     }
     blue_card_fg(x, y, w, h, hot, a);
+    /* “>” 字模实测 8x16，按真实字高居中才和 22px 行内容对齐。 */
     ui_text_draw_right((int16_t)(x + w - right_pad),
-                       (int16_t)(y + (h - 8) / 2), ">", col_dim, a, 1);
+                       (int16_t)(y + (h - ui_text_height(">", 1)) / 2),
+                       ">", col_dim, a, 1);
     clip_w = w - pad - right_pad - arrow_w;
     if (clip_w > 8) {
         const uint8_t *row_bits = link_msg_row_mask(i);
@@ -2221,8 +2219,10 @@ static void draw_msg_app(uint8_t a) {
                      (int16_t)((UI_W - ew) / 2),
                      (int16_t)(band + (UI_H - band - eh) / 2),
                      "无消息", UI_COL_MUTED_LIGHT, a);
+    } else {
+        /* 已连上且知道有消息，列表点阵还在路上。 */
+        draw_loading(a);
     }
-    /* 其余情况是列表正在加载：保持空白，避免“无消息”闪一下。 */
     draw_header_anim("消息", scroll, a);
 }
 
@@ -2287,7 +2287,6 @@ static void draw_message_page(uint8_t a) {
         ui_mask1_draw((int16_t)((UI_W - 128) / 2), (int16_t)((UI_H - 160) / 2),
                       128, 160, link_msg_detail_mask(), col_text, a);
     }
-    /* 加载中保持空白，避免每次进来先闪“无消息”。 */
 }
 
 #ifdef AT32_SLIM_ROM
@@ -2331,18 +2330,8 @@ static int about_prepare(void) {
         }
     }
     off0 = (uint16_t)(st->about_hdr[8] | ((uint16_t)st->about_hdr[9] << 8));
-    if (first > off0 && first <= tot) {
-        uint16_t len = (uint16_t)(first - off0);
-        uint8_t *img = (uint8_t *)ui_mem_alloc(len, 4);
-
-        if (img) {
-            if (hal_ext_flash_read(base + off0, img, len)) {
-                st->about_img = img;
-            } else {
-                ui_mem_free(img);
-            }
-        }
-    }
+    /* 先拿 1.3KB 简介再拿 2.8KB 彩图：文字没有片外兜底，彩图拿不到
+       还能流式贴。蓝牙连接时 RAM 更紧，顺序反了就会“图有字没有”。 */
     if (first >= 40u && first < tot) {
         uint16_t span = (uint16_t)(tot - first);
         uint8_t *buf = (uint8_t *)ui_mem_alloc(span, 4);
@@ -2355,10 +2344,24 @@ static int about_prepare(void) {
             }
         }
     }
+    if (first > off0 && first <= tot) {
+        uint16_t len = (uint16_t)(first - off0);
+        uint8_t *img = (uint8_t *)ui_mem_alloc(len, 4);
+
+        if (img) {
+            if (hal_ext_flash_read(base + off0, img, len)) {
+                st->about_img = img;
+            } else {
+                ui_mem_free(img);
+            }
+        }
+    }
     st->about_ext = base;
     st->about_total = tot;
     st->about_first = first;
-    st->about_loaded = 1u;
+    /* 文字缓存才算加载完成；没抢到就下一帧再试（预热已挪到 SYS1/媒体缓冲
+       释放之后），避免把半成品状态缓存下来导致文字永久不出现。 */
+    st->about_loaded = (uint8_t)(st->about_lines != 0);
     return 1;
 }
 
@@ -2683,10 +2686,6 @@ static void on_confirm(ui_menu_t *menu) {
             hal_display_set_clock(s->spi_mhz);
             break;
         case 8:
-#ifdef AT32_SLIM_ROM
-            /* 翻页动画开始前先把彩图/简介读进 RAM，push 期间即可内存贴图。 */
-            (void)about_prepare();
-#endif
             ui_menu_enter_child(menu, ABOUT_N);
             break;
         default:
@@ -3101,17 +3100,19 @@ static void draw_music_app(uint8_t a) {
     uint16_t entry_off = 0u;
     const uint8_t *blob = link_pic_music_blob(&entry_off);
     uint8_t mode;
+    int connected;
 
     if (a == 255u) {
         ui_draw_fill(0, 0, UI_W, UI_H, col_bg, a);
     }
     if (!blob) {
-        ui_text_draw_center((int16_t)(UI_W / 2), (int16_t)(UI_H / 2),
-                            "...", col_dim, a, 1);
+        draw_loading(a);
         return;
     }
-    mode = (uint8_t)((link_media_mask_ready() ? 1u : 0u) |
-                     (link_connected() ? 0u : 2u));
+    connected = link_connected();
+    /* 断连后不要再贴上一首歌的点阵，否则“无连接”上方还挂着旧标题。 */
+    mode = (uint8_t)(((connected && link_media_mask_ready()) ? 1u : 0u) |
+                     (connected ? 0u : 2u));
     if (mode & 1u) {
         ui_mask_draw(0, (int16_t)UI_MY(120), (int16_t)UI_W, 32,
                      link_media_mask(), col_text, a);
@@ -3325,6 +3326,11 @@ static void msg_link_sync(void) {
     }
     if (compass_open && (!st->compass_was_open || !link_compass3d_ready())) {
         link_begin_compass();
+    }
+    if (about_open && !st->about_was_open) {
+        /* 此时 SYS1 / 音乐 / 消息缓冲已经按当前页面释放，再抢 RAM 才不会
+           出现“彩图抢到、文字抢不到”。push 动画首帧前完成。 */
+        (void)about_prepare();
     }
     st->about_was_open = (uint8_t)about_open;
     st->compass_was_open = (uint8_t)compass_open;

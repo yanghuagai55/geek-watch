@@ -25,32 +25,25 @@ int mpu6050_present(void) {
 
 int mpu6050_init(void) {
     static const uint8_t cfg[] = {
-        REG_PWR1,   0x01, /* 清 SLEEP + CLKSEL=1 (PLL X) */
         REG_SMPLRT, 0x07, /* 1kHz / (1+7) = 125Hz */
         REG_CONFIG, 0x03, /* DLPF 44Hz/42Hz */
         REG_GYRO,   0x18, /* ±2000dps */
-        REG_ACCEL,  0x18  /* ±16g */
+        REG_ACCEL,  0x18, /* ±16g */
+        REG_PWR1,   0x00  /* 最后清 SLEEP，CLKSEL=0 内部 8MHz 振荡器 */
     };
-    uint8_t v;
-    uint32_t t0;
+    uint8_t v = 0;
     int i;
 
     ok = 0;
     err_cnt = 0;
-    if (!mpu6050_present() || !wr(REG_PWR1, 0x80)) return 0;
-    t0 = hal_tick_ms();
-    do {
-        v = 0x80;
-        (void)i2c_read(ADDR, REG_PWR1, &v, 1);
-    } while ((v & 0x80) && (hal_tick_ms() - t0 < 100u));
-    /* 给 MPU6050 内部复位状态机留足稳定窗口再醒来配置 */
-    t0 = hal_tick_ms();
-    while ((hal_tick_ms() - t0) < 3u) {
-    }
     if (!mpu6050_present()) return 0;
+    /* 不做 DEVICE_RESET：这块芯片复位后会拒绝后续配置写（只有 PWR1 生效，
+       数据恒 0）。直接覆盖配置寄存器，写完回读校验。 */
     for (i = 0; i < (int)sizeof cfg; i += 2) {
         if (!wr(cfg[i], cfg[i + 1])) return 0;
     }
+    if (!i2c_read(ADDR, REG_CONFIG, &v, 1) || v != 0x03u) return 0;
+    if (!i2c_read(ADDR, REG_PWR1, &v, 1) || (v & 0x40u)) return 0;
     ok = 1;
     return 1;
 }
@@ -60,9 +53,16 @@ int mpu6050_read(hal_imu_t *out) {
     int16_t ax, ay, az, gx, gy, gz, tp;
     int32_t t100;
     if (!out || !ok) return 0;
-    if (!i2c_read(ADDR, REG_DATA, b, 14)) {
-        if (++err_cnt >= 10u) ok = 0;
-        return 0;
+    {
+        int i;
+        /* 这片 MPU6050 的连续读（auto-increment）在硬件 I2C 上会返回 0/超时，
+           按寄存器逐个读才稳定；每次 1 字节，14 字节约 2ms@400kHz。 */
+        for (i = 0; i < 14; i++) {
+            if (!i2c_read(ADDR, (uint8_t)(REG_DATA + i), &b[i], 1)) {
+                if (++err_cnt >= 10u) ok = 0;
+                return 0;
+            }
+        }
     }
     ax = (int16_t)((b[0] << 8) | b[1]);
     ay = (int16_t)((b[2] << 8) | b[3]);

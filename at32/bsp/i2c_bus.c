@@ -42,15 +42,46 @@ static void hw_start(void) {
     I2C_HW->ctrl1_bit.i2cen = 1;
 }
 
+/* 从机异常（如 MPU6050 被复位打断）时可能把 SDA 一直拉低，只复位 I2C
+   外设解锁不了总线。临时把 PA9/PA10 切成 GPIO 开漏，打 9 个 SCL 时钟
+   再补一个 STOP，然后再切回 I2C 复用。 */
+static void bus_delay(void) {
+    volatile int d = 0;
+    while (d < 200) {
+        d++;
+    }
+}
+
+static void bus_clear(void) {
+    int i;
+
+    GPIOA->cfgr = (GPIOA->cfgr & ~(0xFu << 18)) | (0x5u << 18);
+    GPIOA->omode |= (1u << 9) | (1u << 10);
+    GPIOA->odt |= (1u << 9) | (1u << 10);
+    bus_delay();
+    for (i = 0; i < 9; i++) {
+        GPIOA->odt &= ~(1u << 9);
+        bus_delay();
+        GPIOA->odt |= (1u << 9);
+        bus_delay();
+    }
+    GPIOA->odt &= ~(1u << 10);
+    bus_delay();
+    GPIOA->odt |= (1u << 9) | (1u << 10);
+    bus_delay();
+    pins_i2c();
+}
+
 void i2c_bus_init(void) {
     crm_periph_clock_enable(I2C_CRM_CLK, TRUE);
     crm_periph_clock_enable(CRM_I2C1_PERIPH_CLOCK, TRUE);
-    pins_i2c();
+    bus_clear();
     hw_start();
 }
 
 void i2c_recover(void) {
-    /* 软件复位 I2C1 后重配。 */
+    /* 软件复位 I2C1 后重配；先解锁可能被从机拉死的总线。 */
+    bus_clear();
     hw_start();
 }
 
@@ -76,7 +107,10 @@ static int start_cond(uint8_t addr7, int rd) {
     if (n == 0u) {
         return 0;
     }
-    I2C_HW->dt_bit.dt = (uint32_t)(((uint32_t)addr7 << 1) | (uint32_t)(rd ? 1 : 0));
+    /* 直接写整个 DT，不要用 dt_bit.dt 位域赋值：位域会编译成“读-改-写”，
+       发送缓冲为空时读 DT 会触发 underflow，随后写入的值被硬件丢弃，
+       表现为 MPU6050 的配置寄存器永远写不进去（PWR1 有时能写）。 */
+    I2C_HW->dt = (uint32_t)(((uint32_t)addr7 << 1) | (uint32_t)(rd ? 1 : 0));
     n = I2C_TO_SHORT;
     while ((I2C_HW->sts1 & I2C_ADDR7F_FLAG) == 0u && --n != 0u) {
     }
@@ -97,7 +131,7 @@ static int put_byte(uint8_t b) {
     if (n == 0u) {
         return 0;
     }
-    I2C_HW->dt_bit.dt = b;
+    I2C_HW->dt = b;
     return 1;
 }
 
