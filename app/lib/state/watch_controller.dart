@@ -45,6 +45,11 @@ class WatchController extends ChangeNotifier {
     _sensorSub = session?.sensors.listen(_applySensor);
     if (startTicker) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+      if (Platform.isAndroid) {
+        final observer = _AndroidLifecycleObserver(_onAppResumed);
+        _lifecycleObserver = observer;
+        WidgetsBinding.instance.addObserver(observer);
+      }
     }
   }
 
@@ -57,6 +62,7 @@ class WatchController extends ChangeNotifier {
 
   Timer? _ticker;
   Timer? _sensorTimer;
+  _AndroidLifecycleObserver? _lifecycleObserver;
   int _sensorBoostRefs = 0;
   int _ticks = 0;
   StreamSubscription<LinkState>? _stateSub;
@@ -503,6 +509,31 @@ class WatchController extends ChangeNotifier {
     await AndroidWatchBridge.openBatterySettings();
   }
 
+  /// 重新绑定系统通知监听并立即补推当前通知栏消息，返回监听服务是否已绑定。
+  Future<bool> rescanNotifications() async {
+    if (!Platform.isAndroid) return false;
+    final bound = await AndroidWatchBridge.rescanNotifications();
+    await refreshAndroidStatus();
+    await _pollMessageCount();
+    return bound;
+  }
+
+  void _onAppResumed() {
+    if (_disposed || !Platform.isAndroid) return;
+    unawaited(() async {
+      final prevAccess = notificationAccess;
+      await refreshAndroidStatus();
+      if (_disposed) return;
+      await refreshMessageRules();
+      if (_disposed) return;
+      if (connected &&
+          ((!prevAccess && notificationAccess) || cachedNotifications == 0)) {
+        await AndroidWatchBridge.rescanNotifications();
+      }
+      await _pollMessageCount();
+    }());
+  }
+
   void _applyStats(WatchStats stats) {
     _liveTelemetry = true;
     if (stats.ramTotalKb > 0) ramTotal = stats.ramTotalKb;
@@ -751,6 +782,7 @@ class WatchController extends ChangeNotifier {
     required String app,
     String title = '',
     required String text,
+    bool vibrate = true,
   }) async {
     final item = WatchMessageItem(app: app, title: title, text: text);
     final limit = maxMessages.clamp(1, 20);
@@ -760,6 +792,14 @@ class WatchController extends ChangeNotifier {
     ];
     if (!Platform.isAndroid) {
       cachedNotifications = localMessages.length;
+    } else {
+      unawaited(
+        AndroidWatchBridge.recordManualMessage(
+          app: app,
+          title: title,
+          text: text,
+        ),
+      );
     }
     notifyListeners();
     onSettingsChanged?.call();
@@ -772,6 +812,7 @@ class WatchController extends ChangeNotifier {
       rowBytes: rowBits,
       detailBytes: detBits,
       count: localMessages.length.clamp(1, limit),
+      vibrate: vibrate,
     );
   }
 
@@ -869,7 +910,12 @@ class WatchController extends ChangeNotifier {
     }
     final intervalMs = _sensorBoostRefs > 0 ? 115 : 220;
     _sensorTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
-      if (!connected || active.isCapturing || capturingPreview) return;
+      if (!connected ||
+          active.isCapturing ||
+          active.isExternalBusy ||
+          capturingPreview) {
+        return;
+      }
       unawaited(active.requestSensor().catchError((Object _) => null));
     });
   }
@@ -1375,12 +1421,13 @@ class WatchController extends ChangeNotifier {
       _append(cpuHistory, cpu / 100);
       _append(fpsHistory, fps / 61);
     }
-    // 运动数据 5 秒一次；抓屏期间让路，避免把帧插进图像流。
+    // 运动数据 5 秒一次；抓屏或原生通知点阵下发期间让路，避免把帧插进图像流或串口拥塞。
     final activeSession = session;
     if (connected &&
         activeSession != null &&
         _ticks % 5 == 0 &&
-        !activeSession.isCapturing) {
+        !activeSession.isCapturing &&
+        !activeSession.isExternalBusy) {
       unawaited(
         activeSession.requestSport().catchError((Object _) => false),
       );
@@ -1681,6 +1728,8 @@ class WatchController extends ChangeNotifier {
     serialPort = readString('serialPort', serialPort);
     baudRate = readString('baudRate', baudRate);
     if (Platform.isAndroid) {
+      unawaited(AndroidWatchBridge.setMediaFollow(mediaFollow));
+      unawaited(AndroidWatchBridge.setNotificationForward(notificationForward));
       unawaited(refreshAndroidStatus());
       unawaited(refreshMessageRules());
     }
@@ -1731,6 +1780,11 @@ class WatchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    final observer = _lifecycleObserver;
+    if (observer != null) {
+      WidgetsBinding.instance.removeObserver(observer);
+      _lifecycleObserver = null;
+    }
     _ticker?.cancel();
     _sensorTimer?.cancel();
     _mediaTimer?.cancel();
@@ -1746,5 +1800,18 @@ class WatchController extends ChangeNotifier {
     deviceScreen?.dispose();
     unawaited(session?.dispose());
     super.dispose();
+  }
+}
+
+class _AndroidLifecycleObserver with WidgetsBindingObserver {
+  _AndroidLifecycleObserver(this.onResumed);
+
+  final VoidCallback onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onResumed();
+    }
   }
 }

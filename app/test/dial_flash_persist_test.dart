@@ -392,6 +392,20 @@ void main() {
     );
     expect(controller.extPoolMsgCount, 1);
 
+    final quietPushed = await controller.pushRichMessage(
+      app: '短信槽',
+      title: '消息槽 1',
+      text: '静默写入 AT24C256 详情',
+      vibrate: false,
+    );
+    expect(quietPushed, isTrue);
+    expect(
+      mock.sent.any(
+        (f) => f[1] == WatchCmd.extOp && f[2] == 3 && f[3] == 1 && f[5] == 0,
+      ),
+      isTrue,
+    );
+
     final cleared = await controller.clearWatchMessages();
     expect(cleared, isTrue);
     await Future<void>.delayed(const Duration(milliseconds: 50));

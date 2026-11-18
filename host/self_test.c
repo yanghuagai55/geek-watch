@@ -696,8 +696,12 @@ int host_self_test(const char *output_dir) {
         {
             uint32_t detail_ram = 0;
             ui_mem_get(&detail_ram, NULL);
-            if (detail_ram < used + 2560u) {
-                return fail("msg detail did not allocate 2560B dynamic RAM");
+            if (!link_msg_detail_ready() ||
+                hal_host_pixel((UI_W - 128) / 2 + 16, (UI_H - 160) / 2 + 24) == UI_COL_BG) {
+                return fail("msg detail did not stream-render from ext flash");
+            }
+            if (detail_ram >= used + 2560u) {
+                return fail("msg detail still allocated 2560B dynamic RAM");
             }
         }
         hal_host_set_keys(HAL_KEY2);

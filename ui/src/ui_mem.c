@@ -29,9 +29,9 @@ void ui_mem_init(void) {
     memset(arena, 0, sizeof arena);
 }
 
-void *ui_mem_alloc(uint32_t size, uint32_t align) {
+static void *mem_alloc_dir(uint32_t size, uint32_t align, int top_down) {
     uint32_t mask;
-    uint8_t i, j;
+    int i, j;
 
     if (size == 0 || size > UI_RAM_BUDGET || blk_n >= MEM_BLK_MAX) {
         return 0;
@@ -41,25 +41,48 @@ void *ui_mem_alloc(uint32_t size, uint32_t align) {
     }
     mask = align - 1u;
 
-    for (i = 0; i <= blk_n; i++) {
+    for (i = top_down ? (int)blk_n : 0; top_down ? (i >= 0) : (i <= (int)blk_n); i += top_down ? -1 : 1) {
         uint32_t gap_start = (i == 0) ? 0u : (uint32_t)(blks[i - 1].off + blks[i - 1].len);
-        uint32_t gap_end = (i < blk_n) ? (uint32_t)blks[i].off : (uint32_t)UI_RAM_BUDGET;
-        uintptr_t base_addr = (uintptr_t)arena + gap_start;
-        uintptr_t aligned_addr = (base_addr + (uintptr_t)mask) & ~(uintptr_t)mask;
-        uint32_t aligned_off = gap_start + (uint32_t)(aligned_addr - base_addr);
-
-        if (aligned_off <= gap_end && gap_end - aligned_off >= size) {
-            for (j = blk_n; j > i; j--) {
-                blks[j] = blks[j - 1];
-            }
-            blks[i].off = (uint16_t)aligned_off;
-            blks[i].len = (uint16_t)size;
-            blk_n++;
-            memset(arena + aligned_off, 0, size);
-            return arena + aligned_off;
+        uint32_t gap_end = (i < (int)blk_n) ? (uint32_t)blks[i].off : (uint32_t)UI_RAM_BUDGET;
+        uint32_t aligned_off;
+        if (gap_end <= gap_start || gap_end - gap_start < size) {
+            continue;
         }
+        if (top_down) {
+            uintptr_t top_addr = ((uintptr_t)arena + gap_end - size) & ~(uintptr_t)mask;
+            if (top_addr < (uintptr_t)arena) {
+                continue;
+            }
+            aligned_off = (uint32_t)(top_addr - (uintptr_t)arena);
+            if (aligned_off < gap_start) {
+                continue;
+            }
+        } else {
+            uintptr_t base_addr = (uintptr_t)arena + gap_start;
+            uintptr_t aligned_addr = (base_addr + (uintptr_t)mask) & ~(uintptr_t)mask;
+            aligned_off = gap_start + (uint32_t)(aligned_addr - base_addr);
+            if (aligned_off > gap_end || gap_end - aligned_off < size) {
+                continue;
+            }
+        }
+        for (j = (int)blk_n; j > i; j--) {
+            blks[j] = blks[j - 1];
+        }
+        blks[i].off = (uint16_t)aligned_off;
+        blks[i].len = (uint16_t)size;
+        blk_n++;
+        memset(arena + aligned_off, 0, size);
+        return arena + aligned_off;
     }
     return 0;
+}
+
+void *ui_mem_alloc(uint32_t size, uint32_t align) {
+    return mem_alloc_dir(size, align, 0);
+}
+
+void *ui_mem_alloc_top(uint32_t size, uint32_t align) {
+    return mem_alloc_dir(size, align, 1);
 }
 
 void ui_mem_free(void *ptr) {

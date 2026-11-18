@@ -135,4 +135,94 @@ void main() {
     expect(metricsBottom, lessThan(navTop));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('light/dark theme fidelity and portrait/landscape ergonomics', (
+    tester,
+  ) async {
+    final controller = WatchController(startTicker: false)
+      ..setAnimations(false);
+    addTearDown(controller.dispose);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    // 1. 竖屏浅色模式：验证竖屏主页 Hero 卡与媒体页专辑封套使用浅色梯度（无暗色泄露）
+    await tester.binding.setSurfaceSize(const Size(390, 840));
+    await tester.pumpWidget(WatchCompanionApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final lightColors = AppThemeColors.fromBrightness(Brightness.light);
+    final portraitHeroInk = tester.widget<Ink>(
+      find.ancestor(
+        of: find.text('实时姿态'),
+        matching: find.byType(Ink),
+      ).first,
+    );
+    final heroDec = portraitHeroInk.decoration! as BoxDecoration;
+    expect(
+      (heroDec.gradient! as LinearGradient).colors,
+      equals(lightColors.heroGradient),
+    );
+
+    await tester.tap(find.text('媒体'));
+    await tester.pumpAndSettle();
+    final mediaContext = tester.element(find.text('同步到手表'));
+    expect(Theme.of(mediaContext).brightness, Brightness.light);
+    expect(tester.takeException(), isNull);
+
+    // 切到暗色模式，验证竖屏主页与媒体页同步切换
+    controller.setThemeMode(ThemeMode.dark);
+    await tester.pumpAndSettle();
+    final darkColors = AppThemeColors.fromBrightness(Brightness.dark);
+    final mediaDarkCtx = tester.element(find.text('同步到手表'));
+    expect(Theme.of(mediaDarkCtx).brightness, Brightness.dark);
+
+    await tester.tap(find.text('主页'));
+    await tester.pumpAndSettle();
+    final darkHeroInk = tester.widget<Ink>(
+      find.ancestor(
+        of: find.text('实时姿态'),
+        matching: find.byType(Ink),
+      ).first,
+    );
+    final darkHeroDec = darkHeroInk.decoration! as BoxDecoration;
+    expect(
+      (darkHeroDec.gradient! as LinearGradient).colors,
+      equals(darkColors.heroGradient),
+    );
+    expect(tester.takeException(), isNull);
+
+    // 2. 手机横屏 720x360：使用左侧精简导航栏且五页零垂直/水平溢出
+    await tester.binding.setSurfaceSize(const Size(720, 360));
+    await tester.pumpAndSettle();
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byIcon(Icons.menu_rounded), findsOneWidget);
+    for (final tip in const ['主页', '运动', '媒体', '表盘', '设置']) {
+      await tester.tap(find.byTooltip(tip).first);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+
+    // 3. 桌面横屏 1280x800（恢复暖白主题）：验证运动页顶部双卡等高齐平，且五页无溢出
+    controller.setThemeMode(ThemeMode.light);
+    await tester.binding.setSurfaceSize(const Size(1280, 800));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('运动').first);
+    await tester.pumpAndSettle();
+    final todayCard = find.ancestor(
+      of: find.text('今日步数'),
+      matching: find.byType(Ink),
+    ).first;
+    final distCard = find.ancestor(
+      of: find.text('今日活动分布'),
+      matching: find.byType(Ink),
+    ).first;
+    expect(
+      tester.getBottomRight(todayCard).dy,
+      closeTo(tester.getBottomRight(distCard).dy, 0.5),
+    );
+    for (final tip in const ['主页', '媒体', '表盘', '设置']) {
+      await tester.tap(find.byTooltip(tip).first);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+  });
 }

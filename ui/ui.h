@@ -182,7 +182,8 @@ enum {
     UI_EXT_FMT_4BPP = 2,
     UI_EXT_FMT_RGB565 = 3,
     UI_EXT_FMT_PAL4_RLE = 4,   /* 16色自适应调色板(32B) + 行结束偏移(2*H B) + Nibble RLE */
-    UI_EXT_FMT_RGB565_RLE = 5  /* 真彩 RGB565 + 行结束偏移(2*H B) + PackBits RLE */
+    UI_EXT_FMT_RGB565_RLE = 5, /* 真彩 RGB565 + 行结束偏移(2*H B) + PackBits RLE */
+    UI_EXT_FMT_1BPP_STRIP = 6  /* 1bpp 分块 PackBits 详情('S1' + 20*u16结尾偏移 + 块流) */
 };
 void ui_ext_image_draw(int16_t x, int16_t y, int16_t w, int16_t h,
                        uint32_t ext_offset, uint8_t fmt,
@@ -219,6 +220,7 @@ int ui_settings_get_debug(void);
 
 /* ---- dynamic memory pool (arena) ---- */
 void *ui_mem_alloc(uint32_t size, uint32_t align);
+void *ui_mem_alloc_top(uint32_t size, uint32_t align);
 void ui_mem_free(void *ptr);
 uint32_t ui_mem_avail(void);
 void ui_mem_get(uint32_t *used_bytes, uint32_t *total_bytes);
@@ -245,8 +247,10 @@ int link_msg_count(void);
 const uint8_t *link_msg_list_mask(void);
 const uint8_t *link_msg_row_mask(int index);
 int link_msg_detail_ready(void);
-const uint8_t *link_msg_detail_mask(void);
+int link_msg_detail_ext(uint32_t *abs_off, uint16_t *gen);
+void link_select_message_detail(int index);
 void link_request_messages(void);
+void link_restore_msg_list(void);
 void link_request_message_detail(int index);
 void link_leave_messages(void);
 void link_clear_ext_messages(void);
@@ -329,6 +333,7 @@ void ui_settings_apply(int key, int value);
 void ui_app_set_message_count(int count);
 /* 消息/音乐应用打开状态查询（消息返回 ui_menu_level：0 关闭 / 1 列表 / 2 详情）。 */
 int ui_app_message_active(void);
+int ui_app_message_stack_busy(void);
 int ui_app_music_active(void);
 /* 最近 4 秒内收到过合法帧即认为 PC/手机在线。 */
 int link_connected(void);

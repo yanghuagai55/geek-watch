@@ -1151,6 +1151,23 @@ static int test_persist_and_compressed_dials(void) {
         uint16_t p_tot = 0, p_used = 0, p_free = 0, p_mb = 0, p_ib = 0;
         uint8_t p_mn = 0;
         uint32_t ram0 = 0, ram1 = 0;
+        uint16_t hdr_crc = settings_crc16(headers_sthupo_blob, (uint16_t)sizeof headers_sthupo_blob);
+
+        total = (int)sizeof headers_sthupo_blob;
+        chunks = (total + 127) / 128;
+        for (c = 0; c < chunks; c++) {
+            int left = total - c * 128;
+            int n = left > 128 ? 128 : left;
+            pay[0] = LINK_ASSET_HEADERS;
+            pay[1] = (uint8_t)c;
+            pay[2] = (uint8_t)(total & 0xFF);
+            pay[3] = (uint8_t)(total >> 8);
+            pay[4] = (uint8_t)(hdr_crc & 0xFFu);
+            pay[5] = (uint8_t)(hdr_crc >> 8);
+            memcpy(pay + 6, headers_sthupo_blob + c * 128, (size_t)n);
+            push_link_frame(0x2Fu, pay, 6 + n);
+            step(1);
+        }
 
         pay[0] = 12u;
         push_link_frame(0x25u, pay, 1);
@@ -1214,15 +1231,95 @@ static int test_persist_and_compressed_dials(void) {
             step(2);
         }
         step(24);
-        key_tap(HAL_KEY2); /* 进入槽 11 详情 */
-        step(18);
-        REQUIRE(link_msg_detail_ready(), "slot 11 compressed detail restored offline after reboot");
-        REQUIRE(hal_host_pixel((UI_W - 128) / 2 + 32, (UI_H - 160) / 2 + 40) != UI_COL_BG,
-                "restored detail pixel mismatch");
+        {
+            uint16_t title_before[UI_W * 64];
+            int title_rows = ui_song_height(UI_SONG_TITLE) + UI_MY(50);
+            int px, py;
+            for (py = 0; py < title_rows; py++) {
+                for (px = 0; px < UI_W; px++) {
+                    title_before[py * UI_W + px] = hal_host_pixel(px, py);
+                }
+            }
+            {
+                const uint8_t *row_before = link_msg_row_mask(11);
+                key_tap(HAL_KEY2);
+                REQUIRE(ui_app_message_stack_busy(), "stack enter is active on its first frame");
+                REQUIRE(link_msg_list_ready(), "stack enter keeps the original message list ready");
+                REQUIRE(link_msg_row_mask(11) == row_before,
+                        "stack enter keeps the original message row buffer");
+                for (py = 0; py < title_rows; py++) {
+                    for (px = 0; px < UI_W; px++) {
+                        REQUIRE(title_before[py * UI_W + px] == hal_host_pixel(px, py),
+                                "stack enter first frame keeps STHupo title pixels");
+                    }
+                }
+                for (c = 0; c < 5; c++) {
+                    const uint8_t *rle = 0;
+                    int16_t gw = 0, gh = 0, adv = 0;
+                    step(1);
+                    REQUIRE(ui_app_message_stack_busy() && link_msg_list_ready() &&
+                            link_msg_row_mask(11) == row_before &&
+                            link_hdr_lookup(0x6D88u, &gw, &gh, &adv, 0, 0, &rle) && rle,
+                            "stack enter preserves parent list and title throughout the animation");
+                }
+                REQUIRE(!save("shot_msg_stack_enter.bmp"), "message stack enter screenshot");
+                step(13);
+            }
+            REQUIRE(link_msg_detail_ready(), "slot 11 compressed detail restored offline after reboot");
+            REQUIRE(hal_host_pixel((UI_W - 128) / 2 + 32, (UI_H - 160) / 2 + 40) != UI_COL_BG,
+                    "restored detail pixel mismatch");
+            /* 打开缓存详情后手机会再发 20 块刷新；收齐前不能清掉旧图造成黑屏。 */
+            for (c = 0; c < 20; c++) {
+                int k;
+                pay[0] = 11u;
+                pay[1] = (uint8_t)c;
+                for (k = 0; k < 128; k++) {
+                    pay[2 + k] = (c == 0 && k == 0) ? 0x80u : 0u;
+                }
+                push_link_frame(0x23u, pay, 130);
+                step(1);
+                if (c == 0) {
+                    REQUIRE(link_msg_detail_ready(),
+                            "cached detail stays visible while refreshed chunks arrive");
+                }
+            }
+            REQUIRE(link_msg_detail_ready(), "refreshed detail completes and becomes ready");
+            REQUIRE(hal_host_pixel((UI_W - 128) / 2, (UI_H - 160) / 2) != UI_COL_BG &&
+                    hal_host_pixel((UI_W - 128) / 2 + 32, (UI_H - 160) / 2 + 40) == UI_COL_BG,
+                    "complete refreshed detail replaces cached pixels atomically");
+            key_tap(HAL_KEY1);
+            REQUIRE(ui_app_message_stack_busy() && link_msg_list_ready() && link_msg_detail_ready(),
+                    "stack return keeps outgoing detail and incoming list alive together");
+            for (c = 0; c < 5; c++) {
+                const uint8_t *rle = 0;
+                int16_t gw = 0, gh = 0, adv = 0;
+                REQUIRE(link_msg_list_ready() && link_msg_detail_ready() &&
+                        link_hdr_lookup(0x6D88u, &gw, &gh, &adv, 0, 0, &rle) && rle,
+                        "stack return preserves both pages and STHupo title throughout the animation");
+                step(1);
+            }
+            REQUIRE(!save("shot_msg_stack_return.bmp"), "message stack return screenshot");
+            step(17);
+            REQUIRE(link_msg_list_ready(), "message list restored after detail refresh");
+            {
+                const uint8_t *rle = 0;
+                int16_t gw = 0, gh = 0, adv = 0;
+                REQUIRE(link_hdr_lookup(0x6D88u, &gw, &gh, &adv, 0, 0, &rle) && rle &&
+                        link_hdr_lookup(0x606Fu, &gw, &gh, &adv, 0, 0, &rle) && rle,
+                        "SHD1 message title glyphs reload after leaving detail");
+            }
+            for (py = 0; py < title_rows; py++) {
+                for (px = 0; px < UI_W; px++) {
+                    REQUIRE(title_before[py * UI_W + px] == hal_host_pixel(px, py),
+                            "STHupo message title pixels restore after leaving detail");
+                }
+            }
+        }
         hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(36);
-        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(36);
+        link_hdr_active(0);
         ui_mem_get(&ram1, NULL);
         REQUIRE(ram1 == ram0, "dynamic RAM window/detail exited without leaking");
+        link_hdr_active(1);
 
         /* 6. 测试超片内阈值 (>hal_int_img_cap) 的大图回退到 AT24C256，以及清除通知后片外底图保留 */
         {
@@ -1417,6 +1514,7 @@ static int test_persist_and_compressed_dials(void) {
             REQUIRE(!save("shot_sport_compass3d.bmp"), "Plan B 3D compass screen shot");
             hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
             link_leave_compass();
+            link_hdr_active(0);
             ui_mem_get(&m_after_c3d, NULL);
             REQUIRE(!link_compass3d_ready() && m_after_c3d == m_base,
                     "leaving 3D compass freed all SRAM back to baseline");
@@ -1510,6 +1608,91 @@ static int test_persist_and_compressed_dials(void) {
                 REQUIRE(ui_app_music_active() && rx_ep != NULL && (rx_ep[15] & 0x10u) != 0u,
                         "entering Music UI sets watchMusicActive=1 in 0x2E");
                 hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+
+                /* 跨全部页面连续切换验证：SHD1（华文琥珀）与列表窗永不被消息详情/PIC 载入驱逐。 */
+                {
+                    int round, i_ch;
+                    uint8_t row0[1 + 128];
+                    int16_t hw = 0, hh = 0, hadv = 0;
+                    const uint8_t *hrle = NULL;
+                    uint8_t dpay[2 + 128];
+
+                    pay[0] = 5u;
+                    push_link_frame(0x25u, pay, 1);
+                    step(1);
+                    for (i_ch = 0; i_ch < 14; i_ch++) {
+                        row0[0] = (uint8_t)i_ch;
+                        memset(row0 + 1, 0x55u, 128);
+                        push_link_frame(0x22u, row0, 129);
+                        step(1);
+                    }
+                    for (round = 0; round < 2; round++) {
+                        ui_nav_goto(UI_PAGE_MSG); step(2);
+                        key_tap(HAL_KEY2); step(24);
+                        REQUIRE(link_hdr_lookup(0x6D88u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 survives msg list open");
+                        key_tap(HAL_KEY2);
+                        for (i_ch = 0; i_ch < 5; i_ch++) {
+                            REQUIRE(link_hdr_lookup(0x6D88u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                    "SHD1 survives msg enter animation");
+                            step(1);
+                        }
+                        step(15);
+                        REQUIRE(link_hdr_lookup(0x6D88u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 stays resident inside msg detail");
+                        for (i_ch = 0; i_ch < 20; i_ch++) {
+                            dpay[0] = 0u;
+                            dpay[1] = (uint8_t)i_ch;
+                            memset(dpay + 2, (i_ch == 0) ? 0xAAu : 0x00u, 128);
+                            push_link_frame(0x23u, dpay, 130);
+                            step(1);
+                        }
+                        REQUIRE(link_hdr_lookup(0x6D88u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL &&
+                                link_msg_detail_ready() && link_msg_list_ready(),
+                                "20-chunk detail refresh keeps SHD1 and list buffer intact");
+                        key_tap(HAL_KEY1);
+                        for (i_ch = 0; i_ch < 5; i_ch++) {
+                            REQUIRE(link_hdr_lookup(0x6D88u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                    "SHD1 survives msg return animation");
+                            step(1);
+                        }
+                        step(17);
+                        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+
+                        ui_nav_goto(UI_PAGE_SPORT); step(2);
+                        key_tap(HAL_KEY2); step(26);
+                        REQUIRE(link_hdr_lookup(0x8FD0u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL &&
+                                link_hdr_lookup((uint32_t)'8', &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 stays active with SPR1 loaded");
+                        key_tap(HAL_KEY3); step(26);
+                        key_tap(HAL_KEY1); step(26);
+                        REQUIRE(link_hdr_lookup((uint32_t)'8', &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 reloads cleanly returning from 3D compass");
+                        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+
+                        ui_nav_goto(UI_PAGE_SETTINGS); step(2);
+                        key_tap(HAL_KEY2); step(24);
+                        REQUIRE(link_hdr_lookup(0x8BBEu, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 stays active on Settings after messages & sport");
+                        for (i_ch = 0; i_ch < 8; i_ch++) { key_tap(HAL_KEY3); step(2); }
+                        step(16);
+                        key_tap(HAL_KEY2); step(24);
+                        REQUIRE(link_hdr_lookup(0x5173u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 stays active inside About with ABT2 loaded");
+                        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+                        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+
+                        ui_nav_goto(UI_PAGE_MUSIC); step(2);
+                        key_tap(HAL_KEY2); step(24);
+                        REQUIRE(link_hdr_lookup(0x97F3u, &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 stays active on Music with MUS1 loaded");
+                        hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
+
+                        ui_nav_goto(UI_PAGE_FACE); step(4);
+                        REQUIRE(link_hdr_lookup((uint32_t)'8', &hw, &hh, &hadv, NULL, NULL, &hrle) && hrle != NULL,
+                                "SHD1 digits stay active back on watch face");
+                    }
+                }
             }
         }
 
@@ -1570,12 +1753,33 @@ static int test_persist_and_compressed_dials(void) {
                     "compass calibration prompt triggers double buzz");
             hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(30);
 
-            /* 新消息头插推送 0x2D [0x01] -> 经典功能机三连短信震 */
+            /* 新消息头插推送 0x2D [0x01] / 合并覆盖 0x2D [0x03] / 0x02 短信槽 -> 经典三连震 */
             push_link_frame(0x2Du, ext1, 1);
             step(1);
             hal_host_beep_get(&bp, &bm, &bc1);
             REQUIRE(bp == HAL_VIB_SMS && bm == 70u,
                     "new message triggers triple SMS buzz");
+            {
+                uint8_t ext1_quiet[3] = {1u, 1u, 0u};
+                uint8_t ext3[1] = {3u};
+                uint8_t msg02[4] = {0u, 'H', 'i', '!'};
+                uint32_t b_q0 = 0u, b_q1 = 0u;
+                hal_host_beep_get(NULL, NULL, &b_q0);
+                push_link_frame(0x2Du, ext1_quiet, 3);
+                step(1);
+                hal_host_beep_get(NULL, NULL, &b_q1);
+                REQUIRE(b_q1 == b_q0, "0x2D [0x01, cnt, 0] suppresses duplicate buzz");
+                push_link_frame(0x2Du, ext3, 1);
+                step(1);
+                hal_host_beep_get(&bp, &bm, &bc1);
+                REQUIRE(bp == HAL_VIB_SMS && bm == 70u && bc1 > b_q1,
+                        "0x2D [0x03] merge-update notification triggers triple SMS buzz");
+                push_link_frame(0x02u, msg02, 4);
+                step(1);
+                hal_host_beep_get(&bp, &bm, &b_q0);
+                REQUIRE(bp == HAL_VIB_SMS && bm == 70u && b_q0 > bc1,
+                        "0x02 LINK_MSG triggers triple SMS buzz");
+            }
 
             /* 下发“关于”放大彩图+华文琥珀简介片外包并打开设置第 8 项（索引 7）截图验证 */
             for (a_ch = 0, a_off = 0u; a_off < abt_len; a_ch++) {

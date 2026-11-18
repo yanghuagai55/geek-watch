@@ -37,6 +37,7 @@ object WatchMessageRasterizer {
         typeface = Typeface.SANS_SERIF
     }
 
+    @Synchronized
     fun list(items: List<Item>): ByteArray {
         val picked = items.take(20)
         val rawBytes = maxOf(1, picked.size) * 22 * (LIST_W / 8)
@@ -54,6 +55,7 @@ object WatchMessageRasterizer {
     }
 
     /** 渲染单条消息列表行 128×22（352 字节），用于 0x2D 单条增量插入动态 ROM。 */
+    @Synchronized
     fun row(item: Item): ByteArray {
         val bitmap = Bitmap.createBitmap(LIST_W, ROW_H.toInt(), Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -74,6 +76,7 @@ object WatchMessageRasterizer {
         )
     }
 
+    @Synchronized
     fun detail(item: Item?): ByteArray {
         val bitmap = Bitmap.createBitmap(DETAIL_W, DETAIL_H, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -185,7 +188,18 @@ object WatchMessageRasterizer {
                     lines.add(current.toString().trimEnd())
                     current.clear()
                 }
-                current.append(token)
+                if (paint.measureText(token) > maxWidth) {
+                    for (ch in token) {
+                        val next = current.toString() + ch
+                        if (current.isNotEmpty() && paint.measureText(next) > maxWidth) {
+                            lines.add(current.toString())
+                            current.clear()
+                        }
+                        current.append(ch)
+                    }
+                } else {
+                    current.append(token)
+                }
             }
             if (current.isNotEmpty()) lines.add(current.toString().trimEnd())
             if (current.isEmpty() && paragraph.isEmpty()) lines.add("")

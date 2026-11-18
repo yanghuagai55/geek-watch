@@ -35,7 +35,7 @@ class MetricCard extends StatelessWidget {
     return AppCard(
       padding: const EdgeInsets.all(18),
       child: SizedBox(
-        height: 148,
+        height: 152,
         child: Column(
           children: [
             Row(
@@ -75,7 +75,7 @@ class MetricCard extends StatelessWidget {
                             centerText,
                             style: TextStyle(
                               color: color,
-                              fontSize: 12,
+                              fontSize: 11.5,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -91,13 +91,15 @@ class MetricCard extends StatelessWidget {
                     children: [
                       Text(
                         label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: scheme.onSurfaceVariant,
                           fontFamily: AppFonts.latin,
                           fontFamilyFallback: AppFonts.headingFallback,
-                          fontSize: 17,
+                          fontSize: 16.5,
                           fontWeight: FontWeight.w700,
-                          letterSpacing: 0.5,
+                          letterSpacing: 0.4,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -149,7 +151,7 @@ class MetricCard extends StatelessWidget {
             ),
             const Spacer(),
             SizedBox(
-              height: 34,
+              height: 36,
               width: double.infinity,
               child: CustomPaint(
                 painter: _SparklinePainter(values: history, color: color),
@@ -185,35 +187,56 @@ class MiniMetricCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return LayoutBuilder(
       builder: (context, constraints) {
-        // 极窄窗口（桌面竖屏拉很细）优先保住中文说明，必要时让出迷你曲线。
+        // 极窄窗口（手机三列并排）优先保住中文说明与趋势曲线。
         final column = constraints.maxWidth < 180;
         final compact = constraints.maxWidth < 340;
         if (column) {
           return AppCard(
-            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(icon, size: 16, color: color),
-                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Icon(icon, size: 13.5, color: color),
+                    ),
+                    const Spacer(),
+                    Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.7),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
                 Text(
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
-                    fontSize: 11,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 Text(
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 18,
-                    height: 1,
+                    fontSize: 17.5,
+                    height: 1.05,
                     fontWeight: FontWeight.w700,
                     fontFamily: AppFonts.latin,
                     fontFamilyFallback: AppFonts.headingFallback,
@@ -227,7 +250,15 @@ class MiniMetricCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
-                    fontSize: 10,
+                    fontSize: 9.5,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  height: 16,
+                  width: double.infinity,
+                  child: CustomPaint(
+                    painter: _SparklinePainter(values: history, color: color),
                   ),
                 ),
               ],
@@ -244,7 +275,7 @@ class MiniMetricCard extends StatelessWidget {
                   width: 32,
                   height: 32,
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.1),
+                    color: color.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(icon, size: 16, color: color),
@@ -257,6 +288,8 @@ class MiniMetricCard extends StatelessWidget {
                     children: [
                       Text(
                         label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: scheme.onSurfaceVariant,
                           fontFamily: AppFonts.latin,

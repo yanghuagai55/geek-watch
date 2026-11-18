@@ -24,9 +24,12 @@ class AndroidSppTransport implements WatchTransport {
   final StreamController<Uint8List> _incoming =
       StreamController<Uint8List>.broadcast();
   final StreamController<void> _closed = StreamController<void>.broadcast();
+  final StreamController<bool> _externalBusyCtrl =
+      StreamController<bool>.broadcast();
 
   StreamSubscription? _eventSub;
   bool _connected = false;
+  bool _externalBusy = false;
   String? _lastError;
 
   @override
@@ -34,6 +37,10 @@ class AndroidSppTransport implements WatchTransport {
 
   @override
   bool get isConnected => _connected;
+
+  bool get isExternalBusy => _externalBusy;
+
+  Stream<bool> get externalBusy => _externalBusyCtrl.stream;
 
   @override
   Stream<Uint8List> get incoming => _incoming.stream;
@@ -85,10 +92,35 @@ class AndroidSppTransport implements WatchTransport {
       }
       return;
     }
+    if (type == 'busy') {
+      final busy = event['busy'] == true;
+      if (_externalBusy != busy) {
+        _externalBusy = busy;
+        if (!_externalBusyCtrl.isClosed) _externalBusyCtrl.add(busy);
+      }
+      return;
+    }
     if (type == 'state' && event['connected'] != true) {
+      final wasConnected = _connected;
       _connected = false;
       _lastError = event['message'] as String?;
-      if (!_closed.isClosed) _closed.add(null);
+      if (_externalBusy) {
+        _externalBusy = false;
+        if (!_externalBusyCtrl.isClosed) _externalBusyCtrl.add(false);
+      }
+      if (wasConnected && !_closed.isClosed) _closed.add(null);
+    }
+  }
+
+  Future<void> setTransferActive(bool active) async {
+    try {
+      await _channel.invokeMethod<void>('setDartTransfer', {
+        'active': active,
+      });
+    } on MissingPluginException {
+      // 非 Android 或测试环境忽略。
+    } on PlatformException {
+      // 服务未启动或已断开时忽略。
     }
   }
 
@@ -103,6 +135,10 @@ class AndroidSppTransport implements WatchTransport {
   @override
   Future<void> close() async {
     _connected = false;
+    if (_externalBusy) {
+      _externalBusy = false;
+      if (!_externalBusyCtrl.isClosed) _externalBusyCtrl.add(false);
+    }
     await _eventSub?.cancel();
     _eventSub = null;
     try {
@@ -112,16 +148,22 @@ class AndroidSppTransport implements WatchTransport {
     }
     if (!_incoming.isClosed) await _incoming.close();
     if (!_closed.isClosed) await _closed.close();
+    if (!_externalBusyCtrl.isClosed) await _externalBusyCtrl.close();
   }
 
   /// App 退出时只摘掉本端监听；前台服务继续持有 socket。
   @override
   Future<void> release() async {
     _connected = false;
+    if (_externalBusy) {
+      _externalBusy = false;
+      if (!_externalBusyCtrl.isClosed) _externalBusyCtrl.add(false);
+    }
     await _eventSub?.cancel();
     _eventSub = null;
     if (!_incoming.isClosed) await _incoming.close();
     if (!_closed.isClosed) await _closed.close();
+    if (!_externalBusyCtrl.isClosed) await _externalBusyCtrl.close();
   }
 }
 
@@ -252,6 +294,23 @@ class AndroidWatchBridge {
     }
   }
 
+  /// 将 Flutter 界面手动推送的消息同步写入原生缓存，防止重扫通知栏时覆盖。
+  static Future<void> recordManualMessage({
+    required String app,
+    required String title,
+    required String text,
+  }) async {
+    try {
+      await _channel.invokeMethod<void>('recordManualMessage', {
+        'app': app,
+        'title': title,
+        'text': text,
+      });
+    } on PlatformException {
+      // 服务未启动时忽略。
+    }
+  }
+
   /// 原生服务持久化的通知路由规则。
   static Future<Map<String, Object?>> messageRules() async {
     try {
@@ -297,6 +356,18 @@ class AndroidWatchBridge {
       ];
     } on PlatformException {
       return const <Map<String, Object?>>[];
+    }
+  }
+
+  /// 触发原生通知监听服务重新绑定并扫描当前状态栏活动通知。
+  static Future<bool> rescanNotifications() async {
+    try {
+      final bound = await _channel.invokeMethod<bool>('rescanNotifications');
+      return bound == true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
     }
   }
 }

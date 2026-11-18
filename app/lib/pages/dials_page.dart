@@ -24,8 +24,6 @@ class DialsPage extends StatefulWidget {
   State<DialsPage> createState() => _DialsPageState();
 }
 
-const _dialAmber = Color(0xFFF5B759);
-
 class _DialSpec {
   const _DialSpec({
     required this.id,
@@ -33,7 +31,6 @@ class _DialSpec {
     required this.subtitle,
     required this.tag,
     required this.sizeHint,
-    required this.accent,
   });
 
   final int id;
@@ -41,7 +38,13 @@ class _DialSpec {
   final String subtitle;
   final String tag;
   final String sizeHint;
-  final Color accent;
+
+  Color accentOf(AppThemeColors colors) => switch (id) {
+    0 => colors.accent,
+    1 => colors.accentSoft,
+    2 => colors.warning,
+    _ => colors.info,
+  };
 }
 
 const _dialPresets = <_DialSpec>[
@@ -51,7 +54,6 @@ const _dialPresets = <_DialSpec>[
     subtitle: '片内核心 · SHD1 字体按需加载',
     tag: '片内极速',
     sizeHint: '省电高对比',
-    accent: AppPalette.mint,
   ),
   _DialSpec(
     id: 1,
@@ -59,7 +61,6 @@ const _dialPresets = <_DialSpec>[
     subtitle: 'ANL1 片外加载入 SRAM 渲染',
     tag: 'ANL1 PIC',
     sizeHint: '矢量指针',
-    accent: AppPalette.mintSoft,
   ),
   _DialSpec(
     id: 2,
@@ -67,15 +68,13 @@ const _dialPresets = <_DialSpec>[
     subtitle: 'ANL1 模态 + 9-DOF 实时地平线',
     tag: 'ANL1 PIC',
     sizeHint: '9 轴实时',
-    accent: _dialAmber,
   ),
   _DialSpec(
     id: 3,
     name: '自定义相册表盘',
-    subtitle: '≤9KB 直入片内热交换槽 · 大图自动退避 EEPROM',
+    subtitle: '≤9KB 直入片内热交换槽 · 大图退避 EEPROM',
     tag: '片内热槽',
     sizeHint: 'XIP 120MHz',
-    accent: Color(0xFF93C5FD),
   ),
 ];
 
@@ -165,7 +164,12 @@ class _DialsPageState extends State<DialsPage> {
   }
 
   /// 计算源图坐标下最大的居中 4:5 (128:160) 选区矩形。
-  ui.Rect _defaultCropRect(int sw, int sh, {double scale = 1.0, double biasY = 0.5}) {
+  ui.Rect _defaultCropRect(
+    int sw,
+    int sh, {
+    double scale = 1.0,
+    double biasY = 0.5,
+  }) {
     if (sw <= 0 || sh <= 0) return const ui.Rect.fromLTWH(0, 0, 1, 1);
     final imgAspect = sw / sh;
     const targetAspect = watchDisplayWidth / watchDisplayHeight; // 0.8
@@ -237,7 +241,11 @@ class _DialsPageState extends State<DialsPage> {
       _sourceUiImage = srcImg;
       _srcWidth = srcImg.width;
       _srcHeight = srcImg.height;
-      _cropRectNorm = _defaultCropRect(srcImg.width, srcImg.height, biasY: 0.25);
+      _cropRectNorm = _defaultCropRect(
+        srcImg.width,
+        srcImg.height,
+        biasY: 0.25,
+      );
       _brightness = 0.0;
       _contrast = 1.0;
     });
@@ -328,7 +336,11 @@ class _DialsPageState extends State<DialsPage> {
     messenger.hideCurrentSnackBar();
     if (!widget.controller.connected) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('未连接手表：表盘自定义配置已保存本地，连接后按 App 最高优先级自动覆盖写入 AT24C256。')),
+        const SnackBar(
+          content: Text(
+            '未连接手表：表盘自定义配置已保存本地，连接后按 App 最高优先级自动覆盖写入 AT24C256。',
+          ),
+        ),
       );
       return;
     }
@@ -359,7 +371,9 @@ class _DialsPageState extends State<DialsPage> {
     if (!widget.controller.connected) {
       widget.controller.updateDialConfig(id: 3, syncToWatch: false);
       messenger.showSnackBar(
-        const SnackBar(content: Text('未连接手表：请先连接手表后再将压缩图片写入 AT24C256（0x3C00）。')),
+        const SnackBar(
+          content: Text('未连接手表：请先连接手表后再将压缩图片写入 AT24C256（0x3C00）。'),
+        ),
       );
       return;
     }
@@ -410,9 +424,9 @@ class _DialsPageState extends State<DialsPage> {
           onTap: () => controller.updateDialConfig(id: i),
         ),
     ];
-    if (maxWidth >= 980) {
+    if (maxWidth >= 960) {
       return AppCard(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -421,19 +435,16 @@ class _DialsPageState extends State<DialsPage> {
               subtitle: '点击实时切换；手表长按 KEY2 亦可左右切换并持久落盘',
             ),
             const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < tiles.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 10),
-                  Expanded(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 82),
-                      child: tiles[i],
-                    ),
-                  ),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < tiles.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 10),
+                    Expanded(child: tiles[i]),
+                  ],
                 ],
-              ],
+              ),
             ),
           ],
         ),
@@ -450,42 +461,26 @@ class _DialsPageState extends State<DialsPage> {
               subtitle: '点击实时切换预览并同步手表',
             ),
             const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 82),
-                    child: tiles[0],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 82),
-                    child: tiles[1],
-                  ),
-                ),
-              ],
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: tiles[0]),
+                  const SizedBox(width: 10),
+                  Expanded(child: tiles[1]),
+                ],
+              ),
             ),
             const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 82),
-                    child: tiles[2],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 82),
-                    child: tiles[3],
-                  ),
-                ),
-              ],
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: tiles[2]),
+                  const SizedBox(width: 10),
+                  Expanded(child: tiles[3]),
+                ],
+              ),
             ),
           ],
         ),
@@ -511,38 +506,43 @@ class _DialsPageState extends State<DialsPage> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final scheme = Theme.of(context).colorScheme;
-    final current = _dialPresets[controller.dialId.clamp(0, _dialPresets.length - 1)];
+    final colors = context.appColors;
+    final current =
+        _dialPresets[controller.dialId.clamp(0, _dialPresets.length - 1)];
     final addrHex = controller.extI2cAddr
         .toRadixString(16)
         .toUpperCase()
         .padLeft(2, '0');
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final screen = MediaQuery.sizeOf(context);
-        final pad = screen.width < 560 ? 16.0 : 28.0;
-        final portraitPhone = screen.width < 760 && screen.height > screen.width;
-        final bottom = portraitPhone ? 112.0 : 20.0;
-        final wide = constraints.maxWidth >= 900;
-        final innerWidth = math.max(
-          0.0,
-          math.min(constraints.maxWidth - pad * 2, 1180.0),
-        );
-        final header = PageHeader(
+    return PageScroll(
+      children: [
+        PageHeader(
           title: '表盘工作台',
           subtitle: '9KB 片内 Flash 热交换槽 + AT24C256 32KB 按需动态库 · 导入即见实时预览',
           trailing: StatusPill(
             label: controller.connected
                 ? (controller.mcuImgOnChip
                       ? '片内热槽 XIP 生效'
-                      : (controller.extFlashPresent ? 'AT24C256 · 0x$addrHex' : '未探测到 EEPROM'))
+                      : (controller.extFlashPresent
+                            ? 'AT24C256 · 0x$addrHex'
+                            : '未探测到 EEPROM'))
                 : '128×160 实时预览',
-            color: controller.connected && (controller.mcuImgOnChip || controller.extFlashPresent)
-                ? AppPalette.mint
-                : _dialAmber,
+            color:
+                controller.connected &&
+                    (controller.mcuImgOnChip || controller.extFlashPresent)
+                ? colors.accent
+                : colors.warning,
           ),
-        );
-        final preview = _DialStageCard(
+        ),
+        const SizedBox(height: 20),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 920;
+            final narrowPhone = constraints.maxWidth < 380;
+            final phoneScale = narrowPhone ? 1.28 : 1.5;
+
+            final presets = _buildPresetGrid(controller, constraints.maxWidth);
+            final stageCard = _DialStageCard(
               spec: current,
               controller: controller,
               photoImage: _previewImage,
@@ -554,22 +554,16 @@ class _DialsPageState extends State<DialsPage> {
               onPushConfig: _pushDialConfig,
               onUploadPhoto: _uploadPhotoDial,
               onApplyProfile: _applyRecommendedProfile,
-              screenScale: 2,
+              screenScale: wide ? 2.0 : phoneScale,
             );
-            final phoneActions = _DialStageCard(
-              spec: current,
+            final customization = _DialCustomizationCard(
               controller: controller,
-              photoImage: _previewImage,
-              encoded: _encoded,
-              profile: _profile,
-              uploading: _uploading,
-              sentChunks: _sentChunks,
-              totalChunks: _totalChunks,
-              onPushConfig: _pushDialConfig,
-              onUploadPhoto: _uploadPhotoDial,
-              onApplyProfile: _applyRecommendedProfile,
-              showTitle: false,
-              showFace: false,
+              compact: narrowPhone,
+              onAccentChanged: () {
+                if (_format == WatchExtImgFormat.mono1bpp) {
+                  unawaited(_rebuildImagePreview());
+                }
+              },
             );
             final imageStudio = _ImageCompressionCard(
               wallpaperId: _wallpaperId,
@@ -588,6 +582,7 @@ class _DialsPageState extends State<DialsPage> {
               uploading: _uploading,
               sentChunks: _sentChunks,
               totalChunks: _totalChunks,
+              compactControls: constraints.maxWidth < 460,
               onSelectWallpaper: (id) {
                 final oldSrc = _sourceUiImage;
                 setState(() {
@@ -606,7 +601,12 @@ class _DialsPageState extends State<DialsPage> {
               onPickLocalPhoto: _pickLocalPhoto,
               onCropChanged: _onCropChanged,
               onResetCropPreset: (scale, biasY) {
-                final next = _defaultCropRect(_srcWidth, _srcHeight, scale: scale, biasY: biasY);
+                final next = _defaultCropRect(
+                  _srcWidth,
+                  _srcHeight,
+                  scale: scale,
+                  biasY: biasY,
+                );
                 _onCropChanged(next, immediate: true);
               },
               onFormatChanged: (fmt) {
@@ -627,118 +627,40 @@ class _DialsPageState extends State<DialsPage> {
               },
               onUploadPhoto: _uploadPhotoDial,
             );
-            final customization = _DialCustomizationCard(
+            final memoryMap = _FlashPartitionCard(
+              scheme: scheme,
               controller: controller,
-              onAccentChanged: () {
-                if (_format == WatchExtImgFormat.mono1bpp) {
-                  unawaited(_rebuildImagePreview());
-                }
-              },
             );
-            final memoryMap = _FlashPartitionCard(scheme: scheme, controller: controller);
-            final presets = _buildPresetGrid(controller, innerWidth);
-            final Widget workspace;
-            if (wide) {
-              workspace = Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  header,
-                  const SizedBox(height: 16),
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (wide) ...[
                   presets,
                   const SizedBox(height: 16),
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: 128 * 2 + 72,
-                          child: SingleChildScrollView(
-                            primary: false,
-                            child: preview,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            primary: false,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                customization,
-                                const SizedBox(height: 16),
-                                imageStudio,
-                                const SizedBox(height: 16),
-                                memoryMap,
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                  BalancedTwoColumn(
+                    wide: true,
+                    leftFlex: 42,
+                    rightFlex: 58,
+                    leftChildren: [stageCard, memoryMap],
+                    rightChildren: [customization, imageStudio],
                   ),
+                ] else ...[
+                  stageCard,
+                  const SizedBox(height: 14),
+                  presets,
+                  const SizedBox(height: 14),
+                  customization,
+                  const SizedBox(height: 14),
+                  imageStudio,
+                  const SizedBox(height: 14),
+                  memoryMap,
                 ],
-              );
-            } else {
-              final columnH = math.max(0.0, constraints.maxHeight - bottom);
-              final faceBudget = math.max(148.0, (columnH - 72) * 0.32);
-              final phoneScale = math.min(
-                ((innerWidth - 36) / 128).clamp(0.78, 1.15),
-                ((faceBudget - 48) / 160).clamp(0.78, 1.15),
-              );
-              final face = _DialStageCard(
-                spec: current,
-                controller: controller,
-                photoImage: _previewImage,
-                encoded: _encoded,
-                profile: _profile,
-                uploading: _uploading,
-                sentChunks: _sentChunks,
-                totalChunks: _totalChunks,
-                onPushConfig: _pushDialConfig,
-                onUploadPhoto: _uploadPhotoDial,
-                onApplyProfile: _applyRecommendedProfile,
-                screenScale: phoneScale,
-                showTitle: false,
-                showControls: false,
-              );
-              workspace = Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  header,
-                  const SizedBox(height: 8),
-                  face,
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      primary: false,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          presets,
-                          const SizedBox(height: 12),
-                          phoneActions,
-                          const SizedBox(height: 12),
-                          customization,
-                          const SizedBox(height: 12),
-                          imageStudio,
-                          const SizedBox(height: 12),
-                          memoryMap,
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }
-
-            return Padding(
-              padding: EdgeInsets.fromLTRB(pad, 16, pad, bottom),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: SizedBox(width: innerWidth, child: workspace),
-              ),
+              ],
             );
           },
+        ),
+      ],
     );
   }
 }
@@ -759,12 +681,13 @@ class _NativeDialScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.appColors;
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: const Color(0xFF0A0D0C),
+        color: colors.hardwareBezel,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppPalette.line, width: 1.5),
+        border: Border.all(color: colors.hardwareBezelBorder, width: 1.5),
       ),
       child: SizedBox(
         width: width,
@@ -799,9 +722,6 @@ class _DialStageCard extends StatelessWidget {
     required this.onUploadPhoto,
     required this.onApplyProfile,
     this.screenScale = 2,
-    this.showTitle = true,
-    this.showFace = true,
-    this.showControls = true,
   });
 
   final _DialSpec spec;
@@ -816,12 +736,11 @@ class _DialStageCard extends StatelessWidget {
   final VoidCallback onUploadPhoto;
   final VoidCallback onApplyProfile;
   final double screenScale;
-  final bool showTitle;
-  final bool showFace;
-  final bool showControls;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final now = controller.now;
     final dispHour = controller.use24Hour
         ? now.hour
@@ -835,28 +754,20 @@ class _DialStageCard extends StatelessWidget {
     final fgColor = Color(controller.dialTextColor);
     final acColor = Color(controller.dialAccentColor);
     final bgColor = Color(controller.dialBgColor);
-    final compactFace = showFace && !showTitle && !showControls;
+    final specAccent = spec.accentOf(colors);
 
     return AppCard(
-      padding: compactFace
-          ? const EdgeInsets.fromLTRB(12, 12, 12, 10)
-          : const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (showTitle) ...[
-            SectionHeader(
-              title: spec.name,
-              subtitle: spec.subtitle,
-              trailing: StatusPill(
-                label: spec.tag,
-                color: spec.id == 3 ? _dialAmber : AppPalette.mint,
-              ),
-            ),
-            const SizedBox(height: 18),
-          ],
-          if (showFace) ...[
+          SectionHeader(
+            title: spec.name,
+            subtitle: spec.subtitle,
+            trailing: StatusPill(label: spec.tag, color: specAccent),
+          ),
+          const SizedBox(height: 18),
           Center(
             child: _NativeDialScreen(
               width: 128 * screenScale,
@@ -881,28 +792,23 @@ class _DialStageCard extends StatelessWidget {
                         ? '片内 0xD800 热槽已激活 (${controller.mcuImgBytes} B · XIP 120MHz)'
                         : 'AT24C256 已固化相册图 (${controller.mcuImgBytes} B)')
                   : '128 × 160 · 实机同款参数即时仿真',
-              style: TextStyle(
-                fontSize: 11.5,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
             ),
           ),
-          ],
-          if (showControls && profile != null && spec.id == 3) ...[
-            const SizedBox(height: 10),
+          if (profile != null && spec.id == 3) ...[
+            const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHigh
-                    .withValues(alpha: 0.72),
+                color: colors.insetSurface,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: (profile!.fitsOnChipHotSwap
-                          ? AppPalette.mint
-                          : _dialAmber)
-                      .withValues(alpha: 0.35),
+                  color:
+                      (profile!.fitsOnChipHotSwap
+                              ? colors.accent
+                              : colors.warning)
+                          .withValues(alpha: 0.4),
                 ),
               ),
               child: Column(
@@ -919,13 +825,14 @@ class _DialStageCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                      const SizedBox(width: 6),
                       StatusPill(
                         label: profile!.fitsOnChipHotSwap
                             ? '可直入片内 9KB'
                             : '需 AT24C256 退避',
                         color: profile!.fitsOnChipHotSwap
-                            ? AppPalette.mint
-                            : _dialAmber,
+                            ? colors.accent
+                            : colors.warning,
                       ),
                     ],
                   ),
@@ -953,7 +860,7 @@ class _DialStageCard extends StatelessWidget {
               ),
             ),
           ],
-          if (showControls && uploading && totalChunks > 0) ...[
+          if (uploading && totalChunks > 0) ...[
             const SizedBox(height: 12),
             LinearProgressIndicator(value: sentChunks / totalChunks),
             const SizedBox(height: 4),
@@ -965,7 +872,6 @@ class _DialStageCard extends StatelessWidget {
               style: const TextStyle(fontSize: 11),
             ),
           ],
-          if (showControls) ...[
           const SizedBox(height: 14),
           Wrap(
             spacing: 10,
@@ -992,7 +898,6 @@ class _DialStageCard extends StatelessWidget {
                 ),
             ],
           ),
-          ],
         ],
       ),
     );
@@ -1002,12 +907,14 @@ class _DialStageCard extends StatelessWidget {
     final now = controller.now;
     const wd = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
     return switch (comp) {
-      0 => '${wd[now.weekday - 1]}  ${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')}',
+      0 =>
+        '${wd[now.weekday - 1]}  ${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')}',
       1 => '${controller.steps}/${controller.stepGoal} 步',
       2 => '${controller.headingDeg.round().toString().padLeft(3, '0')}°',
-      3 => controller.batteryMv > 0
-          ? '${(controller.batteryMv / 1000).toStringAsFixed(2)}V'
-          : 'USB PWR',
+      3 =>
+        controller.batteryMv > 0
+            ? '${(controller.batteryMv / 1000).toStringAsFixed(2)}V'
+            : 'USB PWR',
       _ => '',
     };
   }
@@ -1160,8 +1067,13 @@ class _DialStageCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    controller.use24Hour ? '24H' : (controller.now.hour >= 12 ? 'PM' : 'AM'),
-                    style: TextStyle(color: fgColor.withValues(alpha: 0.6), fontSize: 9.5),
+                    controller.use24Hour
+                        ? '24H'
+                        : (controller.now.hour >= 12 ? 'PM' : 'AM'),
+                    style: TextStyle(
+                      color: fgColor.withValues(alpha: 0.6),
+                      fontSize: 9.5,
+                    ),
                   ),
                 ],
               ),
@@ -1237,10 +1149,7 @@ class _DialStageCard extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [
-                      acColor.withValues(alpha: 0.25),
-                      bgColor,
-                    ],
+                    colors: [acColor.withValues(alpha: 0.25), bgColor],
                   ),
                 ),
               ),
@@ -1249,7 +1158,10 @@ class _DialStageCard extends StatelessWidget {
               child: Align(
                 alignment: align,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: controller.dialPhotoScrim
                       ? BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.65),
@@ -1288,10 +1200,12 @@ class _DialStageCard extends StatelessWidget {
 class _DialCustomizationCard extends StatelessWidget {
   const _DialCustomizationCard({
     required this.controller,
+    required this.compact,
     required this.onAccentChanged,
   });
 
   final WatchController controller;
+  final bool compact;
   final VoidCallback onAccentChanged;
 
   @override
@@ -1305,7 +1219,10 @@ class _DialCustomizationCard extends StatelessWidget {
             subtitle: '主题配色、自定义 RGB565 色彩、上下信息组件与相册时间排版',
           ),
           const SizedBox(height: 14),
-          const Text('预设配色方案', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          const Text(
+            '预设配色方案',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -1358,8 +1275,8 @@ class _DialCustomizationCard extends StatelessWidget {
             onSelected: (c) => controller.updateDialConfig(bgColor: c),
           ),
           const Divider(height: 24),
-          LayoutBuilder(
-            builder: (context, c) {
+          Builder(
+            builder: (context) {
               final dTop = DropdownButtonFormField<int>(
                 initialValue: controller.dialTop,
                 isExpanded: true,
@@ -1384,7 +1301,7 @@ class _DialCustomizationCard extends StatelessWidget {
                   if (v != null) controller.updateDialConfig(bot: v);
                 },
               );
-              if (c.maxWidth < 340) {
+              if (compact) {
                 return Column(
                   children: [dTop, const SizedBox(height: 12), dBot],
                 );
@@ -1419,7 +1336,10 @@ class _DialCustomizationCard extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               alignment: WrapAlignment.spaceBetween,
               children: [
-                const Text('相册时间位置', style: TextStyle(fontWeight: FontWeight.w600)),
+                const Text(
+                  '相册时间位置',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 SegmentedButton<int>(
                   segments: const [
                     ButtonSegment(value: 1, label: Text('居顶')),
@@ -1518,6 +1438,7 @@ class _ImageCompressionCard extends StatelessWidget {
     required this.uploading,
     required this.sentChunks,
     required this.totalChunks,
+    required this.compactControls,
     required this.onSelectWallpaper,
     required this.onPickLocalPhoto,
     required this.onCropChanged,
@@ -1545,6 +1466,7 @@ class _ImageCompressionCard extends StatelessWidget {
   final bool uploading;
   final int sentChunks;
   final int totalChunks;
+  final bool compactControls;
   final ValueChanged<String> onSelectWallpaper;
   final VoidCallback onPickLocalPhoto;
   final void Function(ui.Rect next, {bool immediate}) onCropChanged;
@@ -1558,10 +1480,14 @@ class _ImageCompressionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final bytes = encoded?.bytes.length ?? 0;
     final raw = watchDisplayWidth * watchDisplayHeight * 2; // 40,960 B
     final fitsChip = encoded?.fitsOnChipHotSwap ?? true;
     final fitsPool = encoded?.fitsFlash ?? true;
+    final statusColor = fitsChip
+        ? colors.accent
+        : (fitsPool ? colors.warning : colors.danger);
 
     return AppCard(
       child: Column(
@@ -1578,9 +1504,7 @@ class _ImageCompressionCard extends StatelessWidget {
                     label: encoded == null
                         ? '--'
                         : '${(bytes / 1024).toStringAsFixed(1)} KB · ${fitsChip ? '片内热槽' : (fitsPool ? '片外池' : '超限')}',
-                    color: fitsChip
-                        ? AppPalette.mint
-                        : (fitsPool ? _dialAmber : const Color(0xFFEF4444)),
+                    color: statusColor,
                   ),
           ),
           const SizedBox(height: 12),
@@ -1608,7 +1532,7 @@ class _ImageCompressionCard extends StatelessWidget {
               srcWidth: srcWidth,
               srcHeight: srcHeight,
               cropRectNorm: cropRectNorm,
-              accent: fitsChip ? AppPalette.mint : _dialAmber,
+              accent: fitsChip ? colors.accent : colors.warning,
               onChanged: onCropChanged,
             ),
             const SizedBox(height: 8),
@@ -1629,7 +1553,10 @@ class _ImageCompressionCard extends StatelessWidget {
                   onPressed: () => onResetCropPreset(0.95, 0.92),
                 ),
                 ActionChip(
-                  label: const Text('中心特写 55%', style: TextStyle(fontSize: 11.5)),
+                  label: const Text(
+                    '中心特写 55%',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
                   onPressed: () => onResetCropPreset(0.55, 0.35),
                 ),
               ],
@@ -1637,18 +1564,18 @@ class _ImageCompressionCard extends StatelessWidget {
           ],
           const SizedBox(height: 12),
           SegmentedButton<WatchExtImgFormat>(
-            segments: const [
+            segments: [
               ButtonSegment(
                 value: WatchExtImgFormat.pal4Rle,
-                label: Text('16色抗噪 RLE'),
+                label: Text(compactControls ? '16色 RLE' : '16色抗噪 RLE'),
               ),
               ButtonSegment(
                 value: WatchExtImgFormat.rgb565Rle,
-                label: Text('真彩 RLE'),
+                label: const Text('真彩 RLE'),
               ),
               ButtonSegment(
                 value: WatchExtImgFormat.mono1bpp,
-                label: Text('黑白 1bpp'),
+                label: Text(compactControls ? '1bpp' : '黑白 1bpp'),
               ),
             ],
             selected: {format},
@@ -1663,34 +1590,77 @@ class _ImageCompressionCard extends StatelessWidget {
               value: dither,
               onChanged: onDitherChanged,
             ),
-          Row(
-            children: [
-              const SizedBox(width: 40, child: Text('亮度', style: TextStyle(fontSize: 12))),
-              Expanded(
-                child: Slider(
-                  value: brightness,
-                  min: -0.35,
-                  max: 0.35,
-                  onChanged: onBrightnessChanged,
+          if (compactControls) ...[
+            Row(
+              children: [
+                const SizedBox(
+                  width: 40,
+                  child: Text('亮度', style: TextStyle(fontSize: 12)),
                 ),
-              ),
-              const SizedBox(width: 40, child: Text('对比', style: TextStyle(fontSize: 12))),
-              Expanded(
-                child: Slider(
-                  value: contrast,
-                  min: 0.6,
-                  max: 1.6,
-                  onChanged: onContrastChanged,
+                Expanded(
+                  child: Slider(
+                    value: brightness,
+                    min: -0.35,
+                    max: 0.35,
+                    onChanged: onBrightnessChanged,
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+              ],
+            ),
+            Row(
+              children: [
+                const SizedBox(
+                  width: 40,
+                  child: Text('对比', style: TextStyle(fontSize: 12)),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: contrast,
+                    min: 0.6,
+                    max: 1.6,
+                    onChanged: onContrastChanged,
+                  ),
+                ),
+              ],
+            ),
+          ] else
+            Row(
+              children: [
+                const SizedBox(
+                  width: 40,
+                  child: Text('亮度', style: TextStyle(fontSize: 12)),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: brightness,
+                    min: -0.35,
+                    max: 0.35,
+                    onChanged: onBrightnessChanged,
+                  ),
+                ),
+                const SizedBox(
+                  width: 40,
+                  child: Text('对比', style: TextStyle(fontSize: 12)),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: contrast,
+                    min: 0.6,
+                    max: 1.6,
+                    onChanged: onContrastChanged,
+                  ),
+                ),
+              ],
+            ),
+          const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh.withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(12),
+              color: colors.insetSurface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.65),
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1707,9 +1677,7 @@ class _ImageCompressionCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: fitsChip
-                            ? AppPalette.mint
-                            : (fitsPool ? _dialAmber : const Color(0xFFEF4444)),
+                        color: statusColor,
                       ),
                     ),
                     Text(
@@ -1721,7 +1689,7 @@ class _ImageCompressionCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(6),
                   child: LinearProgressIndicator(
@@ -1729,12 +1697,10 @@ class _ImageCompressionCard extends StatelessWidget {
                         ? (bytes / watchOnChipHotSwapMaxBytes).clamp(0.0, 1.0)
                         : (bytes / watchExtImgMaxBytes).clamp(0.0, 1.0),
                     minHeight: 6,
-                    color: fitsChip
-                        ? AppPalette.mint
-                        : (fitsPool ? _dialAmber : const Color(0xFFEF4444)),
+                    color: statusColor,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 FilledButton.icon(
                   onPressed: (!fitsPool || uploading) ? null : onUploadPhoto,
                   icon: const Icon(Icons.cloud_upload_outlined, size: 18),
@@ -1839,16 +1805,26 @@ class _InteractiveImageCropperState extends State<_InteractiveImageCropper> {
     } else if (cropPx.contains(d.localPosition)) {
       _mode = _CropDragMode.pan;
     } else {
-      // 点击空白处直接把选区中心移过去
       final nx = ((d.localPosition.dx - _renderedImgRect.left) /
               _renderedImgRect.width)
           .clamp(0.0, 1.0);
       final ny = ((d.localPosition.dy - _renderedImgRect.top) /
               _renderedImgRect.height)
           .clamp(0.0, 1.0);
-      final nl = (nx - _startNorm.width / 2).clamp(0.0, 1.0 - _startNorm.width);
-      final nt = (ny - _startNorm.height / 2).clamp(0.0, 1.0 - _startNorm.height);
-      _startNorm = ui.Rect.fromLTWH(nl, nt, _startNorm.width, _startNorm.height);
+      final nl = (nx - _startNorm.width / 2).clamp(
+        0.0,
+        1.0 - _startNorm.width,
+      );
+      final nt = (ny - _startNorm.height / 2).clamp(
+        0.0,
+        1.0 - _startNorm.height,
+      );
+      _startNorm = ui.Rect.fromLTWH(
+        nl,
+        nt,
+        _startNorm.width,
+        _startNorm.height,
+      );
       _mode = _CropDragMode.pan;
       widget.onChanged(_startNorm, immediate: false);
     }
@@ -1857,7 +1833,8 @@ class _InteractiveImageCropperState extends State<_InteractiveImageCropper> {
   void _handleUpdate(DragUpdateDetails d) {
     if (_mode == _CropDragMode.none || _renderedImgRect.isEmpty) return;
     final dxN = (d.localPosition.dx - _startLocal.dx) / _renderedImgRect.width;
-    final dyN = (d.localPosition.dy - _startLocal.dy) / _renderedImgRect.height;
+    final dyN =
+        (d.localPosition.dy - _startLocal.dy) / _renderedImgRect.height;
 
     if (_mode == _CropDragMode.pan) {
       final nl = (_startNorm.left + dxN).clamp(0.0, 1.0 - _startNorm.width);
@@ -1868,10 +1845,9 @@ class _InteractiveImageCropperState extends State<_InteractiveImageCropper> {
       return;
     }
 
-    // 四角缩放严格锁定 128:160 (4:5) 物理像素纵横比，锚定对角顶点
     final ratioHPerW = _maxNormH / math.max(0.001, _maxNormW);
     final minW = math.min(0.16, _maxNormW);
-    double ax, ay; // anchor
+    double ax, ay;
     double rawW, rawH;
     switch (_mode) {
       case _CropDragMode.tl:
@@ -1945,12 +1921,14 @@ class _InteractiveImageCropperState extends State<_InteractiveImageCropper> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     return Container(
       height: 224,
       decoration: BoxDecoration(
-        color: const Color(0xFF0A0D0C),
+        color: colors.insetSurface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppPalette.line),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(
@@ -2019,10 +1997,7 @@ class _CropOverlayPainter extends CustomPainter {
       ..addRect(imgRect)
       ..addRect(sel)
       ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(
-      mask,
-      Paint()..color = const Color(0x99000000),
-    );
+    canvas.drawPath(mask, Paint()..color = const Color(0x99000000));
 
     final gridPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.25)
@@ -2081,6 +2056,8 @@ class _PresetTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
+    final accent = spec.accentOf(colors);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
@@ -2089,23 +2066,23 @@ class _PresetTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: selected
-              ? spec.accent.withValues(alpha: 0.12)
-              : scheme.surfaceContainerHigh.withValues(alpha: 0.65),
+              ? accent.withValues(alpha: 0.12)
+              : colors.insetSurface,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: selected
-                ? spec.accent.withValues(alpha: 0.65)
-                : scheme.outlineVariant.withValues(alpha: 0.6),
-            width: selected ? 1.4 : 1,
+                ? accent.withValues(alpha: 0.65)
+                : scheme.outlineVariant.withValues(alpha: 0.7),
+            width: selected ? 1.5 : 1,
           ),
         ),
         child: Row(
           children: [
             Container(
-              width: 10,
-              height: 34,
+              width: 8,
+              height: 36,
               decoration: BoxDecoration(
-                color: spec.accent,
+                color: accent,
                 borderRadius: BorderRadius.circular(999),
               ),
             ),
@@ -2113,6 +2090,7 @@ class _PresetTile extends StatelessWidget {
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Wrap(
                     spacing: 6,
@@ -2122,7 +2100,7 @@ class _PresetTile extends StatelessWidget {
                       Text(
                         spec.name,
                         style: const TextStyle(
-                          fontSize: 14.5,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -2132,13 +2110,13 @@ class _PresetTile extends StatelessWidget {
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: spec.accent.withValues(alpha: 0.14),
+                          color: accent.withValues(alpha: 0.14),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
                           spec.tag,
                           style: TextStyle(
-                            color: spec.accent,
+                            color: accent,
                             fontSize: 10,
                             fontWeight: FontWeight.w700,
                           ),
@@ -2151,7 +2129,7 @@ class _PresetTile extends StatelessWidget {
                     spec.subtitle,
                     style: TextStyle(
                       color: scheme.onSurfaceVariant,
-                      fontSize: 11.5,
+                      fontSize: 11,
                     ),
                   ),
                 ],
@@ -2160,12 +2138,13 @@ class _PresetTile extends StatelessWidget {
             const SizedBox(width: 8),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
                   spec.sizeHint,
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
-                    fontSize: 11,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -2175,7 +2154,7 @@ class _PresetTile extends StatelessWidget {
                       ? Icons.radio_button_checked_rounded
                       : Icons.radio_button_off_rounded,
                   size: 18,
-                  color: selected ? spec.accent : scheme.outline,
+                  color: selected ? accent : scheme.outline,
                 ),
               ],
             ),
@@ -2194,11 +2173,18 @@ class _FlashPartitionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final totalPool = controller.extPoolTotal > 0 ? controller.extPoolTotal : 32000;
-    final imgB = controller.extPoolState?.imgBytes ??
+    final colors = context.appColors;
+    final totalPool = controller.extPoolTotal > 0
+        ? controller.extPoolTotal
+        : 32000;
+    final imgB =
+        controller.extPoolState?.imgBytes ??
         (controller.mcuImgReady ? controller.mcuImgBytes : 0);
     final msgB = controller.extPoolMsgBytes;
-    final usedOther = (controller.extPoolUsed - imgB - msgB).clamp(0, totalPool);
+    final usedOther = (controller.extPoolUsed - imgB - msgB).clamp(
+      0,
+      totalPool,
+    );
     final freeB = (totalPool - imgB - msgB - usedOther).clamp(0, totalPool);
     final imgFlex = imgB > 0 ? ((imgB * 24) ~/ totalPool).clamp(1, 20) : 0;
     final msgFlex = msgB > 0 ? ((msgB * 24) ~/ totalPool).clamp(1, 20) : 0;
@@ -2216,6 +2202,9 @@ class _FlashPartitionCard extends StatelessWidget {
               label: controller.extFlashPresent
                   ? '${controller.extPoolUsed} / $totalPool B'
                   : '32,768 B',
+              color: controller.extFlashPresent
+                  ? colors.accent
+                  : scheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 14),
@@ -2225,9 +2214,9 @@ class _FlashPartitionCard extends StatelessWidget {
               height: 12,
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     flex: 1,
-                    child: ColoredBox(color: Color(0xFFF5B759)),
+                    child: ColoredBox(color: colors.warning),
                   ),
                   const SizedBox(width: 2),
                   const Expanded(
@@ -2238,30 +2227,28 @@ class _FlashPartitionCard extends StatelessWidget {
                     const SizedBox(width: 2),
                     Expanded(
                       flex: imgFlex,
-                      child: const ColoredBox(color: AppPalette.mint),
+                      child: ColoredBox(color: colors.accent),
                     ),
                   ],
                   if (msgFlex > 0) ...[
                     const SizedBox(width: 2),
                     Expanded(
                       flex: msgFlex,
-                      child: const ColoredBox(color: Color(0xFF5A8D9E)),
+                      child: ColoredBox(color: colors.info),
                     ),
                   ],
                   const SizedBox(width: 2),
                   Expanded(
                     flex: freeFlex,
-                    child: ColoredBox(
-                      color: scheme.surfaceContainerHigh,
-                    ),
+                    child: ColoredBox(color: scheme.surfaceContainerHigh),
                   ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 14),
-          const _PartitionRow(
-            color: Color(0xFFF5B759),
+          _PartitionRow(
+            color: colors.warning,
             range: '0x0000 – 0x00FF',
             title: '双槽设置 / 表盘样式 / 磁校准持久化 (CFG)',
             size: '256 B',
@@ -2275,7 +2262,7 @@ class _FlashPartitionCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           _PartitionRow(
-            color: AppPalette.mint,
+            color: colors.accent,
             range: '0x0800DC00 – 0x08010000 (MCU 片内)',
             title: 'AT32 片内自定义表盘极速热槽（≤9KB XIP 120MHz 零 I2C）',
             size: controller.mcuImgOnChip && controller.mcuImgReady
@@ -2284,23 +2271,25 @@ class _FlashPartitionCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           _PartitionRow(
-            color: AppPalette.mint,
+            color: colors.accentSoft,
             range: '0x0300 – 0x7FFF · 图片回退块',
             title: '超 9KB 大图自动写入 AT24C256（含 SYS1/SHD1/SPR1/ANL1 共 6 项按需包）',
             size: imgB > 0 ? '$imgB B' : '已走片内热槽',
           ),
           const SizedBox(height: 8),
           _PartitionRow(
-            color: const Color(0xFF5A8D9E),
+            color: colors.info,
             range: '0x0300 – 0x7FFF · 持久化消息',
             title: '手机/PC 通知行+详情 PackBits 压缩（断电不丢失）',
-            size: '${controller.extPoolMsgCount}/${controller.extPoolMsgMax} 条 · $msgB B',
+            size:
+                '${controller.extPoolMsgCount}/${controller.extPoolMsgMax} 条 · $msgB B',
           ),
           const SizedBox(height: 8),
           _PartitionRow(
-            color: const Color(0xFFF5B759),
+            color: colors.warning,
             range: '0x0300 · 按需小程序与字库 (0x2F)',
-            title: 'SYS1(动画图标) / SHD1(23 枚华文琥珀) / SPR1 / ANL1 / C3D1 / ABT2 / MUS1',
+            title:
+                'SYS1(动画图标) / SHD1(23 枚华文琥珀) / SPR1 / ANL1 / C3D1 / ABT2 / MUS1',
             size: (() {
               final f = controller.extPoolState?.assetFlags ?? 0;
               final f2 = controller.extPoolState?.assetFlags2 ?? 0;
@@ -2320,7 +2309,7 @@ class _FlashPartitionCard extends StatelessWidget {
             size: '${controller.extPoolFreeMax} B 空闲',
           ),
           if (controller.connected) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
               child: OutlinedButton.icon(
@@ -2331,7 +2320,9 @@ class _FlashPartitionCard extends StatelessWidget {
                   messenger.showSnackBar(
                     SnackBar(
                       content: Text(
-                        ok ? '已全量同步 7 项片外小程序、字库与关于资源 (0x2F)。' : '请先连接手表后再同步。',
+                        ok
+                            ? '已全量同步 7 项片外小程序、字库与关于资源 (0x2F)。'
+                            : '请先连接手表后再同步。',
                       ),
                     ),
                   );
@@ -2377,6 +2368,8 @@ class _PartitionRow extends StatelessWidget {
             Expanded(
               child: Text(
                 range,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 11.5,
                   fontWeight: FontWeight.w700,
@@ -2384,12 +2377,18 @@ class _PartitionRow extends StatelessWidget {
                 ),
               ),
             ),
-            Text(
-              size,
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: scheme.onSurface,
+            const SizedBox(width: 8),
+            Flexible(
+              flex: 0,
+              child: Text(
+                size,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurface,
+                ),
               ),
             ),
           ],

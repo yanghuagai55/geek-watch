@@ -63,6 +63,7 @@ class _MediaPageState extends State<MediaPage> {
     }
     messenger.showSnackBar(const SnackBar(content: Text('正在同步歌词…')));
     final sent = await widget.controller.syncLyrics(_lyrics.text);
+    if (!mounted) return;
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(content: Text(sent > 0 ? '已同步 $sent 行歌词。' : '同步失败：手表没有回应。')),
@@ -76,14 +77,28 @@ class _MediaPageState extends State<MediaPage> {
       messenger.showSnackBar(const SnackBar(content: Text('请先连接手表，再发送消息。')));
       return;
     }
-    final ok = await widget.controller.sendMessage(
-      _selectedSlot,
-      _message.text,
-    );
+    final text = _message.text;
+    final ok = await widget.controller.sendMessage(_selectedSlot, text);
+    var savedRich = false;
+    if (ok && text.trim().isNotEmpty) {
+      savedRich = await widget.controller.pushRichMessage(
+        app: Platform.isWindows ? 'PC 短信槽' : '手机短信槽',
+        title: '消息槽 ${_selectedSlot + 1}',
+        text: text.trim(),
+        vibrate: false,
+      );
+    }
+    if (!mounted) return;
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(ok ? '已写入消息槽 ${_selectedSlot + 1}。' : '发送失败：手表没有回应。'),
+        content: Text(
+          ok
+              ? (savedRich
+                    ? '已发送至消息槽 ${_selectedSlot + 1}（已触发震动并写入消息列表）。'
+                    : '已写入消息槽 ${_selectedSlot + 1}。')
+              : '发送失败：手表没有回应。',
+        ),
       ),
     );
   }
@@ -110,91 +125,163 @@ class _MediaPageState extends State<MediaPage> {
     );
   }
 
-  Widget _composer(BuildContext context) {
+  Widget _buildManualMessageCard(BuildContext context, bool wide) {
     final bytes = utf8.encode(_message.text).length;
     final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        DropdownButtonFormField<int>(
-          initialValue: _selectedSlot,
-          decoration: const InputDecoration(
-            labelText: '消息槽',
-            prefixIcon: Icon(Icons.inbox_outlined),
+    final colors = context.appColors;
+    final overLimit = bytes > 23;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionHeader(
+            title: '手动发送测试消息',
+            subtitle: '走 0x02 文本槽，或直写 AT24C256 持久化通知池',
+            trailing: Icon(Icons.edit_note_rounded, color: colors.accent),
           ),
-          items: List.generate(
-            3,
-            (index) => DropdownMenuItem(
-              value: index,
-              child: Text('消息槽 ${index + 1}'),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var index = 0; index < 3; index++)
+                ChoiceChip(
+                  label: Text('消息槽 ${index + 1}'),
+                  selected: _selectedSlot == index,
+                  onSelected: (_) => _selectSlot(index),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _message,
+            onChanged: (_) => setState(() {}),
+            minLines: wide ? 3 : 2,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              hintText: '输入要显示在手表上的内容…',
+              alignLabelWithHint: true,
             ),
           ),
-          onChanged: (value) {
-            if (value != null) _selectSlot(value);
-          },
-        ),
-        const SizedBox(height: 14),
-        TextField(
-          controller: _message,
-          onChanged: (_) => setState(() {}),
-          minLines: 4,
-          maxLines: 6,
-          decoration: const InputDecoration(
-            hintText: '输入要显示在手表上的内容…',
-            alignLabelWithHint: true,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Icon(
-              Icons.data_usage_rounded,
-              size: 15,
-              color: bytes > 23 ? scheme.onSurface : scheme.primary,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              '$bytes / 23 UTF-8 字节',
-              style: TextStyle(
-                color: bytes > 23 ? scheme.onSurface : scheme.onSurfaceVariant,
-                fontSize: 11,
+          const SizedBox(height: 10),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.data_usage_rounded,
+                    size: 15,
+                    color: overLimit ? colors.warning : colors.accent,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$bytes / 23 UTF-8 字节',
+                    style: TextStyle(
+                      color: overLimit
+                          ? colors.warning
+                          : scheme.onSurfaceVariant,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
+              Text(
+                overLimit ? '超出 0x02 将按字符截断' : '单条协议上限',
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: () {
+                  widget.controller.setMessageSlot(
+                    _selectedSlot,
+                    _message.text,
+                  );
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('已保存到本地消息槽 ${_selectedSlot + 1}。'),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.save_outlined, size: 18),
+                label: const Text('保存预览'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _sendMessage,
+                icon: const Icon(Icons.send_outlined, size: 17),
+                label: const Text('0x02 短信槽'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _pushPersistentMessage,
+                icon: const Icon(Icons.memory_rounded, size: 17),
+                label: const Text('写入 AT24C256 持久化消息'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLyricsCard(BuildContext context, bool wide) {
+    final controller = widget.controller;
+    final colors = context.appColors;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionHeader(
+            title: '歌词演示 · 晚风手记',
+            subtitle: controller.connected
+                ? '按行发送点阵与文字，每帧 ≤27 字节'
+                : '本地演示歌词，连接后可按行同步到手表',
+            trailing: Icon(Icons.lyrics_outlined, color: colors.accent),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _lyrics,
+            minLines: wide ? 5 : 4,
+            maxLines: wide ? 8 : 6,
+            style: const TextStyle(height: 1.75),
+            decoration: const InputDecoration(
+              hintText: '粘贴要演示的歌词…',
+              alignLabelWithHint: true,
             ),
-            const Spacer(),
-            Text(
-              '单条协议上限',
-              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            FilledButton.icon(
-              onPressed: () {
-                widget.controller.setMessageSlot(_selectedSlot, _message.text);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('已保存到本地消息槽 ${_selectedSlot + 1}。')),
-                );
-              },
-              icon: const Icon(Icons.save_outlined, size: 18),
-              label: const Text('保存预览'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _sendMessage,
-              icon: const Icon(Icons.send_outlined, size: 17),
-              label: const Text('0x02 短信槽'),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: _pushPersistentMessage,
-              icon: const Icon(Icons.memory_rounded, size: 17),
-              label: const Text('写入 AT24C256 持久化消息'),
-            ),
-          ],
-        ),
-      ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('歌词已保存到本次界面预览。')),
+                  );
+                },
+                icon: const Icon(Icons.save_outlined, size: 18),
+                label: const Text('保存预览'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _syncLyrics,
+                icon: const Icon(Icons.sync_rounded, size: 18),
+                label: const Text('同步到手表'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -202,6 +289,7 @@ class _MediaPageState extends State<MediaPage> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final missingAccess = Platform.isAndroid && !controller.notificationAccess;
     return PageScroll(
       children: [
@@ -214,152 +302,147 @@ class _MediaPageState extends State<MediaPage> {
             label: controller.hasMedia
                 ? (controller.playing ? '手机播放中' : '手机已暂停')
                 : (controller.connected ? '已连接 · 等待媒体' : '未连接'),
-            color: controller.connected ? null : scheme.onSurfaceVariant,
+            color: controller.connected
+                ? colors.accent
+                : scheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 22),
+        if (missingAccess) ...[
+          const SizedBox(height: 14),
+          _NotificationPermissionBanner(controller: controller),
+        ],
+        const SizedBox(height: 20),
         LayoutBuilder(
           builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 900;
             final player = _PlayerCard(
               controller: controller,
               missingAccess: missingAccess,
+              compactArt: constraints.maxWidth < 360,
             );
-            final lyrics = AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SectionHeader(
-                    title: '歌词演示 · 晚风手记',
-                    subtitle: controller.connected
-                        ? '按行发送，每帧 ≤27 字节'
-                        : '本地演示歌词，连接后可按行同步',
-                    trailing: Icon(
-                      Icons.lyrics_outlined,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  TextField(
-                    controller: _lyrics,
-                    minLines: constraints.maxWidth < 640 ? 4 : 7,
-                    maxLines: constraints.maxWidth < 640 ? 6 : 10,
-                    style: const TextStyle(height: 1.8),
-                    decoration: const InputDecoration(
-                      hintText: '粘贴要演示的歌词…',
-                      alignLabelWithHint: true,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('歌词已保存到本次界面预览。')),
-                          );
-                        },
-                        icon: const Icon(Icons.save_outlined, size: 18),
-                        label: const Text('保存预览'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _syncLyrics,
-                        icon: const Icon(Icons.sync_rounded, size: 18),
-                        label: const Text('同步到手表'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
+            final lyrics = _buildLyricsCard(context, wide);
             final rules = _NotificationRules(
               controller: controller,
               enabled: Platform.isAndroid,
             );
-            final composerCard = AppCard(
-              child: ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(top: 8),
-                shape: const Border(),
-                leading: Icon(Icons.edit_note_rounded, color: scheme.primary),
-                title: const Text(
-                  '手动发送测试消息',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  '走 0x02 文本槽，不经过系统通知',
-                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
-                ),
-                children: [_composer(context)],
-              ),
+            final composer = _buildManualMessageCard(context, wide);
+            final trouble = TroubleshootingCard(
+              controller: controller,
+              showMedia: Platform.isAndroid,
+              hint: Platform.isAndroid
+                  ? '媒体控制与通知同步都依赖“通知读取权限”。'
+                        '打开手表一级消息页才回传应用名列表，选中后才渲染整屏详情。'
+                  : 'Windows 端暂未接入系统通知，通知路由只影响 Android；'
+                        '可使用上方歌词同步和“手动发送测试消息”验证手表联动。',
             );
-            if (constraints.maxWidth >= 900) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        player,
-                        const SizedBox(height: 16),
-                        composerCard,
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        lyrics,
-                        const SizedBox(height: 16),
-                        rules,
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            }
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                player,
-                const SizedBox(height: 16),
-                lyrics,
-                const SizedBox(height: 16),
-                rules,
-                const SizedBox(height: 16),
-                composerCard,
-              ],
+
+            return BalancedTwoColumn(
+              wide: wide,
+              leftChildren: [player, composer, trouble],
+              rightChildren: [lyrics, rules],
+              narrowOrder: [player, lyrics, rules, composer, trouble],
             );
           },
         ),
         const SizedBox(height: 16),
         AppCard(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            '手表按键通过 0x10 控制帧回传播放 / 暂停 / 上下首；系统通知按路由规则筛选后，'
-            '在手表打开消息应用时按点阵传给手表显示。',
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 12,
-              height: 1.5,
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline_rounded, size: 17, color: colors.info),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '手表按键通过 0x10 控制帧回传播放 / 暂停 / 上下首；系统通知按路由规则筛选后，'
+                  '在手表打开消息应用时按点阵传给手表显示。',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 11.5,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 16),
-        TroubleshootingCard(
-          controller: controller,
-          showMedia: Platform.isAndroid,
-          hint: Platform.isAndroid
-              ? '媒体控制与通知同步都依赖“通知读取权限”。'
-                    '打开手表一级消息页才回传应用名列表，选中后才渲染整屏详情。'
-              : 'Windows 端暂未接入系统通知，通知路由只影响 Android；'
-                    '可使用上方歌词同步和“手动发送测试消息”验证手表联动。',
-        ),
       ],
+    );
+  }
+}
+
+class _NotificationPermissionBanner extends StatelessWidget {
+  const _NotificationPermissionBanner({required this.controller});
+
+  final WatchController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      color: colors.warningContainer,
+      borderColor: colors.warning.withValues(alpha: 0.45),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.notifications_paused_rounded,
+            size: 20,
+            color: colors.warning,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '尚未开启 Android 通知读取权限',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '需要开启「通知使用权」后，才能同步手机通知与系统媒体播放进度到手表。',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.4,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () async {
+                        await controller.openNotificationAccess();
+                        await Future<void>.delayed(const Duration(seconds: 2));
+                        await controller.refreshAndroidStatus();
+                        await controller.refreshMessageRules();
+                      },
+                      icon: const Icon(Icons.security_rounded, size: 16),
+                      label: const Text('去授权通知读取'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await controller.refreshAndroidStatus();
+                        await controller.refreshMessageRules();
+                      },
+                      icon: const Icon(Icons.refresh_rounded, size: 16),
+                      label: const Text('刷新权限状态'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -368,10 +451,12 @@ class _PlayerCard extends StatefulWidget {
   const _PlayerCard({
     required this.controller,
     required this.missingAccess,
+    required this.compactArt,
   });
 
   final WatchController controller;
   final bool missingAccess;
+  final bool compactArt;
 
   @override
   State<_PlayerCard> createState() => _PlayerCardState();
@@ -384,6 +469,7 @@ class _PlayerCardState extends State<_PlayerCard> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final hasMedia = controller.hasMedia;
     final duration = controller.mediaDuration;
     final position = (_drag ?? controller.mediaPosition)
@@ -393,28 +479,22 @@ class _PlayerCardState extends State<_PlayerCard> {
         ? (controller.mediaArtist.isEmpty ? '未知歌手' : controller.mediaArtist)
         : widget.missingAccess
         ? '通知读取未授权，无法获取手机歌曲'
-        : (controller.connected ? '在手机上打开音乐 App 播放' : '手表未连接');
+        : (controller.connected ? '在手机或电脑上播放音乐即可跟随' : '手表未连接');
 
     return AppCard(
       child: LayoutBuilder(
         builder: (context, constraints) {
           final sideBySide = constraints.maxWidth >= 340;
           final artSize = !sideBySide
-              ? 148.0
-              : (constraints.maxWidth < 520 ? 92.0 : 132.0);
+              ? (widget.compactArt ? 120.0 : 140.0)
+              : (constraints.maxWidth < 460 ? 96.0 : 124.0);
           final art = Container(
             width: artSize,
             height: artSize,
             decoration: BoxDecoration(
-              gradient: const RadialGradient(
-                colors: [
-                  Color(0xFF314B40),
-                  Color(0xFF17221E),
-                  Color(0xFF101615),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: AppPalette.line),
+              gradient: RadialGradient(colors: colors.albumArtGradient),
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: scheme.outlineVariant),
             ),
             child: Stack(
               alignment: Alignment.center,
@@ -425,22 +505,22 @@ class _PlayerCardState extends State<_PlayerCard> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: AppPalette.mint.withValues(alpha: 0.28),
-                      width: artSize < 110 ? 7 : 14,
+                      color: colors.accent.withValues(alpha: 0.25),
+                      width: artSize < 110 ? 7 : 13,
                     ),
                   ),
                 ),
                 Container(
                   width: artSize * 0.38,
                   height: artSize * 0.38,
-                  decoration: const BoxDecoration(
-                    color: AppPalette.mint,
+                  decoration: BoxDecoration(
+                    color: scheme.primary,
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
                     Icons.music_note_rounded,
-                    color: const Color(0xFF0A1B14),
-                    size: artSize < 110 ? 20 : 30,
+                    color: scheme.onPrimary,
+                    size: artSize < 110 ? 20 : 28,
                   ),
                 ),
               ],
@@ -451,99 +531,112 @@ class _PlayerCardState extends State<_PlayerCard> {
                 ? CrossAxisAlignment.start
                 : CrossAxisAlignment.center,
             children: [
-          Text(
-            hasMedia ? controller.mediaTitle : '未检测到播放',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
-            style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            subtitle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-          ),
-          const SizedBox(height: 18),
-          Slider(
-            value: duration > 0
-                ? (position / duration).clamp(0.0, 1.0).toDouble()
-                : 0,
-            onChanged: duration > 0
-                ? (value) => setState(() => _drag = value * duration)
-                : null,
-            onChangeEnd: duration > 0
-                ? (value) {
-                    final target = value * duration;
-                    setState(() => _drag = null);
-                    controller.seekMedia(target);
-                  }
-                : null,
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                Text(
-                  _time(position),
-                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10),
-                ),
-                const Spacer(),
-                Text(
-                  _time(duration),
-                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: sideBySide
-                ? MainAxisAlignment.start
-                : MainAxisAlignment.center,
-            children: [
-              IconButton(
-                onPressed: hasMedia
-                    ? () => controller.skipMedia(next: false)
-                    : null,
-                tooltip: '上一首',
-                iconSize: 30,
-                icon: const Icon(Icons.skip_previous_rounded),
-              ),
-              const SizedBox(width: 18),
-              IconButton.filled(
-                onPressed: hasMedia
-                    ? () => controller.setPlayState(!controller.playing)
-                    : null,
-                tooltip: controller.playing ? '暂停手机播放' : '播放手机媒体',
-                iconSize: 34,
-                style: IconButton.styleFrom(minimumSize: const Size(64, 64)),
-                icon: Icon(
-                  controller.playing
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
+              Text(
+                hasMedia ? controller.mediaTitle : '未检测到播放',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: sideBySide ? TextAlign.start : TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(width: 18),
-              IconButton(
-                onPressed: hasMedia
-                    ? () => controller.skipMedia(next: true)
-                    : null,
-                tooltip: '下一首',
-                iconSize: 30,
-                icon: const Icon(Icons.skip_next_rounded),
+              const SizedBox(height: 5),
+              Text(
+                subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: sideBySide ? TextAlign.start : TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          StatusPill(
-            label: hasMedia
-                ? (controller.playing ? '手机播放中' : '手机已暂停')
-                : '未检测到系统媒体',
-            color: hasMedia ? scheme.primary : scheme.onSurfaceVariant,
-          ),
+              const SizedBox(height: 14),
+              Slider(
+                value: duration > 0
+                    ? (position / duration).clamp(0.0, 1.0).toDouble()
+                    : 0,
+                onChanged: duration > 0
+                    ? (value) => setState(() => _drag = value * duration)
+                    : null,
+                onChangeEnd: duration > 0
+                    ? (value) {
+                        final target = value * duration;
+                        setState(() => _drag = null);
+                        controller.seekMedia(target);
+                      }
+                    : null,
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  children: [
+                    Text(
+                      _time(position),
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 10,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      _time(duration),
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 10,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: sideBySide
+                    ? MainAxisAlignment.start
+                    : MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    onPressed: hasMedia
+                        ? () => controller.skipMedia(next: false)
+                        : null,
+                    tooltip: '上一首',
+                    iconSize: 28,
+                    icon: const Icon(Icons.skip_previous_rounded),
+                  ),
+                  const SizedBox(width: 14),
+                  IconButton.filled(
+                    onPressed: hasMedia
+                        ? () => controller.setPlayState(!controller.playing)
+                        : null,
+                    tooltip: controller.playing ? '暂停手机播放' : '播放手机媒体',
+                    iconSize: 32,
+                    style: IconButton.styleFrom(
+                      minimumSize: const Size(58, 58),
+                    ),
+                    icon: Icon(
+                      controller.playing
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  IconButton(
+                    onPressed: hasMedia
+                        ? () => controller.skipMedia(next: true)
+                        : null,
+                    tooltip: '下一首',
+                    iconSize: 28,
+                    icon: const Icon(Icons.skip_next_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              StatusPill(
+                label: hasMedia
+                    ? (controller.playing ? '手机播放中' : '手机已暂停')
+                    : '未检测到系统媒体',
+                color: hasMedia ? colors.accent : scheme.onSurfaceVariant,
+              ),
             ],
           );
           if (sideBySide) {
@@ -559,7 +652,7 @@ class _PlayerCardState extends State<_PlayerCard> {
           return Column(
             children: [
               art,
-              const SizedBox(height: 22),
+              const SizedBox(height: 18),
               controls,
             ],
           );
@@ -587,6 +680,7 @@ class _NotificationRules extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -605,8 +699,11 @@ class _NotificationRules extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHigh,
+                color: colors.insetSurface,
                 borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.6),
+                ),
               ),
               child: Row(
                 children: [
@@ -631,60 +728,145 @@ class _NotificationRules extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 14),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(
-                value: 'all',
-                icon: Icon(Icons.all_inbox_rounded),
-                label: Text('全部通知'),
-              ),
-              ButtonSegment(
-                value: 'selected',
-                icon: Icon(Icons.filter_alt_outlined),
-                label: Text('仅选中应用'),
-              ),
-            ],
-            selected: {controller.routeMode},
-            showSelectedIcon: false,
-            onSelectionChanged: enabled
-                ? (value) => controller.setRouteMode(value.first)
-                : null,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final narrowSeg = constraints.maxWidth < 300;
+              return SegmentedButton<String>(
+                segments: [
+                  ButtonSegment(
+                    value: 'all',
+                    icon: narrowSeg
+                        ? null
+                        : const Icon(Icons.all_inbox_rounded),
+                    label: const Text('全部通知'),
+                  ),
+                  ButtonSegment(
+                    value: 'selected',
+                    icon: narrowSeg
+                        ? null
+                        : const Icon(Icons.filter_alt_outlined),
+                    label: const Text('仅选中应用'),
+                  ),
+                ],
+                selected: {controller.routeMode},
+                showSelectedIcon: false,
+                onSelectionChanged: enabled
+                    ? (value) => controller.setRouteMode(value.first)
+                    : null,
+              );
+            },
           ),
           if (controller.routeMode == 'selected') ...[
             const SizedBox(height: 12),
             if (controller.knownApps.isEmpty)
-              Text(
-                '还没有捕获到通知。等某个应用发来通知后，这里会出现它的名字。',
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 11,
-                  height: 1.5,
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.insetSurface,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '还没有捕获到通知。等某个应用发来通知后，这里会出现它的名字。',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 11,
+                    height: 1.5,
+                  ),
                 ),
               )
-            else
-              for (final app in controller.knownApps)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  controlAffinity: ListTileControlAffinity.trailing,
-                  title: Text(app.label, style: const TextStyle(fontSize: 13.5)),
-                  subtitle: Text(
-                    app.package,
+            else ...[
+              Row(
+                children: [
+                  Text(
+                    '已选 ${controller.routePackages.length}/${controller.knownApps.length} 个应用',
                     style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
                       color: scheme.onSurfaceVariant,
-                      fontSize: 9.5,
                     ),
                   ),
-                  value: controller.routePackages.contains(app.package),
-                  onChanged: enabled
-                      ? (value) => controller.toggleRoutePackage(
-                          app.package,
-                          value ?? false,
-                        )
-                      : null,
+                  const Spacer(),
+                  TextButton(
+                    onPressed: enabled
+                        ? () {
+                            for (final app in controller.knownApps) {
+                              if (!controller.routePackages.contains(
+                                app.package,
+                              )) {
+                                controller.toggleRoutePackage(
+                                  app.package,
+                                  true,
+                                );
+                              }
+                            }
+                          }
+                        : null,
+                    child: const Text('全选', style: TextStyle(fontSize: 11)),
+                  ),
+                  TextButton(
+                    onPressed: enabled
+                        ? () {
+                            for (final app in controller.knownApps) {
+                              if (controller.routePackages.contains(
+                                app.package,
+                              )) {
+                                controller.toggleRoutePackage(
+                                  app.package,
+                                  false,
+                                );
+                              }
+                            }
+                          }
+                        : null,
+                    child: const Text('清空', style: TextStyle(fontSize: 11)),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: colors.insetSurface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: scheme.outlineVariant.withValues(alpha: 0.6),
+                  ),
                 ),
+                child: Column(
+                  children: [
+                    for (var i = 0; i < controller.knownApps.length; i++) ...[
+                      if (i > 0) const Divider(height: 1),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.trailing,
+                        title: Text(
+                          controller.knownApps[i].label,
+                          style: const TextStyle(fontSize: 13.5),
+                        ),
+                        subtitle: Text(
+                          controller.knownApps[i].package,
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 9.5,
+                          ),
+                        ),
+                        value: controller.routePackages.contains(
+                          controller.knownApps[i].package,
+                        ),
+                        onChanged: enabled
+                            ? (value) => controller.toggleRoutePackage(
+                                controller.knownApps[i].package,
+                                value ?? false,
+                              )
+                            : null,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ],
-          const Divider(height: 30),
+          const Divider(height: 28),
           SectionHeader(
             title: '片外 AT24C256 动态持久化上限',
             subtitle: '最多保留 20 条，断电重启不丢失；空间不足按 FIFO 自动淘汰最旧消息',
@@ -735,7 +917,9 @@ class _NotificationRules extends StatelessWidget {
                   messenger.showSnackBar(
                     SnackBar(
                       content: Text(
-                        ok ? '已清空手表 AT24C256 动态 ROM 中的所有通知。' : '已清空本地队列（连接后可同步清理手表）。',
+                        ok
+                            ? '已清空手表 AT24C256 动态 ROM 中的所有通知。'
+                            : '已清空本地队列（连接后可同步清理手表）。',
                       ),
                     ),
                   );

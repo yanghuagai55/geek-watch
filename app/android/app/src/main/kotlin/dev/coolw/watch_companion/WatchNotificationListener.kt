@@ -1,6 +1,7 @@
 package dev.coolw.watch_companion
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.media.AudioManager
@@ -8,7 +9,10 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
+import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -34,8 +38,47 @@ class WatchNotificationListener : NotificationListenerService() {
         @Volatile
         var live: WatchNotificationListener? = null
 
+        fun hasNotificationAccess(context: Context): Boolean {
+            val appCtx = context.applicationContext
+            val component = ComponentName(appCtx, WatchNotificationListener::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                val nm = appCtx.getSystemService(NotificationManager::class.java)
+                if (nm != null) {
+                    return nm.isNotificationListenerAccessGranted(component)
+                }
+            }
+            val enabled = Settings.Secure.getString(
+                appCtx.contentResolver,
+                "enabled_notification_listeners",
+            ) ?: return false
+            return enabled.split(':').any { entry ->
+                val parsed = ComponentName.unflattenFromString(entry)
+                parsed == component || parsed?.packageName == appCtx.packageName
+            }
+        }
+
+        fun ensureBound(context: Context) {
+            if (live != null) return
+            val appCtx = context.applicationContext
+            if (!hasNotificationAccess(appCtx)) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    requestRebind(ComponentName(appCtx, WatchNotificationListener::class.java))
+                    Log.i("WatchLink", "已请求系统重新绑定通知监听服务")
+                } catch (error: Exception) {
+                    Log.w("WatchLink", "请求绑定通知监听失败：${error.message}")
+                }
+            }
+        }
+
         fun rescan() {
-            live?.seedActive()
+            val activeListener = live
+            if (activeListener != null) {
+                activeListener.seedActive()
+            } else {
+                Log.i("WatchLink", "通知监听服务未绑定，无法扫描活动通知")
+                WatchLinkService.instance?.pushPersistedIfConnected()
+            }
         }
     }
 
@@ -66,6 +109,8 @@ class WatchNotificationListener : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         live = this
+        NotificationRules.load(applicationContext)
+        Log.i("WatchLink", "通知监听服务已连接")
         try {
             getSystemService(MediaSessionManager::class.java)
                 ?.addOnActiveSessionsChangedListener(sessionsListener, component)
@@ -81,12 +126,14 @@ class WatchNotificationListener : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        if (live === this) live = null
         try {
             getSystemService(MediaSessionManager::class.java)
                 ?.removeOnActiveSessionsChangedListener(sessionsListener)
         } catch (_: Exception) {
         }
         super.onListenerDisconnected()
+        ensureBound(applicationContext)
     }
 
     private fun refreshSessions() {
@@ -121,54 +168,139 @@ class WatchNotificationListener : NotificationListenerService() {
         MediaBridge.updateFrom(active)
     }
 
+    private fun firstNonBlank(vararg values: CharSequence?): String {
+        for (value in values) {
+            val s = value?.toString()?.trim()
+            if (!s.isNullOrEmpty()) return s
+        }
+        return ""
+    }
+
+    private fun extractLatestMessaging(extras: Bundle): Pair<String, String> {
+        @Suppress("DEPRECATION")
+        val raw = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return "" to ""
+        for (i in raw.size - 1 downTo 0) {
+            val bundle = raw[i] as? Bundle ?: continue
+            val msgText = bundle.getCharSequence("text")?.toString()?.trim().orEmpty()
+            if (msgText.isEmpty()) continue
+            val sender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                bundle.getParcelable("sender_person", android.app.Person::class.java)
+                    ?.name
+                    ?.toString()
+                    ?.trim()
+                    .orEmpty()
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                @Suppress("DEPRECATION")
+                (bundle.getParcelable("sender_person") as? android.app.Person)
+                    ?.name
+                    ?.toString()
+                    ?.trim()
+                    .orEmpty()
+            } else {
+                ""
+            }.ifBlank {
+                bundle.getCharSequence("sender")?.toString()?.trim().orEmpty()
+            }
+            return sender to msgText
+        }
+        return "" to ""
+    }
+
+    private fun extractTitleText(payload: Notification): Pair<String, String> {
+        val extras = payload.extras
+        if (extras == null) {
+            val ticker = payload.tickerText?.toString()?.trim().orEmpty()
+            return "" to ticker
+        }
+        var title = firstNonBlank(
+            extras.getCharSequence(Notification.EXTRA_TITLE),
+            extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE),
+            extras.getCharSequence(Notification.EXTRA_TITLE_BIG),
+        )
+        var text = firstNonBlank(
+            extras.getCharSequence(Notification.EXTRA_BIG_TEXT),
+            extras.getCharSequence(Notification.EXTRA_TEXT),
+        )
+        if (title.isBlank() || text.isBlank()) {
+            val (msgSender, msgText) = extractLatestMessaging(extras)
+            if (title.isBlank() && msgSender.isNotBlank()) {
+                title = msgSender
+            }
+            if (text.isBlank() && msgText.isNotBlank()) {
+                text = if (msgSender.isNotBlank() && msgSender != title) {
+                    "$msgSender: $msgText"
+                } else {
+                    msgText
+                }
+            }
+        }
+        if (text.isBlank()) {
+            val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            if (lines != null && lines.isNotEmpty()) {
+                text = lines
+                    .mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                    .joinToString("\n")
+            }
+        }
+        if (text.isBlank()) {
+            text = firstNonBlank(
+                extras.getCharSequence(Notification.EXTRA_SUB_TEXT),
+                extras.getCharSequence(Notification.EXTRA_INFO_TEXT),
+                extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT),
+            )
+        }
+        if (title.isBlank() && text.isBlank()) {
+            text = payload.tickerText?.toString()?.trim().orEmpty()
+        }
+        return title to text
+    }
+
+    private fun safeActiveNotifications(): Array<StatusBarNotification>? = try {
+        activeNotifications
+    } catch (_: Exception) {
+        null
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val notification = sbn ?: return
         val payload = notification.notification ?: return
-        val extras = payload.extras ?: return
-        val title = extras
-            .getCharSequence(Notification.EXTRA_TITLE)
-            ?.toString()
-            .orEmpty()
-        val text = (
-            extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
-                ?: extras.getCharSequence(Notification.EXTRA_TEXT)
-            )?.toString().orEmpty()
+        val (title, text) = extractTitleText(payload)
+        val activeList = safeActiveNotifications()
+        if (!acceptNotification(notification, title, text, activeList)) return
 
         val key = "${notification.key}\u0000$title\u0000$text"
         val now = System.currentTimeMillis()
         if (key == lastNotificationKey && now - lastNotificationAt < 10_000) {
             return
         }
-        lastNotificationKey = key
-        lastNotificationAt = now
-        cache(notification, title, text)
+        if (cache(notification, title, text)) {
+            lastNotificationKey = key
+            lastNotificationAt = now
+        }
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-        sbn?.let { WatchLinkService.instance?.removeNotification(it.key) }
+        val removed = sbn ?: return
+        val service = WatchLinkService.instance
+        if (service != null) {
+            service.removeNotification(removed.key)
+        } else {
+            WatchLinkService.removeOfflineNotification(applicationContext, removed.key)
+        }
     }
 
     /** 把通知栏里当前还能看到的消息一次性交给前台服务。 */
     private fun seedActive() {
-        val active = try {
-            activeNotifications
-        } catch (_: Exception) {
-            null
-        } ?: return
+        NotificationRules.load(applicationContext)
+        val active = safeActiveNotifications() ?: return
         val incoming = active
             .sortedByDescending { it.postTime }
             .mapNotNull { notification ->
                 val payload = notification.notification ?: return@mapNotNull null
-                val extras = payload.extras ?: return@mapNotNull null
-                val title = extras
-                    .getCharSequence(Notification.EXTRA_TITLE)
-                    ?.toString()
-                    .orEmpty()
-                val text = (
-                    extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
-                        ?: extras.getCharSequence(Notification.EXTRA_TEXT)
-                    )?.toString().orEmpty()
-                if (!acceptNotification(notification, title, text)) return@mapNotNull null
+                val (title, text) = extractTitleText(payload)
+                if (!acceptNotification(notification, title, text, active)) {
+                    return@mapNotNull null
+                }
                 val app = appLabel(notification.packageName)
                 val kind = classifyNotification(notification.packageName, payload.category)
                 NotificationRules.rememberApp(this, notification.packageName, "$kind · $app")
@@ -179,23 +311,53 @@ class WatchNotificationListener : NotificationListenerService() {
                     text = text,
                     key = notification.key,
                     pkg = notification.packageName,
+                    isGroupSummary = (payload.flags and Notification.FLAG_GROUP_SUMMARY) != 0,
+                    groupKey = notification.groupKey,
                 )
             }
         Log.i("WatchLink", "通知栏现有 ${active.size} 条，可送手表 ${incoming.size} 条")
-        WatchLinkService.instance?.syncMessages(incoming)
-            ?: Log.i("WatchLink", "前台服务还没起来，这轮通知先留在系统里")
+        val service = WatchLinkService.instance
+        if (service != null) {
+            service.syncMessages(incoming)
+        } else {
+            WatchLinkService.syncOfflineMessages(applicationContext, incoming)
+            Log.i("WatchLink", "前台服务未启动，已暂存 ${incoming.size} 条活动通知到本地缓存")
+        }
     }
 
     private fun acceptNotification(
         notification: StatusBarNotification,
         title: String,
         text: String,
+        activeList: Array<StatusBarNotification>? = null,
     ): Boolean {
         if (notification.packageName == packageName) return false
         if (notification.packageName in ignoredPackages) return false
         val payload = notification.notification ?: return false
-        if (payload.flags and Notification.FLAG_GROUP_SUMMARY != 0) return false
-        if (payload.flags and Notification.FLAG_FOREGROUND_SERVICE != 0) return false
+        if ((payload.flags and Notification.FLAG_ONGOING_EVENT) != 0 &&
+            payload.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true
+        ) {
+            return false
+        }
+        if ((payload.flags and Notification.FLAG_FOREGROUND_SERVICE) != 0 &&
+            payload.category != Notification.CATEGORY_CALL
+        ) {
+            return false
+        }
+        if ((payload.flags and Notification.FLAG_GROUP_SUMMARY) != 0) {
+            val siblings = activeList
+            val hasChild = siblings != null && siblings.any { other ->
+                other.key != notification.key &&
+                    other.packageName == notification.packageName &&
+                    other.groupKey == notification.groupKey &&
+                    ((other.notification?.flags ?: 0) and Notification.FLAG_GROUP_SUMMARY) == 0 &&
+                    other.notification?.let { childPayload ->
+                        val (ct, cx) = extractTitleText(childPayload)
+                        ct.isNotBlank() || cx.isNotBlank()
+                    } == true
+            }
+            if (hasChild) return false
+        }
         if (title.isBlank() && text.isBlank()) return false
         return true
     }
@@ -204,28 +366,45 @@ class WatchNotificationListener : NotificationListenerService() {
         notification: StatusBarNotification,
         title: String,
         text: String,
-    ) {
-        if (!acceptNotification(notification, title, text)) return
-
+    ): Boolean {
+        val payload = notification.notification ?: return false
         val app = appLabel(notification.packageName)
         val kind = classifyNotification(
             notification.packageName,
-            notification.notification?.category,
+            payload.category,
         )
         val labeled = "$kind · $app"
-        NotificationRules.load(this)
+        NotificationRules.load(applicationContext)
         // 即使当前规则不放行也先记住应用，用户才能在列表里勾选它。
         NotificationRules.rememberApp(this, notification.packageName, labeled)
-        if (!NotificationRules.allows(notification.packageName)) return
-        Log.d("WatchLink", "缓存通知 [$kind] $app：$title $text")
+        if (!NotificationRules.allows(notification.packageName)) return false
+        Log.i("WatchLink", "缓存通知 [$kind] $app：$title $text")
+        val isSummary = (payload.flags and Notification.FLAG_GROUP_SUMMARY) != 0
         // 只进缓存，手表打开消息页时再按需取；不再走 0x02 文字槽（小字库会出方框）。
-        WatchLinkService.instance?.cacheNotification(
-            labeled,
-            title,
-            text,
-            notification.key,
-            notification.packageName,
-        )
+        val service = WatchLinkService.instance
+        return if (service != null) {
+            service.cacheNotification(
+                labeled,
+                title,
+                text,
+                notification.key,
+                notification.packageName,
+                isGroupSummary = isSummary,
+                groupKey = notification.groupKey,
+            )
+            true
+        } else {
+            WatchLinkService.cacheOfflineNotification(
+                applicationContext,
+                labeled,
+                title,
+                text,
+                notification.key,
+                notification.packageName,
+                isGroupSummary = isSummary,
+                groupKey = notification.groupKey,
+            )
+        }
     }
 
     /** 按系统通知类别和应用包名归类，手表列表里能看出是聊天、系统还是提醒。 */

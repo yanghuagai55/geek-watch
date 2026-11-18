@@ -1005,7 +1005,7 @@ static draw_item_t *ext_item_add(int16_t x, int16_t y, int16_t w, int16_t h,
     int idx;
 
     if (!items || w <= 0 || h <= 0 || !item_space() || opacity == 0 ||
-        fmt < UI_EXT_FMT_1BPP || fmt > UI_EXT_FMT_RGB565_RLE ||
+        fmt < UI_EXT_FMT_1BPP || fmt > UI_EXT_FMT_1BPP_STRIP ||
         ext_src_n >= EXT_SRC_MAX) {
         return 0;
     }
@@ -1164,6 +1164,48 @@ static int decode_ext_rle_row(uint8_t fmt, uint32_t base_off,
     return !s.eof && px == sw;
 }
 
+static int decode_ext_strip_chunk(uint32_t base_off, int ch, uint8_t *row_buf, int *blank_out) {
+    uint8_t idx_b[4];
+    uint16_t start = 0u, end, clen;
+    uint8_t *pk = row_buf + 128;
+    int out = 0, i = 0;
+
+    if (ch < 0 || ch >= 20) return 0;
+    if (ch == 0) {
+        if (!read_img_src(base_off + 2u, idx_b, 2u)) return 0;
+        end = (uint16_t)(idx_b[0] | ((uint16_t)idx_b[1] << 8));
+    } else {
+        if (!read_img_src(base_off + 2u + (uint32_t)(ch - 1) * 2u, idx_b, 4u)) return 0;
+        start = (uint16_t)(idx_b[0] | ((uint16_t)idx_b[1] << 8));
+        end = (uint16_t)(idx_b[2] | ((uint16_t)idx_b[3] << 8));
+    }
+    if (end <= start) return 0;
+    clen = (uint16_t)(end - start);
+    if (clen > 128u || (!ext_mem_ptr && base_off + 42u + end > HAL_EXT_FLASH_SIZE)) return 0;
+    if (clen == 128u) {
+        *blank_out = 0;
+        return read_img_src(base_off + 42u + start, row_buf, 128u);
+    }
+    if (!read_img_src(base_off + 42u + start, pk, clen)) return 0;
+    if (clen == 2u && pk[0] == 0xFEu && pk[1] == 0x00u) {
+        *blank_out = 1;
+        return 1;
+    }
+    *blank_out = 0;
+    while (i < (int)clen && out < 128) {
+        uint8_t hdr = pk[i++];
+        if (hdr & 0x80u) {
+            int n = (int)(hdr & 0x7Fu) + 2;
+            uint8_t v = (i < (int)clen) ? pk[i++] : 0u;
+            while (n-- > 0 && out < 128) row_buf[out++] = v;
+        } else {
+            int n = (int)(hdr & 0x7Fu) + 1;
+            while (n-- > 0 && i < (int)clen && out < 128) row_buf[out++] = pk[i++];
+        }
+    }
+    return out == 128;
+}
+
 static void raster_ext_image(const draw_item_t *it, int band_y) {
     int x0, x1, y0, y1, x, y;
     int sw = it->w, sh = it->h;
@@ -1171,9 +1213,12 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     uint8_t fmt = it->pal_n;
     int row_bytes = 0;
     int loaded_sy = -1;
+    int loaded_chunk = -1;
+    int blank_chunk = 0;
     uint8_t row_buf[256];
     uint16_t *pal = pal_cache;
     uint8_t skip0;
+    int is_1bpp = (fmt == UI_EXT_FMT_1BPP || fmt == UI_EXT_FMT_1BPP_STRIP);
     const ext_src_entry_t *src = &ext_srcs[it->str_off < EXT_SRC_MAX ? it->str_off : 0];
     uint32_t base_off = src->ext_off;
     sample_axis_t ay, ax0;
@@ -1181,7 +1226,7 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     ext_mem_ptr = src->mem_ptr;
     skip0 = (uint8_t)(it->color != 0u);
     use_item_xform(it);
-    if (fmt == UI_EXT_FMT_1BPP) {
+    if (is_1bpp) {
         row_bytes = (sw + 7) >> 3;
 #if !defined(AT32_SLIM_ROM)
     } else if (fmt == UI_EXT_FMT_4BPP) {
@@ -1287,10 +1332,23 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
     for (y = y0; y < y1; y++, sample_next(&ay)) {
         sample_axis_t ax = ax0;
         int sy = ay.value;
+        const uint8_t *rptr = row_buf;
         if (sy < 0 || sy >= sh) {
             continue;
         }
-        if (sy != loaded_sy) {
+        if (fmt == UI_EXT_FMT_1BPP_STRIP) {
+            int ch = sy >> 3;
+            if (ch != loaded_chunk) {
+                if (!decode_ext_strip_chunk(base_off, ch, row_buf, &blank_chunk)) {
+                    return;
+                }
+                loaded_chunk = ch;
+            }
+            if (blank_chunk) {
+                continue;
+            }
+            rptr = row_buf + (sy & 7) * row_bytes;
+        } else if (sy != loaded_sy) {
             if (fmt == UI_EXT_FMT_PAL4_RLE || fmt == UI_EXT_FMT_RGB565_RLE) {
                 if (!decode_ext_rle_row(fmt, base_off, sw, sh, sy, row_buf)) {
                     return;
@@ -1308,8 +1366,8 @@ static void raster_ext_image(const draw_item_t *it, int band_y) {
             if (sx < 0 || sx >= sw) {
                 continue;
             }
-            if (fmt == UI_EXT_FMT_1BPP) {
-                if ((row_buf[sx >> 3] >> (7 - (sx & 7))) & 1) {
+            if (is_1bpp) {
+                if ((rptr[sx >> 3] >> (7 - (sx & 7))) & 1) {
                     pixel(x, y, band_y, it->color, it->opacity);
                 }
 #if !defined(AT32_SLIM_ROM)
@@ -1672,7 +1730,7 @@ void ui_draw_flush(void) {
             const draw_item_t *it = &items[n];
             int opaque_cov = (it->kind == KIND_FILL && it->opacity == 255) ||
                 (it->kind == KIND_EXT_IMAGE && it->opacity == 255 && !it->color &&
-                 it->pal_n >= UI_EXT_FMT_RGB565);
+                 it->pal_n >= UI_EXT_FMT_RGB565 && it->pal_n <= UI_EXT_FMT_RGB565_RLE);
             if (opaque_cov &&
                 it->tf_ox + it->x * it->tf_s / 256 <= clip_x0 &&
                 it->tf_oy + it->y * it->tf_s / 256 <= y &&

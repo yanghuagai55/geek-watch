@@ -117,162 +117,155 @@ class _AppShellState extends State<AppShell>
     return LayoutBuilder(
       builder: (context, constraints) {
         final content = _buildContent();
-        if (constraints.maxWidth < 760) {
-          final portrait = constraints.maxHeight > constraints.maxWidth;
-          if (portrait) {
-            if (!_liquidGlass) {
-              return Scaffold(
-                body: SafeArea(child: content),
-                bottomNavigationBar: NavigationBar(
-                  selectedIndex: _index,
-                  onDestinationSelected: _select,
-                  destinations: [
-                    for (final item in _items)
-                      NavigationDestination(
-                        icon: Icon(item.icon),
-                        selectedIcon: Icon(
-                          item.selectedIcon,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        label: item.label,
+        final portrait =
+            constraints.maxWidth < 760 &&
+            constraints.maxHeight > constraints.maxWidth;
+        if (portrait) {
+          if (!_liquidGlass) {
+            return Scaffold(
+              body: SafeArea(child: content),
+              bottomNavigationBar: NavigationBar(
+                selectedIndex: _index,
+                onDestinationSelected: _select,
+                destinations: [
+                  for (final item in _items)
+                    NavigationDestination(
+                      icon: Icon(item.icon),
+                      selectedIcon: Icon(
+                        item.selectedIcon,
+                        color: Theme.of(context).colorScheme.primary,
                       ),
-                  ],
-                ),
-              );
-            }
-            final materialTheme = Theme.of(context);
-            final materialScheme = materialTheme.colorScheme;
-            return prism.Theme(
-              data: prism.ThemeData(
-                colorScheme: prism.ColorScheme(
-                  brightness: materialScheme.brightness,
-                  primary: materialScheme.primary,
-                  onPrimary: materialScheme.onPrimary,
-                  secondary: materialScheme.secondary,
-                  onSecondary: materialScheme.onSecondary,
-                  error: materialScheme.error,
-                  onError: materialScheme.onError,
-                  surface: materialScheme.surface,
-                  onSurface: materialScheme.onSurface,
-                  onSurfaceVariant: materialScheme.onSurfaceVariant,
-                  surfaceContainerLow: materialScheme.surfaceContainerLow,
-                  surfaceContainer: materialScheme.surfaceContainer,
-                  surfaceContainerHigh: materialScheme.surfaceContainerHigh,
-                  surfaceContainerHighest:
-                      materialScheme.surfaceContainerHighest,
-                  outline: materialScheme.outline,
-                  outlineVariant: materialScheme.outlineVariant,
-                  shadow: materialScheme.shadow,
-                  scrim: materialScheme.scrim,
-                  inverseSurface: materialScheme.inverseSurface,
-                  onInverseSurface: materialScheme.onInverseSurface,
-                  inversePrimary: materialScheme.inversePrimary,
-                  surfaceTint: materialScheme.surfaceTint,
-                ),
-                platform: materialTheme.platform,
-                fontFamily: AppFonts.han,
-                fontFamilyFallback: AppFonts.systemFallback,
-              ),
-              child: prism.LiquidGlassScope(
-                enabled: true,
-                quality: prism.LiquidGlassQuality.ultra,
-                child: prism.LiquidGlassHost(
-                  enabled: true,
-                  child: Scaffold(
-                    extendBody: true,
-                    body: SafeArea(bottom: false, child: content),
-                    bottomNavigationBar: prism.NavigationDock(
-                      key: const Key('mobile-liquid-nav'),
-                      destinations: [
-                        for (final item in _items)
-                          prism.NavigationDockDestination(
-                            glyph: item.glyph,
-                            label: item.label,
-                          ),
-                      ],
-                      selectedIndex: _index,
-                      onSelected: _select,
+                      label: item.label,
                     ),
-                  ),
-                ),
+                ],
               ),
             );
           }
-          return Scaffold(
-            body: SafeArea(child: content),
-            bottomNavigationBar: NavigationBar(
-              selectedIndex: _index,
-              onDestinationSelected: _select,
-              destinations: [
-                for (final item in _items)
-                  NavigationDestination(
-                    icon: Icon(item.icon),
-                    selectedIcon: Icon(
-                      item.selectedIcon,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    label: item.label,
+          final materialTheme = Theme.of(context);
+          final materialScheme = materialTheme.colorScheme;
+          return prism.Theme(
+            data: prism.ThemeData(
+              colorScheme: prism.ColorScheme(
+                brightness: materialScheme.brightness,
+                primary: materialScheme.primary,
+                onPrimary: materialScheme.onPrimary,
+                secondary: materialScheme.secondary,
+                onSecondary: materialScheme.onSecondary,
+                error: materialScheme.error,
+                onError: materialScheme.onError,
+                surface: materialScheme.surface,
+                onSurface: materialScheme.onSurface,
+                onSurfaceVariant: materialScheme.onSurfaceVariant,
+                surfaceContainerLow: materialScheme.surfaceContainerLow,
+                surfaceContainer: materialScheme.surfaceContainer,
+                surfaceContainerHigh: materialScheme.surfaceContainerHigh,
+                surfaceContainerHighest: materialScheme.surfaceContainerHighest,
+                outline: materialScheme.outline,
+                outlineVariant: materialScheme.outlineVariant,
+                shadow: materialScheme.shadow,
+                scrim: materialScheme.scrim,
+                inverseSurface: materialScheme.inverseSurface,
+                onInverseSurface: materialScheme.onInverseSurface,
+                inversePrimary: materialScheme.inversePrimary,
+                surfaceTint: materialScheme.surfaceTint,
+              ),
+              platform: materialTheme.platform,
+              fontFamily: AppFonts.han,
+              fontFamilyFallback: AppFonts.systemFallback,
+            ),
+            child: prism.LiquidGlassScope(
+              enabled: true,
+              quality: prism.LiquidGlassQuality.ultra,
+              child: prism.LiquidGlassHost(
+                enabled: true,
+                child: Scaffold(
+                  extendBody: true,
+                  body: SafeArea(bottom: false, child: content),
+                  bottomNavigationBar: prism.NavigationDock(
+                    key: const Key('mobile-liquid-nav'),
+                    destinations: [
+                      for (final item in _items)
+                        prism.NavigationDockDestination(
+                          glyph: item.glyph,
+                          label: item.label,
+                        ),
+                    ],
+                    selectedIndex: _index,
+                    onSelected: _select,
                   ),
-              ],
+                ),
+              ),
             ),
           );
         }
+
         final scheme = Theme.of(context).colorScheme;
+        final railWidth = constraints.maxWidth < 760 ? 64.0 : 76.0;
         return Scaffold(
           // 窗口栏颜色与侧边栏一致：整块外壳用 surfaceContainerLow，
-          // 内容区再以圆角面板嵌进去，形成 WorkBuddy 那种「一层壳 + 一张卡」。
+          // 内容区再以圆角面板嵌进去，形成明暗自适应的「一层壳 + 一张卡」。
           backgroundColor: scheme.surfaceContainerLow,
-          body: AnimatedBuilder(
-            animation: _drawerAnimation,
-            builder: (context, _) {
-              final progress = _drawerAnimation.value;
-              return Stack(
-                children: [
-                  Row(
-                    children: [
-                      ListenableBuilder(
-                        listenable: widget.controller,
-                        builder: (context, _) => _CollapsedRail(
-                          controller: widget.controller,
-                          progress: progress,
-                          selected: _index,
-                          items: _items,
-                          onSelected: _select,
-                          onExpand: () => _setExpanded(true),
+          body: SafeArea(
+            child: AnimatedBuilder(
+              animation: _drawerAnimation,
+              builder: (context, _) {
+                final progress = _drawerAnimation.value;
+                return Stack(
+                  children: [
+                    Row(
+                      children: [
+                        ListenableBuilder(
+                          listenable: widget.controller,
+                          builder: (context, _) => _CollapsedRail(
+                            controller: widget.controller,
+                            railWidth: railWidth,
+                            progress: progress,
+                            selected: _index,
+                            items: _items,
+                            onSelected: _select,
+                            onExpand: () => _setExpanded(true),
+                          ),
                         ),
-                      ),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(0, 6, 6, 6),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(14),
-                            child: ColoredBox(
-                              color: Theme.of(context).scaffoldBackgroundColor,
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(0, 8, 8, 8),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).scaffoldBackgroundColor,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: scheme.outlineVariant.withValues(
+                                    alpha: 0.55,
+                                  ),
+                                ),
+                              ),
+                              clipBehavior: Clip.antiAlias,
                               child: content,
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  Positioned.fill(
-                    child: ListenableBuilder(
-                      listenable: widget.controller,
-                      builder: (context, _) => _ExpandedOverlay(
-                        animation: _drawerAnimation,
-                        controller: widget.controller,
-                        selected: _index,
-                        items: _items,
-                        onClose: () => _setExpanded(false),
-                        onSelected: _select,
-                        onConnectionChanged: (value) =>
-                            _setConnection(context, value),
+                      ],
+                    ),
+                    Positioned.fill(
+                      child: ListenableBuilder(
+                        listenable: widget.controller,
+                        builder: (context, _) => _ExpandedOverlay(
+                          animation: _drawerAnimation,
+                          collapsedWidth: railWidth,
+                          controller: widget.controller,
+                          selected: _index,
+                          items: _items,
+                          onClose: () => _setExpanded(false),
+                          onSelected: _select,
+                          onConnectionChanged: (value) =>
+                              _setConnection(context, value),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
         );
       },
@@ -317,6 +310,7 @@ class _AppShellState extends State<AppShell>
 class _CollapsedRail extends StatelessWidget {
   const _CollapsedRail({
     required this.controller,
+    required this.railWidth,
     required this.progress,
     required this.selected,
     required this.items,
@@ -325,6 +319,7 @@ class _CollapsedRail extends StatelessWidget {
   });
 
   final WatchController controller;
+  final double railWidth;
   final double progress;
   final int selected;
   final List<_NavItem> items;
@@ -335,46 +330,68 @@ class _CollapsedRail extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isDark = scheme.brightness == Brightness.dark;
+    final compactPad = railWidth < 70 ? 6.0 : 10.0;
     return Container(
-      width: 76,
+      width: railWidth,
       color: scheme.surfaceContainerLow,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 18),
       child: Opacity(
         opacity: (1 - progress).clamp(0.0, 1.0).toDouble(),
-        child: Column(
-          children: [
-            IconButton(
-              onPressed: onExpand,
-              tooltip: '展开侧边栏',
-              icon: const Icon(Icons.menu_rounded),
-            ),
-            const SizedBox(height: 10),
-            const AppBrand(compact: true),
-            const SizedBox(height: 28),
-            for (var i = 0; i < items.length; i++) ...[
-              _SideNavItem(
-                item: items[i],
-                extended: false,
-                progress: 0,
-                selected: selected == i,
-                onTap: () => onSelected(i),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final short = constraints.maxHeight < 500;
+            final children = <Widget>[
+              IconButton(
+                onPressed: onExpand,
+                tooltip: '展开侧边栏',
+                icon: const Icon(Icons.menu_rounded),
+              ),
+              SizedBox(height: short ? 6 : 10),
+              const AppBrand(compact: true),
+              SizedBox(height: short ? 14 : 26),
+              for (var i = 0; i < items.length; i++) ...[
+                _SideNavItem(
+                  item: items[i],
+                  extended: false,
+                  progress: 0,
+                  selected: selected == i,
+                  onTap: () => onSelected(i),
+                ),
+                const SizedBox(height: 6),
+              ],
+              if (short) const SizedBox(height: 12) else const Spacer(),
+              IconButton(
+                onPressed: () => controller.setThemeMode(
+                  isDark ? ThemeMode.light : ThemeMode.dark,
+                ),
+                tooltip: isDark ? '切换到暖白主题' : '切换到墨黑主题',
+                icon: Icon(
+                  isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+                ),
               ),
               const SizedBox(height: 6),
-            ],
-            const Spacer(),
-            IconButton(
-              onPressed: () => controller.setThemeMode(
-                isDark ? ThemeMode.light : ThemeMode.dark,
+              _CompactConnectionBadge(
+                controller: controller,
+                onTap: () => toggleWatchConnection(context, controller),
               ),
-              tooltip: isDark ? '切换到暖白主题' : '切换到墨黑主题',
-              icon: Icon(
-                isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+              const SizedBox(height: 8),
+            ];
+            if (short) {
+              return SingleChildScrollView(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compactPad,
+                  vertical: 12,
+                ),
+                child: Column(children: children),
+              );
+            }
+            return Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: compactPad,
+                vertical: 18,
               ),
-            ),
-            const SizedBox(height: 6),
-            _CompactConnectionBadge(controller: controller),
-            const SizedBox(height: 8),
-          ],
+              child: Column(children: children),
+            );
+          },
         ),
       ),
     );
@@ -384,6 +401,7 @@ class _CollapsedRail extends StatelessWidget {
 class _ExpandedOverlay extends StatelessWidget {
   const _ExpandedOverlay({
     required this.animation,
+    required this.collapsedWidth,
     required this.controller,
     required this.selected,
     required this.items,
@@ -393,6 +411,7 @@ class _ExpandedOverlay extends StatelessWidget {
   });
 
   final Animation<double> animation;
+  final double collapsedWidth;
   final WatchController controller;
   final int selected;
   final List<_NavItem> items;
@@ -405,7 +424,7 @@ class _ExpandedOverlay extends StatelessWidget {
     final progress = animation.value;
     final scheme = Theme.of(context).colorScheme;
     final isDark = scheme.brightness == Brightness.dark;
-    final width = lerpDouble(76, 236, progress)!;
+    final width = lerpDouble(collapsedWidth, 236, progress)!;
     final blur = 20 * progress;
     final scrimBlur = 2 * progress;
     double reveal(double start) {
@@ -429,7 +448,7 @@ class _ExpandedOverlay extends StatelessWidget {
                 filter: ImageFilter.blur(sigmaX: scrimBlur, sigmaY: scrimBlur),
                 child: Container(
                   color: const Color(0xFF0A0F10)
-                      .withValues(alpha: (isDark ? 0.13 : 0.07) * progress),
+                      .withValues(alpha: (isDark ? 0.16 : 0.08) * progress),
                 ),
               ),
             ),
@@ -451,12 +470,12 @@ class _ExpandedOverlay extends StatelessWidget {
                     child: Container(
                       decoration: BoxDecoration(
                         color: scheme.surfaceContainerLow.withValues(
-                          alpha: (isDark ? 0.9 : 0.87) * progress,
+                          alpha: (isDark ? 0.92 : 0.9) * progress,
                         ),
                         border: Border(
                           right: BorderSide(
                             color: scheme.outlineVariant.withValues(
-                              alpha: 0.7 * progress,
+                              alpha: 0.75 * progress,
                             ),
                           ),
                         ),
@@ -464,7 +483,7 @@ class _ExpandedOverlay extends StatelessWidget {
                             ? [
                                 BoxShadow(
                                   color: Colors.black.withValues(
-                                    alpha: 0.22 * progress,
+                                    alpha: (isDark ? 0.28 : 0.12) * progress,
                                   ),
                                   blurRadius: 24,
                                 ),
@@ -476,54 +495,67 @@ class _ExpandedOverlay extends StatelessWidget {
                         opacity: progress,
                         child: Material(
                           color: Colors.transparent,
-                          child: Column(
-                            children: [
-                              SizedBox(
-                                height: 48,
-                                child: Row(
-                                  children: [
-                                    IconButton(
-                                      onPressed: onClose,
-                                      tooltip: '收起侧边栏',
-                                      icon: AnimatedIcon(
-                                        icon: AnimatedIcons.menu_close,
-                                        progress: animation,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final short = constraints.maxHeight < 520;
+                              final column = Column(
+                                children: [
+                                  SizedBox(
+                                    height: 44,
+                                    child: Row(
+                                      children: [
+                                        IconButton(
+                                          onPressed: onClose,
+                                          tooltip: '收起侧边栏',
+                                          icon: AnimatedIcon(
+                                            icon: AnimatedIcons.menu_close,
+                                            progress: animation,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 3),
+                                    child: AppBrand(
+                                      compact: false,
+                                      textOpacity: brandReveal,
+                                    ),
+                                  ),
+                                  SizedBox(height: short ? 16 : 26),
+                                  for (var i = 0; i < items.length; i++) ...[
+                                    _SideNavItem(
+                                      item: items[i],
+                                      extended: true,
+                                      progress: progress,
+                                      selected: selected == i,
+                                      onTap: () => onSelected(i),
+                                    ),
+                                    const SizedBox(height: 6),
+                                  ],
+                                  if (short)
+                                    const SizedBox(height: 16)
+                                  else
+                                    const Spacer(),
+                                  Opacity(
+                                    opacity: panelReveal,
+                                    child: Transform.translate(
+                                      offset: Offset(0, 10 * (1 - panelReveal)),
+                                      child: _ConnectionPanel(
+                                        controller: controller,
+                                        onConnectionChanged:
+                                            onConnectionChanged,
                                       ),
                                     ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              Padding(
-                                padding: const EdgeInsets.only(left: 3),
-                                child: AppBrand(
-                                  compact: false,
-                                  textOpacity: brandReveal,
-                                ),
-                              ),
-                              const SizedBox(height: 28),
-                              for (var i = 0; i < items.length; i++) ...[
-                                _SideNavItem(
-                                  item: items[i],
-                                  extended: true,
-                                  progress: progress,
-                                  selected: selected == i,
-                                  onTap: () => onSelected(i),
-                                ),
-                                const SizedBox(height: 6),
-                              ],
-                              const Spacer(),
-                              Opacity(
-                                opacity: panelReveal,
-                                child: Transform.translate(
-                                  offset: Offset(0, 10 * (1 - panelReveal)),
-                                  child: _ConnectionPanel(
-                                    controller: controller,
-                                    onConnectionChanged: onConnectionChanged,
                                   ),
-                                ),
-                              ),
-                            ],
+                                ],
+                              );
+                              if (short) {
+                                return SingleChildScrollView(child: column);
+                              }
+                              return column;
+                            },
                           ),
                         ),
                       ),
@@ -540,54 +572,66 @@ class _ExpandedOverlay extends StatelessWidget {
 }
 
 class _CompactConnectionBadge extends StatelessWidget {
-  const _CompactConnectionBadge({required this.controller});
+  const _CompactConnectionBadge({required this.controller, this.onTap});
 
   final WatchController controller;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final active = controller.connected;
     return Tooltip(
       message: '${controller.transportName} · ${controller.connectionLabel}',
-      child: Container(
-        width: 48,
-        height: 54,
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh.withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              controller.transport == TransportType.serial
-                  ? Icons.cable_rounded
-                  : Icons.bluetooth_rounded,
-              size: 17,
-              color: active ? scheme.primary : scheme.onSurfaceVariant,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: 48,
+          height: 54,
+          decoration: BoxDecoration(
+            color: active
+                ? colors.accentContainer.withValues(alpha: 0.72)
+                : scheme.surfaceContainerHigh.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: active
+                  ? colors.accent.withValues(alpha: 0.45)
+                  : scheme.outlineVariant,
             ),
-            const SizedBox(height: 3),
-            Text(
-              controller.transportLabel,
-              style: TextStyle(
-                color: active ? scheme.primary : scheme.onSurface,
-                fontSize: 9,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.4,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                controller.transport == TransportType.serial
+                    ? Icons.cable_rounded
+                    : Icons.bluetooth_rounded,
+                size: 17,
+                color: active ? colors.accent : scheme.onSurfaceVariant,
               ),
-            ),
-            const SizedBox(height: 2),
-            Container(
-              width: 5,
-              height: 5,
-              decoration: BoxDecoration(
-                color: active ? scheme.primary : scheme.outline,
-                shape: BoxShape.circle,
+              const SizedBox(height: 3),
+              Text(
+                controller.transportLabel,
+                style: TextStyle(
+                  color: active ? colors.accent : scheme.onSurface,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.4,
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 2),
+              Container(
+                width: 5,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: active ? colors.accent : scheme.outline,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -606,11 +650,12 @@ class _ConnectionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final active = controller.connected;
     return AppCard(
       radius: 16,
       padding: const EdgeInsets.all(14),
-      color: scheme.surfaceContainerHigh.withValues(alpha: 0.66),
+      color: scheme.surfaceContainerHigh.withValues(alpha: 0.72),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -618,7 +663,7 @@ class _ConnectionPanel extends StatelessWidget {
           StatusPill(
             label:
                 '${controller.transportLabel} · ${controller.connectionLabel}',
-            color: active ? scheme.primary : scheme.onSurfaceVariant,
+            color: active ? colors.accent : scheme.onSurfaceVariant,
           ),
           const SizedBox(height: 9),
           Text(
@@ -644,6 +689,7 @@ class _ConnectionPanel extends StatelessWidget {
                   icon: const Icon(Icons.link_rounded, size: 16),
                   label: Text(controller.connecting ? '连接中' : '连接'),
                   style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 36),
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -658,6 +704,7 @@ class _ConnectionPanel extends StatelessWidget {
                   icon: const Icon(Icons.link_off_rounded, size: 16),
                   label: const Text('断开'),
                   style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 36),
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -689,15 +736,21 @@ class _SideNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final labelProgress = Curves.easeOut.transform(
       ((progress - 0.36) / 0.64).clamp(0.0, 1.0).toDouble(),
     );
     final content = Container(
-      height: 48,
+      height: 46,
       padding: EdgeInsets.symmetric(horizontal: extended ? 14 : 0),
       decoration: BoxDecoration(
-        color: selected ? scheme.primary.withValues(alpha: 0.12) : null,
+        color: selected
+            ? colors.accentContainer.withValues(alpha: 0.85)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(14),
+        border: selected
+            ? Border.all(color: colors.accent.withValues(alpha: 0.25))
+            : null,
       ),
       child: Row(
         mainAxisAlignment: extended
@@ -707,7 +760,7 @@ class _SideNavItem extends StatelessWidget {
           Icon(
             selected ? item.selectedIcon : item.icon,
             size: 21,
-            color: selected ? scheme.primary : scheme.onSurfaceVariant,
+            color: selected ? colors.accent : scheme.onSurfaceVariant,
           ),
           if (extended) ...[
             const SizedBox(width: 12),
@@ -720,7 +773,7 @@ class _SideNavItem extends StatelessWidget {
                     item.label,
                     style: TextStyle(
                       color: selected
-                          ? scheme.onSurface
+                          ? colors.onAccentContainer
                           : scheme.onSurfaceVariant,
                       fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
@@ -735,7 +788,7 @@ class _SideNavItem extends StatelessWidget {
                   width: 5,
                   height: 5,
                   decoration: BoxDecoration(
-                    color: scheme.primary,
+                    color: colors.accent,
                     shape: BoxShape.circle,
                   ),
                 ),

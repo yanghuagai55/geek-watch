@@ -82,6 +82,7 @@ typedef struct app {
     uint8_t rip_from_dot;
     uint8_t msg_was_open;
     uint8_t msg_prev_level;
+    uint8_t msg_detail_pending;
     uint8_t music_was_open;
     uint8_t compass_was_open;
     uint8_t about_was_open;
@@ -2281,10 +2282,17 @@ static void draw_message_page(uint8_t a) {
                           fmt == UI_EXT_FMT_1BPP ? col_text : 0u, a);
         return;
     }
-    if (link_msg_detail_ready()) {
-        /* 详情页不要标题，整屏都是手机渲染好的 128x160 1bpp 正文。 */
-        ui_mask1_draw((int16_t)((UI_W - 128) / 2), (int16_t)((UI_H - 160) / 2),
-                      128, 160, link_msg_detail_mask(), col_text, a);
+    {
+        uint32_t det_off = 0u;
+        uint16_t det_gen = 0u;
+        if (link_msg_detail_ext(&det_off, &det_gen)) {
+            /* 详情页直接按 4 行条带从片外 AT24C256 分块解压流式绘制，不占 RAM 位图缓冲。 */
+            ui_ext_image_draw_fast((int16_t)((UI_W - 128) / 2), (int16_t)((UI_H - 160) / 2),
+                                   128, 160, 0, det_off, UI_EXT_FMT_1BPP_STRIP,
+                                   col_text, a, det_gen);
+        } else {
+            draw_loading(a);
+        }
     }
 }
 
@@ -2716,9 +2724,11 @@ static void on_confirm(ui_menu_t *menu) {
             return;
         }
         rip_trigger_expand(menu, UI_MENU_LIST, menu->focus, 0);
-        link_request_message_detail(menu->focus);
     }
-    ui_menu_enter_child(menu, 1);
+    if (ui_menu_enter_child(menu, 1) && menu == &st->messages) {
+        link_select_message_detail(menu->focus);
+        st->msg_detail_pending = 1;
+    }
     ui_trace_emit("ui_nav_goto(message)");
 }
 
@@ -3004,6 +3014,11 @@ int ui_app_message_active(void) {
     return ui_menu_level(&st->messages);
 }
 
+int ui_app_message_stack_busy(void) {
+    return st && st->focus == UI_PAGE_MSG &&
+           st->messages.level == UI_MENU_CHILD && st->messages.push.x < 256;
+}
+
 /* 音乐应用是否处于打开状态（退出回第 0 级缩放至 70 以下时提前视为关闭）。 */
 int ui_app_music_active(void) {
     if (!st) {
@@ -3244,6 +3259,7 @@ static void msg_link_sync(void) {
     int icon_phase = act && act->level != UI_MENU_ICON &&
                      act->zoom.scale < 70 && !closing;
     int open = (act == &st->messages && level != UI_MENU_ICON && !closing && !icon_phase);
+    int msg_stack_busy = open && level == UI_MENU_CHILD && st->messages.push.x < 256;
     int music_open = (act == &st->music && st->music.level != UI_MENU_ICON &&
                       !closing && !icon_phase);
     int sport_open = (st->focus == UI_PAGE_SPORT && act == &st->sport &&
@@ -3259,16 +3275,27 @@ static void msg_link_sync(void) {
                        (settings_get()->dial_id == UI_DIAL_ANALOG ||
                         settings_get()->dial_id == UI_DIAL_IMU ||
                         st->dial_edit || st->dial_zoom.scale > 0));
-    int sys_open = (!sport_open && !about_open && !analog_open && !open && !music_open);
+    /* 打开消息/音乐的 zoom<70 首段不要再抢载 SYS1，否则会把 on_confirm 刚准备的列表/媒体缓冲冲掉。 */
+    int opening_ext = (act == &st->messages || act == &st->music) && !closing;
+    int sys_open = (!sport_open && !about_open && !analog_open &&
+                    !open && !music_open && !opening_ext);
     int hdr_need = !compass_open;
     int sport_pic_ready;
 
-    /* 从详情返回列表时：若有外置 Flash 缓存将立即恢复列表缓冲，并通知手机刷新。 */
+    if (open && level == UI_MENU_CHILD && !msg_stack_busy && st->msg_detail_pending) {
+        st->msg_detail_pending = 0;
+        link_request_message_detail(st->messages.child);
+    }
     if (st->msg_prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
+        st->msg_detail_pending = 0;
         link_request_messages();
+    }
+    if (open && level == UI_MENU_LIST && !link_msg_list_ready()) {
+        link_restore_msg_list();
     }
     if (st->msg_was_open && !open) {
         /* 离开消息应用：释放消息动态 RAM 缓冲并让手机恢复媒体推送。 */
+        st->msg_detail_pending = 0;
         link_leave_messages();
     }
     if (st->music_was_open && !music_open) {
@@ -3631,6 +3658,7 @@ void ui_app_go_home(void) {
     reset_menu_home(&st->music, 1);
     st->msg_was_open = 0;
     st->msg_prev_level = UI_MENU_ICON;
+    st->msg_detail_pending = 0;
     st->music_was_open = 0;
     st->compass_was_open = 0;
     st->about_was_open = 0;

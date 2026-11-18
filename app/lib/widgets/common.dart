@@ -13,6 +13,7 @@ class AppCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(20),
     this.color,
     this.gradient,
+    this.borderColor,
     this.onTap,
     this.radius = 20,
   });
@@ -21,6 +22,7 @@ class AppCard extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final Color? color;
   final Gradient? gradient;
+  final Color? borderColor;
   final VoidCallback? onTap;
   final double radius;
 
@@ -36,7 +38,7 @@ class AppCard extends StatelessWidget {
           gradient: gradient,
           borderRadius: borderRadius,
           border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.8),
+            color: borderColor ?? scheme.outlineVariant.withValues(alpha: 0.78),
           ),
         ),
         child: InkWell(
@@ -50,19 +52,26 @@ class AppCard extends StatelessWidget {
 }
 
 class PageScroll extends StatelessWidget {
-  const PageScroll({super.key, required this.children});
+  const PageScroll({
+    super.key,
+    required this.children,
+    this.maxWidth = 1220.0,
+  });
 
   final List<Widget> children;
+  final double maxWidth;
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final padding = size.width < 560 ? 16.0 : 28.0;
+    final padding = size.width < 560
+        ? 16.0
+        : (size.width < 900 ? 22.0 : 28.0);
     final portraitPhone = size.width < 760 && size.height > size.width;
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
         padding,
-        24,
+        portraitPhone ? 18 : 24,
         padding,
         portraitPhone ? 112 : 32,
       ),
@@ -70,8 +79,8 @@ class PageScroll extends StatelessWidget {
         builder: (context, constraints) {
           final available = constraints.maxWidth;
           final width = available.isFinite
-              ? math.min(available, 1180.0)
-              : 1180.0;
+              ? math.min(available, maxWidth)
+              : maxWidth;
           return Center(
             child: SizedBox(
               width: width,
@@ -83,6 +92,109 @@ class PageScroll extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// 等高并排双栏：宽屏下通过 `IntrinsicHeight` + `stretch` 保证左右卡片底边严格齐平，
+/// 窄屏下自动退化为等距纵向堆叠。注意：内部子组件不得包含 `LayoutBuilder`。
+class AlignedPair extends StatelessWidget {
+  const AlignedPair({
+    super.key,
+    required this.wide,
+    required this.left,
+    required this.right,
+    this.gap = 16,
+    this.leftFlex = 1,
+    this.rightFlex = 1,
+  });
+
+  final bool wide;
+  final Widget left;
+  final Widget right;
+  final double gap;
+  final int leftFlex;
+  final int rightFlex;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!wide) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [left, SizedBox(height: gap), right],
+      );
+    }
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(flex: leftFlex, child: left),
+          SizedBox(width: gap),
+          Expanded(flex: rightFlex, child: right),
+        ],
+      ),
+    );
+  }
+}
+
+/// 均衡双栏瀑布布局：用于多张高度各异的卡片页面，避免 `Wrap` 造成的阶梯式死白留空。
+class BalancedTwoColumn extends StatelessWidget {
+  const BalancedTwoColumn({
+    super.key,
+    required this.wide,
+    required this.leftChildren,
+    required this.rightChildren,
+    this.narrowOrder,
+    this.gap = 16,
+    this.leftFlex = 1,
+    this.rightFlex = 1,
+  });
+
+  final bool wide;
+  final List<Widget> leftChildren;
+  final List<Widget> rightChildren;
+  final List<Widget>? narrowOrder;
+  final double gap;
+  final int leftFlex;
+  final int rightFlex;
+
+  List<Widget> _spaced(List<Widget> items) {
+    final out = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      if (i > 0) out.add(SizedBox(height: gap));
+      out.add(items[i]);
+    }
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!wide) {
+      final items = narrowOrder ?? <Widget>[...leftChildren, ...rightChildren];
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: _spaced(items),
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: leftFlex,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: _spaced(leftChildren),
+          ),
+        ),
+        SizedBox(width: gap),
+        Expanded(
+          flex: rightFlex,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: _spaced(rightChildren),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -112,9 +224,9 @@ class PageHeader extends StatelessWidget {
               title,
               style: (narrow ? textTheme.headlineSmall : textTheme.headlineMedium)
                   ?.copyWith(
-                fontWeight: FontWeight.w700,
-                letterSpacing: narrow ? -0.4 : -0.6,
-              ),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: narrow ? -0.4 : -0.6,
+                  ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -123,7 +235,7 @@ class PageHeader extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: narrow ? 13 : null,
+                fontSize: narrow ? 12.5 : null,
                 height: 1.35,
               ),
             ),
@@ -136,7 +248,12 @@ class PageHeader extends StatelessWidget {
             children: [
               Expanded(child: titleBlock),
               const SizedBox(width: 10),
-              trailing!,
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: constraints.maxWidth * 0.44,
+                ),
+                child: trailing!,
+              ),
             ],
           );
         }
@@ -153,21 +270,28 @@ class PageHeader extends StatelessWidget {
 }
 
 class StatusPill extends StatelessWidget {
-  const StatusPill({super.key, required this.label, this.color, this.icon});
+  const StatusPill({
+    super.key,
+    required this.label,
+    this.color,
+    this.icon,
+    this.onTap,
+  });
 
   final String label;
   final Color? color;
   final IconData? icon;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final accent = color ?? Theme.of(context).colorScheme.primary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    final accent = color ?? context.appColors.accent;
+    final body = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5.5),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.11),
+        color: accent.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: accent.withValues(alpha: 0.2)),
+        border: Border.all(color: accent.withValues(alpha: 0.24)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -181,17 +305,27 @@ class StatusPill extends StatelessWidget {
               decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
             ),
           const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: accent,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: accent,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
             ),
           ),
         ],
       ),
+    );
+    if (onTap == null) return body;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: body,
     );
   }
 }
@@ -218,8 +352,9 @@ class SectionHeader extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: Theme.of(context).textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               if (subtitle != null) ...[
                 const SizedBox(height: 3),
@@ -233,7 +368,7 @@ class SectionHeader extends StatelessWidget {
             ],
           ),
         ),
-        ?trailing,
+        if (trailing != null) ...[const SizedBox(width: 8), trailing!],
       ],
     );
   }
@@ -379,6 +514,7 @@ class TroubleshootingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final android = Platform.isAndroid;
     final mediaText = controller.hasMedia
         ? [
@@ -387,36 +523,45 @@ class TroubleshootingCard extends StatelessWidget {
           ].join(' · ')
         : '未检测到';
     return AppCard(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                Icons.help_outline_rounded,
-                size: 16,
-                color: scheme.primary,
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: colors.accentContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.help_outline_rounded,
+                  size: 16,
+                  color: colors.accent,
+                ),
               ),
-              const SizedBox(width: 8),
-              const Text(
-                '疑难解答 · 当前权限',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '疑难解答 · 当前权限',
+                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+                ),
               ),
-              const Spacer(),
               if (android)
                 TextButton(
                   onPressed: controller.refreshAndroidStatus,
                   style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
                     minimumSize: const Size(0, 28),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text('刷新', style: TextStyle(fontSize: 11)),
+                  child: const Text('刷新', style: TextStyle(fontSize: 11.5)),
                 ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 10),
           if (android) ...[
             _StatusLine(
               icon: Icons.notifications_active_outlined,
@@ -454,7 +599,8 @@ class TroubleshootingCard extends StatelessWidget {
             _StatusLine(
               icon: Icons.inbox_outlined,
               label: '已缓存通知',
-              value: '${controller.cachedNotifications} 条（最多 ${controller.extPoolMsgMax} 条）',
+              value:
+                  '${controller.cachedNotifications} 条（最多 ${controller.extPoolMsgMax} 条）',
               ok: controller.cachedNotifications > 0,
             )
           else
@@ -464,12 +610,14 @@ class TroubleshootingCard extends StatelessWidget {
               value: controller.extFlashPresent
                   ? '${controller.extPoolMsgCount}/${controller.extPoolMsgMax} 条'
                   : '${controller.localMessages.length}/${controller.maxMessages} 条',
-              ok: controller.extPoolMsgCount > 0 || controller.localMessages.isNotEmpty,
+              ok:
+                  controller.extPoolMsgCount > 0 ||
+                  controller.localMessages.isNotEmpty,
             ),
           if (android &&
               (!controller.notificationAccess ||
                   !controller.batteryExempt)) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -482,9 +630,9 @@ class TroubleshootingCard extends StatelessWidget {
                       await controller.refreshAndroidStatus();
                     },
                     style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 30),
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      textStyle: const TextStyle(fontSize: 11),
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      textStyle: const TextStyle(fontSize: 11.5),
                     ),
                     child: const Text('去授权通知读取'),
                   ),
@@ -496,22 +644,30 @@ class TroubleshootingCard extends StatelessWidget {
                       await controller.refreshAndroidStatus();
                     },
                     style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 30),
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      textStyle: const TextStyle(fontSize: 11),
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      textStyle: const TextStyle(fontSize: 11.5),
                     ),
                     child: const Text('加入电池白名单'),
                   ),
               ],
             ),
           ],
-          const SizedBox(height: 8),
-          Text(
-            hint,
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 10.5,
-              height: 1.45,
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: colors.insetSurface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              hint,
+              style: TextStyle(
+                color: scheme.onSurfaceVariant,
+                fontSize: 11,
+                height: 1.45,
+              ),
             ),
           ),
         ],
@@ -536,12 +692,16 @@ class _StatusLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 3.5),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(icon, size: 13.5, color: scheme.onSurfaceVariant),
+          ),
           const SizedBox(width: 8),
           SizedBox(
             width: 96,
@@ -549,7 +709,7 @@ class _StatusLine extends StatelessWidget {
               label,
               style: TextStyle(
                 color: scheme.onSurfaceVariant,
-                fontSize: 11,
+                fontSize: 11.5,
               ),
             ),
           ),
@@ -559,8 +719,8 @@ class _StatusLine extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: ok ? scheme.primary : const Color(0xFFE0A45C),
-                fontSize: 11,
+                color: ok ? colors.accent : colors.warning,
+                fontSize: 11.5,
                 fontWeight: FontWeight.w600,
               ),
             ),

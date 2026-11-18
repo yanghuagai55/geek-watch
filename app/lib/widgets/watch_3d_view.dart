@@ -254,6 +254,7 @@ class _Watch3DViewState extends State<Watch3DView>
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
+    final colors = context.appColors;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final isCalibrating =
         c.magCalPhase == MagCalPhase.calibrating ||
@@ -279,7 +280,8 @@ class _Watch3DViewState extends State<Watch3DView>
                     const Color(0xFF0A0F10),
                   ]
                 : <Color>[
-                    AppPalette.mintSoft.withValues(alpha: 0.28),
+                    (isCalibrating ? colors.warning : AppPalette.mintSoft)
+                        .withValues(alpha: isCalibrating ? 0.16 : 0.28),
                     const Color(0xFFF3F5EA),
                     const Color(0xFFE7ECDF),
                   ],
@@ -287,8 +289,8 @@ class _Watch3DViewState extends State<Watch3DView>
           border: Border.all(
             color: isCalibrating
                 ? (c.magCalPhase == MagCalPhase.readyToFinish
-                      ? AppPalette.mint
-                      : const Color(0xFFF5B759))
+                      ? colors.accent
+                      : colors.warning)
                 : Theme.of(context).colorScheme.outlineVariant,
           ),
           borderRadius: BorderRadius.circular(
@@ -377,14 +379,14 @@ class _Watch3DViewState extends State<Watch3DView>
     double pitch,
     double heading,
   ) {
+    final colors = context.appColors;
+    final scheme = Theme.of(context).colorScheme;
     final badgeBg = (dark ? const Color(0xFF0A0F10) : const Color(0xFFFCFCF6))
-        .withValues(alpha: 0.78);
-    final subtleBorder = Theme.of(context).colorScheme.outlineVariant;
-    final textPrimary = dark ? AppPalette.warmWhite : AppPalette.ink;
-    final textSecondary = dark
-        ? AppPalette.muted
-        : Theme.of(context).colorScheme.onSurfaceVariant;
-    final accent = dark ? AppPalette.mint : AppPalette.mintDeep;
+        .withValues(alpha: 0.84);
+    final subtleBorder = scheme.outlineVariant;
+    final textPrimary = colors.heroTextPrimary;
+    final textSecondary = colors.heroTextSecondary;
+    final accent = colors.accent;
 
     if (widget.mode == Watch3DMode.heroCompact) {
       return Padding(
@@ -490,7 +492,7 @@ class _Watch3DViewState extends State<Watch3DView>
                             color: c.liveSensor
                                 ? accent
                                 : (c.demoStreaming
-                                      ? const Color(0xFFF5B759)
+                                      ? colors.warning
                                       : textSecondary),
                           ),
                         ),
@@ -1015,9 +1017,10 @@ class _Watch3DPainter extends CustomPainter {
       return Offset(cx + vx * k, cy - vy * k);
     }
 
+    final warnColor = dark ? const Color(0xFFF5B759) : const Color(0xFFB4690E);
     final ringColor =
         (calPhase == MagCalPhase.calibrating
-                ? const Color(0xFFF5B759)
+                ? warnColor
                 : (dark ? AppPalette.mint : AppPalette.mintDeep))
             .withValues(alpha: dark ? 0.30 : 0.25);
     final ringPaint = Paint()
@@ -1100,7 +1103,9 @@ class _Watch3DPainter extends CustomPainter {
   ) {
     final ready = calPhase == MagCalPhase.readyToFinish;
     final pulse = 0.55 + 0.45 * math.sin(pulsePhase * 4.2);
-    final ringColor = (ready ? AppPalette.mint : const Color(0xFFF5B759))
+    final accentColor = dark ? AppPalette.mint : AppPalette.mintDeep;
+    final warnColor = dark ? const Color(0xFFF5B759) : const Color(0xFFB4690E);
+    final ringColor = (ready ? accentColor : warnColor)
         .withValues(alpha: 0.35 + 0.35 * pulse);
     const radius = 0.058;
     const perspK = 2.4;

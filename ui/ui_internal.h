@@ -11,6 +11,7 @@ void ui_trace_emit(const char *message);
 
 void ui_mem_init(void);
 void *ui_mem_alloc(uint32_t size, uint32_t align);
+void *ui_mem_alloc_top(uint32_t size, uint32_t align);
 void ui_mem_free(void *ptr);
 uint32_t ui_mem_avail(void);
 

@@ -222,4 +222,73 @@ void main() {
     await session.dispose();
     fake.close();
   });
+
+  test('sendExtBlob 分块整包串行化，不与并发命令交叉', () async {
+    final fake = FakeTransport();
+    final session = WatchSession(
+      transportFactory: (_, _, _) => fake,
+      enableTelemetry: false,
+    );
+    await session.connect(type: TransportType.spp, address: 'TEST');
+    await pumpEventQueue();
+    fake.sent.clear();
+
+    final blob = Uint8List.fromList(List<int>.generate(300, (i) => i & 0xFF));
+    final uploadFuture = session.sendExtBlob(assetId: 3, blob: blob);
+    final sportFuture = session.requestSport();
+
+    expect(await uploadFuture, isTrue);
+    expect(await sportFuture, isTrue);
+    expect(
+      fake.sent.map((frame) => frame[1]).toList(),
+      <int>[
+        WatchCmd.extAsset,
+        WatchCmd.extAsset,
+        WatchCmd.extAsset,
+        WatchCmd.sport,
+      ],
+    );
+
+    await session.dispose();
+    await fake.close();
+  });
+
+  test('pushRichNotification 发送完整点阵序列并整包串行', () async {
+    final fake = FakeTransport();
+    final session = WatchSession(
+      transportFactory: (_, _, _) => fake,
+      enableTelemetry: false,
+    );
+    await session.connect(type: TransportType.spp, address: 'TEST');
+    await pumpEventQueue();
+    fake.sent.clear();
+
+    final rowBytes = Uint8List(352);
+    final detailBytes = Uint8List(2560);
+    final pushFuture = session.pushRichNotification(
+      rowBytes: rowBytes,
+      detailBytes: detailBytes,
+      count: 2,
+      vibrate: true,
+    );
+    final sportFuture = session.requestSport();
+
+    expect(await pushFuture, isTrue);
+    expect(await sportFuture, isTrue);
+
+    final cmds = fake.sent.map((f) => f[1]).toList();
+    // 1x extOp(0x01) + 3x extOp(0x02 row) + 20x maskRle(0x26) + 1x extOp(0x00) + 1x sport
+    expect(cmds.length, 1 + 3 + 20 + 1 + 1);
+    expect(cmds.first, WatchCmd.extOp);
+    expect(fake.sent.first[3], 0x01);
+    expect(cmds[1], WatchCmd.extOp);
+    expect(fake.sent[1][3], 0x02);
+    expect(cmds[4], WatchCmd.maskRle);
+    expect(cmds[24], WatchCmd.extOp);
+    expect(fake.sent[24][3], 0x00);
+    expect(cmds.last, WatchCmd.sport);
+
+    await session.dispose();
+    await fake.close();
+  });
 }

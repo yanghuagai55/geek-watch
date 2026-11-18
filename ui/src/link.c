@@ -97,7 +97,6 @@ enum {
     DYN_NONE = 0,
     DYN_MEDIA = 1,
     DYN_MSG_LIST = 2,
-    DYN_MSG_DETAIL = 3,
     DYN_COMPASS = 4,
     DYN_COMPASS3D = 5,
     DYN_ABOUT = 6,
@@ -171,12 +170,18 @@ static struct {
     uint16_t dyn_cap;
     uint8_t dyn_kind;
     uint8_t *rx_row;
-    uint8_t *rx_det;
     uint8_t *rx_asset;
     uint16_t rx_asset_need;
     uint16_t rx_asset_crc;
     uint16_t rx_asset_off;
     uint8_t rx_asset_id;
+    uint16_t det_stage_off;
+    uint16_t det_stage_pos;
+    uint16_t msg_det_gen;
+    uint32_t msg_det_valid_mask;
+    uint8_t det_stage_slot;
+    uint8_t det_stage_chunk;
+    uint8_t det_stage_ok;
     uint8_t *c3d_buf;
     uint16_t c3d_entry;
     uint16_t c3d_total;
@@ -207,7 +212,6 @@ static struct {
     uint16_t load_crc;
     uint16_t load_entry;
     uint8_t load_kind;
-    uint8_t rx_det_slot;
     uint8_t list_target_n;
     uint16_t media_staging_off;
     uint8_t media_staging_ok;
@@ -226,8 +230,6 @@ static struct {
     int msg_list_ready;
     int msg_list_loading;
     int msg_list_empty;
-    int msg_detail_ready;
-    int msg_detail_loading;
     uint32_t last_rx_ms;
     int playing;
     int bright;
@@ -408,6 +410,11 @@ static int ext_collect_blks(ext_blk_t *blks, int cap) {
             blks[n++] = lk.ext_dir.blks[i];
         }
     }
+    if (lk.det_stage_off > 0u && n < cap) {
+        blks[n].off = lk.det_stage_off;
+        blks[n].len = 42u + LINK_MASK_BYTES;
+        n++;
+    }
     for (i = 1; i < n; i++) {
         ext_blk_t key = blks[i];
         j = i - 1;
@@ -463,7 +470,7 @@ static int blk_ok(uint16_t off, uint16_t blen) {
 static int ext_pool_alloc_ex(uint16_t need, int top_down,
                              uint16_t *out_off, uint16_t *free_max_out) {
     for (;;) {
-        ext_blk_t blks[EXT_BLK_TOTAL];
+        ext_blk_t blks[EXT_BLK_TOTAL + 1];
         int n = ext_collect_blks(blks, (int)(sizeof blks / sizeof blks[0]));
         uint16_t cursor = 0u;
         uint16_t best = 0u;
@@ -512,6 +519,7 @@ static int ext_pool_alloc_ex(uint16_t need, int top_down,
             return 0;
         }
         lk.ext_dir.msg_count--;
+        lk.msg_det_valid_mask &= ~(1u << lk.ext_dir.msg_count);
         memset(&lk.ext_dir.blks[EXT_BLK_MSG0 + (int)lk.ext_dir.msg_count * 2], 0, 2 * sizeof(ext_blk_t));
         ui_app_set_message_count(lk.ext_dir.msg_count);
     }
@@ -716,7 +724,7 @@ static int ext_load_blob(uint16_t off, uint16_t blen, uint8_t *dst, uint16_t raw
     return out == raw_len;
 }
 
-static void ext_save_msg_blob(int slot, int is_det, const uint8_t *raw, uint16_t raw_len) {
+static void ext_save_msg_row(int slot, const uint8_t *row352) {
     ext_blk_t *blk;
 
     if (slot < 0 || slot >= LINK_EXT_MSG_MAX) {
@@ -725,28 +733,16 @@ static void ext_save_msg_blob(int slot, int is_det, const uint8_t *raw, uint16_t
     if (slot >= (int)lk.ext_dir.msg_count) {
         lk.ext_dir.msg_count = (uint8_t)(slot + 1);
     }
-    blk = &lk.ext_dir.blks[EXT_BLK_MSG0 + slot * 2 + (is_det ? 1 : 0)];
+    blk = &lk.ext_dir.blks[EXT_BLK_MSG0 + slot * 2];
     blk->off = 0u;
     blk->len = 0u;
-    (void)ext_store_blob(raw, raw_len, 1, &blk->off, &blk->len);
-}
-
-static void ext_save_msg_row(int slot, const uint8_t *row352) {
-    ext_save_msg_blob(slot, 0, row352, LINK_ROW_BYTES);
-}
-
-static void ext_save_msg_det(int slot, const uint8_t *det2560) {
-    ext_save_msg_blob(slot, 1, det2560, LINK_MASK_BYTES);
+    (void)ext_store_blob(row352, LINK_ROW_BYTES, 1, &blk->off, &blk->len);
 }
 
 static void free_rx_scratch(void) {
     if (lk.rx_row) {
         ui_mem_free(lk.rx_row);
         lk.rx_row = 0;
-    }
-    if (lk.rx_det) {
-        ui_mem_free(lk.rx_det);
-        lk.rx_det = 0;
     }
     if (lk.rx_asset) {
         ui_mem_free(lk.rx_asset);
@@ -914,10 +910,14 @@ void link_clear_ext_messages(void) {
     lk.msg_list_ready = 0;
     lk.msg_list_loading = 0;
     lk.msg_list_empty = 1;
-    lk.msg_detail_ready = 0;
-    lk.msg_detail_loading = 0;
+    lk.msg_det_valid_mask = 0u;
+    lk.det_stage_off = 0u;
+    lk.det_stage_pos = 0u;
+    lk.det_stage_chunk = 0u;
+    lk.det_stage_ok = 0u;
+    lk.msg_det_gen++;
     free_rx_scratch();
-    if (lk.dyn_kind == DYN_MSG_LIST || lk.dyn_kind == DYN_MSG_DETAIL) {
+    if (lk.dyn_kind == DYN_MSG_LIST) {
         free_dyn_buf();
     }
     ext_dir_save();
@@ -933,6 +933,29 @@ static void validate_blk(uint16_t *off, uint16_t *blen) {
     }
 }
 
+static int det_strip_valid(const ext_blk_t *b) {
+    uint8_t h[42];
+    uint16_t prev = 0u;
+    int i;
+    if (!blk_ok(b->off, b->len) || b->len <= 42u) {
+        return 0;
+    }
+    if (!hal_ext_flash_read(LINK_EXT_OFF_POOL + (uint32_t)b->off, h, sizeof h)) {
+        return 0;
+    }
+    if (h[0] != 'S' || h[1] != '1') {
+        return 0;
+    }
+    for (i = 0; i < LINK_MSG_DETAIL_CHUNKS; i++) {
+        uint16_t e = u16_get(h + 2 + i * 2);
+        if (e <= prev || e - prev > LINK_BMP_CHUNK) {
+            return 0;
+        }
+        prev = e;
+    }
+    return (uint32_t)prev + 42u == (uint32_t)b->len;
+}
+
 void link_load_ext(void) {
     uint8_t rec[EXT_DIR_RECLEN];
     uint32_t seq0 = 0u, seq1 = 0u;
@@ -943,6 +966,11 @@ void link_load_ext(void) {
     memset(lk.win_row_id, 0xFF, sizeof lk.win_row_id);
     lk.about_ready = 0u;
     lk.hdr_ready = 0u;
+    lk.msg_det_valid_mask = 0u;
+    lk.det_stage_off = 0u;
+    lk.det_stage_pos = 0u;
+    lk.det_stage_chunk = 0u;
+    lk.det_stage_ok = 0u;
     free_hdr_buf();
     if (!hal_ext_flash_present()) {
         ui_app_set_message_count(0);
@@ -975,6 +1003,11 @@ void link_load_ext(void) {
             lk.ext_dir.blks[i].off = u16_get(rec + 10 + i * 4);
             lk.ext_dir.blks[i].len = u16_get(rec + 12 + i * 4);
             validate_blk(&lk.ext_dir.blks[i].off, &lk.ext_dir.blks[i].len);
+        }
+        for (i = 0; i < (int)lk.ext_dir.msg_count; i++) {
+            if (det_strip_valid(&lk.ext_dir.blks[EXT_BLK_MSG0 + i * 2 + 1])) {
+                lk.msg_det_valid_mask |= (1u << i);
+            }
         }
         for (i = EXT_BLK_ASSET0; i < EXT_BLK_TOTAL; i++) {
             lk.ext_dir.blks[i].off = u16_get(rec + 10 + i * 4);
@@ -1018,11 +1051,33 @@ static uint8_t *ensure_dyn_buf(uint8_t kind, uint16_t size) {
         free_c3d_buf();
         lk.dyn_buf = (uint8_t *)ui_mem_alloc(size, 4);
     }
+    if (!lk.dyn_buf) {
+        /* 碎片化时只释放可重建的字模小缓存/非当前音乐模块，绝不驱逐 SHD1 标题字库。 */
+        font_cache_free();
+        if (kind != DYN_MUSIC) {
+            free_music_buf();
+        }
+        lk.dyn_buf = (uint8_t *)ui_mem_alloc(size, 4);
+    }
     if (lk.dyn_buf) {
         lk.dyn_cap = size;
         lk.dyn_kind = kind;
     }
     return lk.dyn_buf;
+}
+
+static uint8_t *alloc_rx_scratch(uint16_t size) {
+    uint8_t *buf = (uint8_t *)ui_mem_alloc(size, 4);
+    if (!buf) {
+        font_cache_free();
+        free_c3d_buf();
+        free_music_buf();
+        if (lk.dyn_kind != DYN_MSG_LIST) {
+            free_dyn_buf();
+        }
+        buf = (uint8_t *)ui_mem_alloc(size, 4);
+    }
+    return buf;
 }
 
 static void expand_media_row_chunk(uint8_t *media_dst, uint8_t chunk, const uint8_t *src) {
@@ -1101,6 +1156,10 @@ static int begin_pic_load(int blk_idx, uint32_t magic, uint8_t dyn_kind, uint16_
     if (dyn_kind == DYN_COMPASS3D) {
         free_c3d_buf();
         buf = (uint8_t *)ui_mem_alloc(total, 4);
+        if (!buf) {
+            font_cache_free();
+            buf = (uint8_t *)ui_mem_alloc(total, 4);
+        }
         if (!buf) {
             free_dyn_buf();
             buf = (uint8_t *)ui_mem_alloc(total, 4);
@@ -1376,10 +1435,7 @@ void link_leave_music(void) {
     send_ext_pool_state();
 }
 
-void link_request_messages(void) {
-    lk.msg_detail_ready = 0;
-    lk.msg_detail_loading = 0;
-    lk.media_mask_ready = 0;
+static int try_load_msg_list_buf(void) {
     if (lk.ext_dir.msg_count > 0u && !lk.msg_list_empty && hal_ext_flash_present()) {
         uint8_t *buf = ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
         if (buf) {
@@ -1387,9 +1443,45 @@ void link_request_messages(void) {
             ui_app_set_message_count(lk.ext_dir.msg_count);
             lk.msg_list_ready = 1;
             lk.msg_list_loading = 0;
-            send_empty(LINK_MSG_LIST_REQ);
-            return;
+            return 1;
         }
+    }
+    return 0;
+}
+
+void link_restore_msg_list(void) {
+    if (lk.rx_row) {
+        return;
+    }
+    if (lk.dyn_kind == DYN_MSG_LIST && lk.dyn_buf && lk.msg_list_ready) {
+        return;
+    }
+    if (try_load_msg_list_buf()) {
+        ui_draw_invalidate();
+    }
+}
+
+void link_select_message_detail(int index) {
+    if (index < 0) {
+        index = 0;
+    }
+    if (index >= LINK_EXT_MSG_MAX) {
+        index = LINK_EXT_MSG_MAX - 1;
+    }
+    lk.detail_slot = (uint8_t)index;
+}
+
+void link_request_messages(void) {
+    lk.media_mask_ready = 0;
+    if (lk.dyn_kind == DYN_MSG_LIST && lk.dyn_buf && lk.msg_list_ready) {
+        lk.msg_list_loading = 0;
+        lk.msg_list_empty = 0;
+        send_empty(LINK_MSG_LIST_REQ);
+        return;
+    }
+    if (try_load_msg_list_buf()) {
+        send_empty(LINK_MSG_LIST_REQ);
+        return;
     }
     if (lk.dyn_kind != DYN_MSG_LIST) {
         free_dyn_buf();
@@ -1402,36 +1494,10 @@ void link_request_messages(void) {
 
 void link_request_message_detail(int index) {
     uint8_t frame[5];
-    if (index < 0) {
-        index = 0;
-    }
-    if (index >= LINK_EXT_MSG_MAX) {
-        index = LINK_EXT_MSG_MAX - 1;
-    }
-    lk.detail_slot = (uint8_t)index;
-    lk.msg_list_ready = 0;
-    lk.msg_list_loading = 0;
-    lk.media_mask_ready = 0;
-    if (index < (int)lk.ext_dir.msg_count &&
-        lk.ext_dir.blks[EXT_BLK_MSG0 + index * 2 + 1].len > 0u &&
-        hal_ext_flash_present()) {
-        uint8_t *buf = ensure_dyn_buf(DYN_MSG_DETAIL, LINK_MASK_BYTES);
-        if (buf && ext_load_blob(lk.ext_dir.blks[EXT_BLK_MSG0 + index * 2 + 1].off,
-                                 lk.ext_dir.blks[EXT_BLK_MSG0 + index * 2 + 1].len,
-                                 buf, LINK_MASK_BYTES)) {
-            lk.msg_detail_ready = 1;
-            lk.msg_detail_loading = 0;
-            goto send_req;
-        }
-    }
-    if (lk.dyn_kind != DYN_MSG_DETAIL) {
-        free_dyn_buf();
-    }
-    lk.msg_detail_ready = 0;
-    lk.msg_detail_loading = 1;
-send_req:
+
+    link_select_message_detail(index);
     frame[1] = LINK_MSG_DETAIL_REQ;
-    frame[3] = (uint8_t)index;
+    frame[3] = lk.detail_slot;
     send_frame_buf(frame, 1u);
 }
 
@@ -1439,12 +1505,15 @@ void link_leave_messages(void) {
     lk.msg_list_ready = 0;
     lk.msg_list_loading = 0;
     lk.msg_list_empty = 0;
-    lk.msg_detail_ready = 0;
-    lk.msg_detail_loading = 0;
+    lk.det_stage_off = 0u;
+    lk.det_stage_pos = 0u;
+    lk.det_stage_chunk = 0u;
+    lk.det_stage_ok = 0u;
     free_rx_scratch();
-    if (lk.dyn_kind == DYN_MSG_LIST || lk.dyn_kind == DYN_MSG_DETAIL) {
+    if (lk.dyn_kind == DYN_MSG_LIST) {
         free_dyn_buf();
     }
+    font_cache_free();
     send_empty(LINK_MSG_LEAVE);
 }
 
@@ -1467,8 +1536,6 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
         lk.msg_list_ready = 0;
         lk.msg_list_loading = 0;
         lk.msg_list_empty = 0;
-        lk.msg_detail_ready = 0;
-        lk.msg_detail_loading = 0;
     }
     if (lk.media_staging_ok) {
         (void)hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.media_staging_off +
@@ -1494,7 +1561,7 @@ static void mask_chunk(uint8_t chunk, const uint8_t *src, int n) {
 static void rx_row_finish(uint8_t row_idx) {
     if (row_idx < LINK_EXT_MSG_MAX) {
         ext_save_msg_row((int)row_idx, lk.rx_row);
-        if (lk.dyn_kind == DYN_MSG_LIST && lk.dyn_buf) {
+        if (lk.dyn_kind == DYN_MSG_LIST && lk.dyn_buf && !ui_app_message_stack_busy()) {
             uint8_t ws = (uint8_t)(row_idx % LINK_LIST_WIN_ROWS);
             memcpy(lk.dyn_buf + ws * LINK_ROW_BYTES, lk.rx_row, LINK_ROW_BYTES);
             lk.win_row_id[ws] = row_idx;
@@ -1511,7 +1578,7 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
     if (n < LINK_BMP_CHUNK) {
         return;
     }
-    if (lk.dyn_kind == DYN_MSG_DETAIL && ui_app_message_active()) {
+    if (ui_app_message_active() == UI_MENU_CHILD) {
         return;
     }
     if (chunk == 0) {
@@ -1520,15 +1587,15 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
         }
         lk.msg_list_empty = 0;
         if (ui_app_message_active() == UI_MENU_LIST) {
-            lk.msg_list_ready = 0;
-            lk.msg_list_loading = 1;
-            lk.msg_detail_ready = 0;
-            lk.msg_detail_loading = 0;
             lk.media_mask_ready = 0;
-            (void)ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
+            if (!lk.dyn_buf || lk.dyn_kind != DYN_MSG_LIST) {
+                lk.msg_list_ready = 0;
+                lk.msg_list_loading = 1;
+                (void)ensure_dyn_buf(DYN_MSG_LIST, LINK_LIST_BYTES);
+            }
         }
         if (!lk.rx_row) {
-            lk.rx_row = (uint8_t *)ui_mem_alloc(LINK_ROW_BYTES, 4);
+            lk.rx_row = alloc_rx_scratch(LINK_ROW_BYTES);
         }
     }
     count = lk.list_target_n ? lk.list_target_n : 5u;
@@ -1582,50 +1649,72 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
     }
 }
 
-/* 128x160 详情图，1bpp，20 块；压缩后动态存入 AT24C256（支持 0..19 槽位）。 */
+/* 128x160 详情图，1bpp，20 块；流式分块 PackBits 直接落盘 AT24C256（零 RAM 缓冲，支持 0..19 槽位）。 */
 static void msg_detail_slot_chunk(uint8_t slot, uint8_t chunk, const uint8_t *src, int n) {
-    uint8_t *buf = 0;
-    int active_view = (ui_app_message_active() == UI_MENU_CHILD) && slot == lk.detail_slot;
+    uint16_t comp_n, store_n, end_off;
+    uint8_t idx[2];
+    int ok = 1;
 
-    if (slot >= LINK_EXT_MSG_MAX || chunk >= LINK_MSG_DETAIL_CHUNKS || n < LINK_BMP_CHUNK) {
+    if (slot >= LINK_EXT_MSG_MAX || chunk >= LINK_MSG_DETAIL_CHUNKS ||
+        n < LINK_BMP_CHUNK || !hal_ext_flash_present()) {
         return;
     }
-    if (active_view) {
-        if (chunk == 0) {
-            lk.msg_detail_ready = 0;
-            lk.msg_detail_loading = 1;
-            lk.msg_list_ready = 0;
-            lk.msg_list_loading = 0;
-            lk.msg_list_empty = 0;
-            lk.media_mask_ready = 0;
+    if (chunk == 0u) {
+        uint8_t magic[2] = { 'S', '1' };
+        lk.det_stage_ok = 0u;
+        if (!lk.det_stage_off &&
+            !ext_pool_alloc(42u + LINK_MASK_BYTES, 1, &lk.det_stage_off)) {
+            return;
         }
-        buf = ensure_dyn_buf(DYN_MSG_DETAIL, LINK_MASK_BYTES);
+        if (!hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.det_stage_off, magic, 2u)) {
+            lk.det_stage_off = 0u;
+            return;
+        }
+        lk.det_stage_slot = slot;
+        lk.det_stage_chunk = 0u;
+        lk.det_stage_pos = 42u;
+        lk.det_stage_ok = 1u;
+    }
+    if (!lk.det_stage_ok || !lk.det_stage_off ||
+        lk.det_stage_slot != slot || lk.det_stage_chunk != chunk) {
+        return;
+    }
+    comp_n = packbits_stream(src, LINK_BMP_CHUNK, 0, 0u, 0);
+    store_n = (comp_n > 0u && comp_n < LINK_BMP_CHUNK) ? comp_n : LINK_BMP_CHUNK;
+    if (store_n < LINK_BMP_CHUNK) {
+        (void)packbits_stream(src, LINK_BMP_CHUNK, 1,
+                              (uint16_t)(lk.det_stage_off + lk.det_stage_pos), &ok);
     } else {
-        if (chunk == 0) {
-            if (lk.rx_det) {
-                ui_mem_free(lk.rx_det);
-                lk.rx_det = 0;
-            }
-            lk.rx_det = (uint8_t *)ui_mem_alloc(LINK_MASK_BYTES, 4);
-            lk.rx_det_slot = slot;
-        }
-        if (lk.rx_det_slot == slot) {
-            buf = lk.rx_det;
-        }
+        ok = hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.det_stage_off + lk.det_stage_pos,
+                                 src, LINK_BMP_CHUNK);
     }
-    if (!buf) {
+    end_off = (uint16_t)(lk.det_stage_pos + store_n - 42u);
+    u16_put(idx, end_off);
+    if (!ok || !hal_ext_flash_write(LINK_EXT_OFF_POOL + (uint32_t)lk.det_stage_off + 2u + (uint32_t)chunk * 2u,
+                                    idx, 2u)) {
+        lk.det_stage_ok = 0u;
+        lk.det_stage_off = 0u;
         return;
     }
-    memcpy(buf + chunk * LINK_BMP_CHUNK, src, LINK_BMP_CHUNK);
+    lk.det_stage_pos = (uint16_t)(lk.det_stage_pos + store_n);
+    lk.det_stage_chunk++;
     if (chunk == LINK_MSG_DETAIL_CHUNKS - 1) {
-        ext_save_msg_det((int)slot, buf);
+        ext_blk_t *blk;
+        if (slot >= (int)lk.ext_dir.msg_count) {
+            lk.ext_dir.msg_count = (uint8_t)(slot + 1);
+        }
+        blk = &lk.ext_dir.blks[EXT_BLK_MSG0 + (int)slot * 2 + 1];
+        blk->off = lk.det_stage_off;
+        blk->len = lk.det_stage_pos;
+        lk.msg_det_valid_mask |= (1u << slot);
+        lk.msg_det_gen++;
+        lk.det_stage_off = 0u;
+        lk.det_stage_pos = 0u;
+        lk.det_stage_chunk = 0u;
+        lk.det_stage_ok = 0u;
         ext_dir_save();
-        if (active_view) {
-            lk.msg_detail_ready = 1;
-            lk.msg_detail_loading = 0;
-        } else {
-            ui_mem_free(lk.rx_det);
-            lk.rx_det = 0;
+        if (ui_app_message_active() == UI_MENU_CHILD && slot == lk.detail_slot) {
+            ui_draw_invalidate();
         }
     }
 }
@@ -1919,14 +2008,16 @@ static void apply_frame(void) {
         }
         break;
     case LINK_MSG:
+        if (l >= 1) {
 #if !defined(AT32_SLIM_ROM)
-        if (l >= 1 && p[0] < LINK_MSG_N) {
-            copy_text(msgs[p[0]], LINK_MSG_LEN, p + 1, l - 1);
+            if (p[0] < LINK_MSG_N) {
+                copy_text(msgs[p[0]], LINK_MSG_LEN, p + 1, l - 1);
+            }
+#endif
             if (settings_get()->key_beep) {
                 hal_beep(HAL_VIB_SMS, 70u);
             }
         }
-#endif
         break;
     case LINK_BMP:
         if (l == 1 + LINK_BMP_CHUNK) {
@@ -2026,17 +2117,26 @@ static void apply_frame(void) {
                 if (l >= 2 && p[1] > 0u && p[1] < lk.ext_dir.msg_count) {
                     lk.ext_dir.msg_count = p[1];
                 }
+                lk.msg_det_valid_mask = (lk.msg_det_valid_mask << 1) & ((1u << lk.ext_dir.msg_count) - 1u);
+                lk.det_stage_off = 0u;
+                lk.det_stage_pos = 0u;
+                lk.det_stage_chunk = 0u;
+                lk.det_stage_ok = 0u;
+                if (ui_app_message_active() == UI_MENU_CHILD &&
+                    lk.detail_slot + 1u < lk.ext_dir.msg_count) {
+                    lk.detail_slot++;
+                }
                 lk.msg_list_empty = 0;
                 memset(lk.win_row_id, 0xFF, sizeof lk.win_row_id);
                 ui_app_set_message_count(lk.ext_dir.msg_count);
-                ext_dir_save();
-                if (settings_get()->key_beep) {
+                if ((l < 3 || p[2] != 0u) && settings_get()->key_beep) {
                     hal_beep(HAL_VIB_SMS, 70u);
                 }
+                ext_dir_save();
             } else if (p[0] == 2u && l >= 3) {
                 uint16_t off = (uint16_t)p[1] * LINK_BMP_CHUNK;
                 if (p[1] == 0u && !lk.rx_row) {
-                    lk.rx_row = (uint8_t *)ui_mem_alloc(LINK_ROW_BYTES, 4);
+                    lk.rx_row = alloc_rx_scratch(LINK_ROW_BYTES);
                 }
                 if (lk.rx_row && off < LINK_ROW_BYTES) {
                     uint16_t cp = (uint16_t)(l - 2);
@@ -2059,6 +2159,10 @@ static void apply_frame(void) {
                         ui_app_set_message_count(lk.ext_dir.msg_count);
                         ui_draw_invalidate();
                     }
+                }
+            } else if (p[0] == 3u) {
+                if (settings_get()->key_beep) {
+                    hal_beep(HAL_VIB_SMS, 70u);
                 }
             }
         }
@@ -2479,32 +2583,51 @@ const uint8_t *link_msg_list_mask(void) {
 }
 
 const uint8_t *link_msg_row_mask(int index) {
+    uint8_t *buf = (lk.dyn_kind == DYN_MSG_LIST) ? lk.dyn_buf : 0;
     uint8_t ws;
 
-    if (lk.dyn_kind != DYN_MSG_LIST || !lk.dyn_buf ||
-        index < 0 || index >= (int)lk.ext_dir.msg_count) {
+    if (!buf || index < 0 || index >= (int)lk.ext_dir.msg_count) {
         return 0;
     }
     ws = (uint8_t)(index % LINK_LIST_WIN_ROWS);
     if (lk.win_row_id[ws] == (uint8_t)index) {
-        return lk.dyn_buf + ws * LINK_ROW_BYTES;
+        return buf + ws * LINK_ROW_BYTES;
     }
     if (lk.ext_dir.blks[EXT_BLK_MSG0 + index * 2].len > 0u &&
         ext_load_blob(lk.ext_dir.blks[EXT_BLK_MSG0 + index * 2].off,
                       lk.ext_dir.blks[EXT_BLK_MSG0 + index * 2].len,
-                      lk.dyn_buf + ws * LINK_ROW_BYTES, LINK_ROW_BYTES)) {
+                      buf + ws * LINK_ROW_BYTES, LINK_ROW_BYTES)) {
         lk.win_row_id[ws] = (uint8_t)index;
-        return lk.dyn_buf + ws * LINK_ROW_BYTES;
+        return buf + ws * LINK_ROW_BYTES;
     }
     return 0;
 }
 
 int link_msg_detail_ready(void) {
-    return lk.msg_detail_ready && lk.dyn_buf && lk.dyn_kind == DYN_MSG_DETAIL;
+    const ext_blk_t *b;
+    if (lk.detail_slot >= lk.ext_dir.msg_count || !hal_ext_flash_present()) {
+        return 0;
+    }
+    if (((lk.msg_det_valid_mask >> lk.detail_slot) & 1u) == 0u) {
+        return 0;
+    }
+    b = &lk.ext_dir.blks[EXT_BLK_MSG0 + (int)lk.detail_slot * 2 + 1];
+    return blk_ok(b->off, b->len) && b->len > 42u;
 }
 
-const uint8_t *link_msg_detail_mask(void) {
-    return (lk.dyn_buf && lk.dyn_kind == DYN_MSG_DETAIL) ? lk.dyn_buf : 0;
+int link_msg_detail_ext(uint32_t *abs_off, uint16_t *gen) {
+    const ext_blk_t *b;
+    if (!link_msg_detail_ready()) {
+        return 0;
+    }
+    b = &lk.ext_dir.blks[EXT_BLK_MSG0 + (int)lk.detail_slot * 2 + 1];
+    if (abs_off) {
+        *abs_off = LINK_EXT_OFF_POOL + (uint32_t)b->off;
+    }
+    if (gen) {
+        *gen = lk.msg_det_gen;
+    }
+    return 1;
 }
 
 int link_img_preview_ready(void) {
@@ -2612,14 +2735,13 @@ void link_media_prev(void) {
     send_ctrl(ACT_PREV);
 }
 
-/* SHD1 标题缓存按需分配：只有真的查到片外标题字时才占 1.6KB，
-   避免它常驻把主菜单 SYS1（2.7KB）和运动 SPR1（3.4KB）挤碎。 */
+/* SHD1 标题缓存固定从 RAM 池顶端向下分配：与底端页面模块背靠背，避免碎片且绝不被页面数据驱逐。 */
 static void hdr_ensure(void) {
     if (!lk.hdr_ready || !hal_ext_flash_present()) {
         return;
     }
     if (!lk.hdr_buf) {
-        lk.hdr_buf = (uint8_t *)ui_mem_alloc(HDR_BUF_BYTES, 4);
+        lk.hdr_buf = (uint8_t *)ui_mem_alloc_top(HDR_BUF_BYTES, 4);
         if (!lk.hdr_buf) {
             return;
         }
@@ -2749,9 +2871,8 @@ static void pic_dyn_begin(uint8_t blk_id, uint32_t magic, uint8_t kind, uint16_t
         (lk.load_need > 0u || (lk.pic_ready_kind == kind && lk.pic_entry >= 12u))) {
         return;
     }
-    if (!begin_pic_load(blk_id, magic, kind, max_bytes) && kind == DYN_SPORT) {
-        /* SPR1 需要 3.4KB 连续块；碎片化时先退掉标题/字模缓存再试。 */
-        free_hdr_buf();
+    if (!begin_pic_load(blk_id, magic, kind, max_bytes)) {
+        /* 碎片化时先清理可重读的小字模缓存再尝试一次，不破坏 SHD1 标题字库。 */
         font_cache_free();
         (void)begin_pic_load(blk_id, magic, kind, max_bytes);
     }

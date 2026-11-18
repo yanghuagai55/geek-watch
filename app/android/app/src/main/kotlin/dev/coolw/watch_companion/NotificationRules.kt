@@ -19,6 +19,7 @@ object NotificationRules {
     private const val KEY_MAX = "message_max"
     private const val KEY_MERGE = "message_merge"
     private const val KEY_APPS = "message_seen_apps"
+    private const val KEY_NOTIFY = "notification_forward"
 
     @Volatile
     var mode: String = MODE_ALL
@@ -36,28 +37,39 @@ object NotificationRules {
     var merge: Boolean = true
         private set
 
+    @Volatile
+    private var loaded = false
+
     private var prefs: SharedPreferences? = null
 
+    private fun store(context: Context): SharedPreferences =
+        prefs ?: context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .also { prefs = it }
+
+    @Synchronized
     fun load(context: Context) {
-        if (prefs != null) return
-        val store = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        prefs = store
+        val store = store(context)
+        if (loaded) return
+        loaded = true
         mode = if (store.getString(KEY_MODE, MODE_ALL) == MODE_SELECTED) {
             MODE_SELECTED
         } else {
             MODE_ALL
         }
         packages = store.getStringSet(KEY_PACKAGES, emptySet())?.toSet().orEmpty()
-        maxMessages = store.getInt(KEY_MAX, 10).coerceIn(1, 20)
+        maxMessages = store.getInt(KEY_MAX, 5).coerceIn(1, 20)
         merge = store.getBoolean(KEY_MERGE, true)
     }
 
+    @Synchronized
     fun update(
         mode: String,
         packages: Set<String>,
         maxMessages: Int,
         merge: Boolean,
     ) {
+        loaded = true
         this.mode = if (mode == MODE_SELECTED) MODE_SELECTED else MODE_ALL
         this.packages = packages.toSet()
         this.maxMessages = maxMessages.coerceIn(1, 20)
@@ -71,14 +83,18 @@ object NotificationRules {
     }
 
     /** 只有“仅选中应用”模式才按包名过滤。 */
+    @Synchronized
     fun allows(pkg: String): Boolean =
         mode != MODE_SELECTED || pkg in packages
 
+    fun isNotificationForwardEnabled(context: Context): Boolean =
+        store(context).getBoolean(KEY_NOTIFY, true)
+
     /** 记录通知栏出现过的应用，供勾选列表使用。 */
+    @Synchronized
     fun rememberApp(context: Context, pkg: String, label: String) {
-        val store = prefs ?: context
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .also { prefs = it }
+        load(context)
+        val store = store(context)
         val current = store
             .getStringSet(KEY_APPS, emptySet())
             ?.toMutableSet()
@@ -92,9 +108,9 @@ object NotificationRules {
         store.edit().putStringSet(KEY_APPS, current).apply()
     }
 
+    @Synchronized
     fun apps(context: Context): List<Map<String, String>> {
-        val store = prefs
-            ?: context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val store = store(context)
         return store.getStringSet(KEY_APPS, emptySet())
             .orEmpty()
             .mapNotNull { entry ->

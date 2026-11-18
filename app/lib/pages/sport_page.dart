@@ -16,6 +16,7 @@ class SportPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final synced = controller.sportSyncedAt;
     return PageScroll(
       children: [
@@ -30,148 +31,177 @@ class SportPage extends StatelessWidget {
                       : (synced == null ? '3D 预览' : '上次数据')),
             icon: Icons.view_in_ar_rounded,
             color: controller.liveSensor || controller.connected
-                ? null
+                ? colors.accent
                 : scheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 22),
+        const SizedBox(height: 20),
         LayoutBuilder(
           builder: (context, constraints) {
-            if (constraints.maxWidth >= 900) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: _TodayCard(controller: controller)),
-                  const SizedBox(width: 16),
-                  Expanded(child: _DistributionCard(controller: controller)),
-                ],
-              );
-            }
+            final twoCol = constraints.maxWidth >= 900;
+            final wideInner = constraints.maxWidth >= 620;
+            final stageWide = constraints.maxWidth >= 820;
             return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _TodayCard(controller: controller),
+                AlignedPair(
+                  wide: twoCol,
+                  leftFlex: 11,
+                  rightFlex: 10,
+                  left: _TodayCard(
+                    controller: controller,
+                    wide: twoCol ? false : wideInner,
+                    stretch: twoCol,
+                  ),
+                  right: _DistributionCard(
+                    controller: controller,
+                    stretch: twoCol,
+                  ),
+                ),
                 const SizedBox(height: 16),
-                _DistributionCard(controller: controller),
+                _AttitudeStageCard(
+                  controller: controller,
+                  wide: stageWide,
+                  fourColTelemetry: constraints.maxWidth >= 980,
+                ),
+                const SizedBox(height: 16),
+                _SourceCard(controller: controller, wide: wideInner),
               ],
             );
           },
         ),
-        const SizedBox(height: 16),
-        _AttitudeStageCard(controller: controller),
-        const SizedBox(height: 16),
-        _SourceCard(controller: controller),
       ],
     );
   }
 }
 
 class _AttitudeStageCard extends StatelessWidget {
-  const _AttitudeStageCard({required this.controller});
+  const _AttitudeStageCard({
+    required this.controller,
+    required this.wide,
+    required this.fourColTelemetry,
+  });
 
   final WatchController controller;
+  final bool wide;
+  final bool fourColTelemetry;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return AppCard(
-      padding: const EdgeInsets.all(20),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 780;
-          final viewport = Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
+    final colors = context.appColors;
+    final viewport = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: colors.accentContainer,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.threed_rotation_rounded,
+                size: 18,
+                color: colors.accent,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.threed_rotation_rounded,
-                    size: 18,
-                    color: scheme.primary,
+                  const Text(
+                    '3D 实时姿态大视图',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          '3D 实时姿态大视图',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        Text(
-                          controller.liveSensor
-                              ? '${controller.sensor?.magChip.isNotEmpty == true ? controller.sensor!.magChip : "QMC5883P"} · MPU6050'
-                              : '拖拽旋转 · 滚轮/按钮缩放',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
+                  Text(
+                    controller.liveSensor
+                        ? '${controller.sensor?.magChip.isNotEmpty == true ? controller.sensor!.magChip : "QMC5883P"} · MPU6050'
+                        : '拖拽旋转 · 滚轮/按钮缩放',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: wide ? 520 : 360),
-                  child: Watch3DView(
-                    key: const Key('sport-watch-3d-large'),
-                    controller: controller,
-                    mode: Watch3DMode.stageLarge,
-                    height: wide ? 320 : 248,
-                    onTapExpand: () => _openFullscreen3D(context, controller),
-                  ),
-                ),
+            ),
+            if (controller.connected) ...[
+              const SizedBox(width: 8),
+              StatusPill(
+                label: controller.sensorStreaming ? '采样中' : '已暂停',
+                icon: controller.sensorStreaming
+                    ? Icons.sensors_rounded
+                    : Icons.pause_circle_outline_rounded,
+                color: controller.sensorStreaming
+                    ? colors.accent
+                    : scheme.onSurfaceVariant,
+                onTap: () =>
+                    controller.setSensorStreaming(!controller.sensorStreaming),
               ),
-              const SizedBox(height: 12),
-              _TelemetryStrip(controller: controller),
             ],
-          );
+          ],
+        ),
+        const SizedBox(height: 14),
+        Watch3DView(
+          key: const Key('sport-watch-3d-large'),
+          controller: controller,
+          mode: Watch3DMode.stageLarge,
+          height: wide ? 336 : 248,
+          onTapExpand: () => _openFullscreen3D(context, controller),
+        ),
+        const SizedBox(height: 12),
+        _TelemetryStrip(
+          controller: controller,
+          fourCols: wide ? false : fourColTelemetry,
+        ),
+      ],
+    );
 
-          final calPanel = _Key2CalibrationPanel(controller: controller);
+    final calPanel = _Key2CalibrationPanel(controller: controller);
 
-          if (wide) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return AppCard(
+      padding: const EdgeInsets.all(20),
+      child: wide
+          ? IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 11, child: viewport),
+                  const SizedBox(width: 18),
+                  Expanded(flex: 10, child: calPanel),
+                ],
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(child: viewport),
-                const SizedBox(width: 18),
-                Expanded(child: calPanel),
+                viewport,
+                const SizedBox(height: 18),
+                calPanel,
               ],
-            );
-          }
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              viewport,
-              const SizedBox(height: 18),
-              calPanel,
-            ],
-          );
-        },
-      ),
+            ),
     );
   }
 }
 
 class _TelemetryStrip extends StatelessWidget {
-  const _TelemetryStrip({required this.controller});
+  const _TelemetryStrip({required this.controller, required this.fourCols});
 
   final WatchController controller;
+  final bool fourCols;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dark = scheme.brightness == Brightness.dark;
-    final tileBg = dark ? const Color(0xFF131B19) : const Color(0xFFF3F5EA);
+    final colors = context.appColors;
 
     final accText = '${controller.ax}, ${controller.ay}, ${controller.az} mg';
     final magText = '${controller.mx}, ${controller.my}, ${controller.mz} mG';
@@ -180,59 +210,76 @@ class _TelemetryStrip extends StatelessWidget {
         : '-- V';
 
     final tiles = [
-      ('Roll / Pitch / Heading',
-          '${controller.rollDeg.round()}° / ${controller.pitchDeg.round()}° / ${controller.headingDeg.round()}°'),
+      (
+        'Roll / Pitch / Heading',
+        '${controller.rollDeg.round()}° / ${controller.pitchDeg.round()}° / ${controller.headingDeg.round()}°',
+      ),
       ('加速度计 A', accText),
       ('磁力计 M', magText),
       ('融合 · 电量', '${controller.dofBadge} · $batText'),
     ];
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final cols = constraints.maxWidth >= 520 ? 4 : 2;
-        const gap = 8.0;
-        final w = (constraints.maxWidth - gap * (cols - 1)) / cols;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
+    Widget buildTile((String, String) item) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+        decoration: BoxDecoration(
+          color: colors.insetSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final item in tiles)
-              Container(
-                width: w,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: tileBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: scheme.outlineVariant),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.$1,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      item.$2,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
+            Text(
+              item.$1,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              item.$2,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
               ),
+            ),
           ],
-        );
-      },
+        ),
+      );
+    }
+
+    if (fourCols) {
+      return Row(
+        children: [
+          for (var i = 0; i < tiles.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(child: buildTile(tiles[i])),
+          ],
+        ],
+      );
+    }
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: buildTile(tiles[0])),
+            const SizedBox(width: 8),
+            Expanded(child: buildTile(tiles[1])),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: buildTile(tiles[2])),
+            const SizedBox(width: 8),
+            Expanded(child: buildTile(tiles[3])),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -245,23 +292,20 @@ class _Key2CalibrationPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dark = scheme.brightness == Brightness.dark;
+    final colors = context.appColors;
     final phase = controller.magCalPhase;
     final calActive =
         phase == MagCalPhase.calibrating || phase == MagCalPhase.readyToFinish;
     final ready = phase == MagCalPhase.readyToFinish;
     final done = phase == MagCalPhase.done;
 
-    const warnAmber = Color(0xFFF5B759);
-    final mint = dark ? AppPalette.mint : AppPalette.mintDeep;
+    final warnColor = colors.warning;
+    final mint = colors.accent;
     final borderColor = switch (phase) {
-      MagCalPhase.calibrating => warnAmber,
+      MagCalPhase.calibrating => warnColor,
       MagCalPhase.readyToFinish || MagCalPhase.done => mint,
       MagCalPhase.idle => scheme.outlineVariant,
     };
-    final bgColor = dark
-        ? const Color(0xFF131B19)
-        : const Color(0xFFF6F7EE);
 
     final statusTitle = switch (phase) {
       MagCalPhase.idle => 'KEY2 磁强计硬铁校准',
@@ -279,12 +323,9 @@ class _Key2CalibrationPanel extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: bgColor,
+        color: colors.insetSurface,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: borderColor,
-          width: calActive ? 1.5 : 1.0,
-        ),
+        border: Border.all(color: borderColor, width: calActive ? 1.5 : 1.0),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -296,7 +337,7 @@ class _Key2CalibrationPanel extends StatelessWidget {
                     ? Icons.verified_rounded
                     : (calActive ? Icons.explore_rounded : Icons.tune_rounded),
                 size: 18,
-                color: phase == MagCalPhase.calibrating ? warnAmber : mint,
+                color: phase == MagCalPhase.calibrating ? warnColor : mint,
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -308,9 +349,10 @@ class _Key2CalibrationPanel extends StatelessWidget {
                   ),
                 ),
               ),
+              const SizedBox(width: 6),
               StatusPill(
                 label: badgeLabel,
-                color: phase == MagCalPhase.calibrating ? warnAmber : mint,
+                color: phase == MagCalPhase.calibrating ? warnColor : mint,
               ),
             ],
           ),
@@ -346,6 +388,7 @@ class _Key2CalibrationPanel extends StatelessWidget {
             span: controller.magSpanX,
             target: WatchController.magSpanTarget,
             accent: mint,
+            warnColor: warnColor,
           ),
           const SizedBox(height: 6),
           _AxisSpanMeter(
@@ -353,6 +396,7 @@ class _Key2CalibrationPanel extends StatelessWidget {
             span: controller.magSpanY,
             target: WatchController.magSpanTarget,
             accent: mint,
+            warnColor: warnColor,
           ),
           const SizedBox(height: 6),
           _AxisSpanMeter(
@@ -360,6 +404,7 @@ class _Key2CalibrationPanel extends StatelessWidget {
             span: controller.magSpanZ,
             target: WatchController.magSpanTarget,
             accent: mint,
+            warnColor: warnColor,
           ),
           if (controller.calStatusNote != null) ...[
             const SizedBox(height: 10),
@@ -367,7 +412,9 @@ class _Key2CalibrationPanel extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: (calActive ? warnAmber : mint).withValues(alpha: 0.12),
+                color: calActive
+                    ? colors.warningContainer
+                    : colors.accentContainer,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
@@ -446,11 +493,10 @@ class _CalStepRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dark = scheme.brightness == Brightness.dark;
-    final mint = dark ? AppPalette.mint : AppPalette.mintDeep;
+    final colors = context.appColors;
     final badgeColor = done
-        ? mint
-        : (active ? const Color(0xFFF5B759) : scheme.onSurfaceVariant);
+        ? colors.accent
+        : (active ? colors.warning : scheme.onSurfaceVariant);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -461,7 +507,7 @@ class _CalStepRow extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: badgeColor.withValues(alpha: done || active ? 0.2 : 0.1),
+            color: badgeColor.withValues(alpha: done || active ? 0.18 : 0.1),
             border: Border.all(color: badgeColor),
           ),
           child: done
@@ -510,19 +556,21 @@ class _AxisSpanMeter extends StatelessWidget {
     required this.span,
     required this.target,
     required this.accent,
+    required this.warnColor,
   });
 
   final String axis;
   final int span;
   final int target;
   final Color accent;
+  final Color warnColor;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final ratio = (span / target).clamp(0.0, 1.0);
     final reached = span >= target;
-    final barColor = reached ? accent : const Color(0xFFF5B759);
+    final barColor = reached ? accent : warnColor;
 
     return Row(
       children: [
@@ -554,6 +602,7 @@ class _AxisSpanMeter extends StatelessWidget {
               fontSize: 10.5,
               fontWeight: FontWeight.w700,
               color: reached ? accent : scheme.onSurfaceVariant,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ),
@@ -581,8 +630,10 @@ Future<void> _openFullscreen3D(
           body: AnimatedBuilder(
             animation: controller,
             builder: (context, _) {
-              final dark = Theme.of(context).brightness == Brightness.dark;
-              final accent = dark ? AppPalette.mint : AppPalette.mintDeep;
+              final colors = context.appColors;
+              final calibrating =
+                  controller.magCalPhase == MagCalPhase.calibrating ||
+                  controller.magCalPhase == MagCalPhase.readyToFinish;
               return Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 child: Column(
@@ -598,14 +649,15 @@ Future<void> _openFullscreen3D(
                     Row(
                       children: [
                         StatusPill(
-                          label: controller.magCalPhase ==
+                          label:
+                              controller.magCalPhase ==
                                   MagCalPhase.readyToFinish
                               ? '按 KEY2 完成保存'
                               : (controller.magCalPhase ==
                                         MagCalPhase.calibrating
                                     ? '360° 采集中 · 按 KEY2 结束'
                                     : 'KEY2 磁力计校准'),
-                          color: accent,
+                          color: calibrating ? colors.warning : colors.accent,
                         ),
                         const Spacer(),
                         FilledButton.icon(
@@ -614,11 +666,7 @@ Future<void> _openFullscreen3D(
                               : () => controller.triggerKey2Calibration(),
                           icon: const Icon(Icons.touch_app_rounded, size: 17),
                           label: Text(
-                            controller.magCalPhase == MagCalPhase.calibrating ||
-                                    controller.magCalPhase ==
-                                        MagCalPhase.readyToFinish
-                                ? 'KEY2 完成校准'
-                                : 'KEY2 开始校准',
+                            calibrating ? 'KEY2 完成校准' : 'KEY2 开始校准',
                           ),
                         ),
                       ],
@@ -635,13 +683,20 @@ Future<void> _openFullscreen3D(
 }
 
 class _TodayCard extends StatelessWidget {
-  const _TodayCard({required this.controller});
+  const _TodayCard({
+    required this.controller,
+    required this.wide,
+    required this.stretch,
+  });
 
   final WatchController controller;
+  final bool wide;
+  final bool stretch;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final goal = controller.stepGoal > 0 ? controller.stepGoal : 8000;
     final ratio = (controller.steps / goal).clamp(0.0, 1.0);
     final synced = controller.sportSyncedAt;
@@ -650,208 +705,180 @@ class _TodayCard extends StatelessWidget {
         : '${synced.hour.toString().padLeft(2, '0')}:'
               '${synced.minute.toString().padLeft(2, '0')}';
     final syncedText = synced == null ? '尚未同步' : '上次同步 $clock';
+
+    final ring = SizedBox(
+      width: wide ? 140 : 118,
+      height: wide ? 140 : 118,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SizedBox.expand(
+            child: CircularProgressIndicator(
+              value: 1,
+              strokeWidth: 10,
+              color: scheme.outlineVariant.withValues(alpha: 0.55),
+            ),
+          ),
+          SizedBox.expand(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(end: ratio),
+              duration: const Duration(milliseconds: 600),
+              builder: (context, value, _) => SizedBox.expand(
+                child: CircularProgressIndicator(
+                  value: value,
+                  strokeWidth: 10,
+                  strokeCap: StrokeCap.round,
+                  color: colors.accent,
+                  backgroundColor: Colors.transparent,
+                ),
+              ),
+            ),
+          ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${(ratio * 100).round()}%',
+                style: TextStyle(
+                  fontFamily: AppFonts.latin,
+                  fontFamilyFallback: AppFonts.headingFallback,
+                  fontSize: wide ? 28 : 24,
+                  height: 1,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '目标完成',
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 9.5),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final info = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '今日步数',
+          style: TextStyle(
+            color: scheme.onSurfaceVariant,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Flexible(
+              child: Text(
+                '${controller.steps}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: AppFonts.latin,
+                  fontFamilyFallback: AppFonts.headingFallback,
+                  fontSize: wide ? 44 : 36,
+                  height: 1.05,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              '步',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                '/ $goal',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: ratio,
+            minHeight: 6,
+            backgroundColor: scheme.outlineVariant.withValues(alpha: 0.6),
+            color: colors.accent,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          controller.connected
+              ? '已完成 ${(ratio * 100).round()}% · '
+                    '${synced == null ? '等待手表数据' : '已同步 $clock'}'
+              : '$syncedText · 显示上次读数',
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10.5),
+        ),
+      ],
+    );
+
+    final stats = Row(
+      children: [
+        Expanded(
+          child: _SportStat(
+            icon: Icons.straighten_rounded,
+            label: '距离',
+            value: controller.distanceM >= 1000
+                ? (controller.distanceM / 1000).toStringAsFixed(2)
+                : '${controller.distanceM}',
+            unit: controller.distanceM >= 1000 ? 'km' : 'm',
+            color: colors.accent,
+          ),
+        ),
+        _StatDivider(color: scheme.outlineVariant),
+        Expanded(
+          child: _SportStat(
+            icon: Icons.local_fire_department_outlined,
+            label: '卡路里',
+            value: '${controller.calories}',
+            unit: 'kcal',
+            color: colors.warning,
+          ),
+        ),
+        _StatDivider(color: scheme.outlineVariant),
+        Expanded(
+          child: _SportStat(
+            icon: Icons.timer_outlined,
+            label: '活跃时长',
+            value: '${controller.activeMinutes}',
+            unit: '分钟',
+            color: colors.info,
+          ),
+        ),
+      ],
+    );
+
     return AppCard(
       padding: const EdgeInsets.all(22),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 620;
-          final ring = SizedBox(
-            width: wide ? 148 : 126,
-            height: wide ? 148 : 126,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox.expand(
-                  child: CircularProgressIndicator(
-                    value: 1,
-                    strokeWidth: 10,
-                    color: scheme.outlineVariant.withValues(alpha: 0.55),
-                  ),
-                ),
-                SizedBox.expand(
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(end: ratio),
-                    duration: const Duration(milliseconds: 600),
-                    builder: (context, value, _) => SizedBox.expand(
-                      child: CircularProgressIndicator(
-                        value: value,
-                        strokeWidth: 10,
-                        strokeCap: StrokeCap.round,
-                        color: scheme.primary,
-                        backgroundColor: Colors.transparent,
-                      ),
-                    ),
-                  ),
-                ),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '${(ratio * 100).round()}%',
-                      style: TextStyle(
-                        fontFamily: AppFonts.latin,
-                        fontFamilyFallback: AppFonts.headingFallback,
-                        fontSize: wide ? 30 : 26,
-                        height: 1,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      '目标完成',
-                      style: TextStyle(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 9.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-          final info = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
             children: [
-              Text(
-                '今日步数',
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Flexible(
-                    child: Text(
-                      '${controller.steps}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: AppFonts.latin,
-                        fontFamilyFallback: AppFonts.headingFallback,
-                        fontSize: wide ? 46 : 38,
-                        height: 1.05,
-                        fontWeight: FontWeight.w700,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    '步',
-                    style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      '/ $goal',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: LinearProgressIndicator(
-                  value: ratio,
-                  minHeight: 6,
-                  backgroundColor: scheme.outlineVariant.withValues(alpha: 0.6),
-                  color: scheme.primary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                controller.connected
-                    ? '已完成 ${(ratio * 100).round()}% · '
-                          '${synced == null ? '等待手表数据' : '已同步 $clock'}'
-                    : '$syncedText · 显示上次读数',
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 10.5,
-                ),
-              ),
+              ring,
+              SizedBox(width: wide ? 24 : 16),
+              Expanded(child: info),
             ],
-          );
-          final stats = Row(
-            children: [
-              Expanded(
-                child: _SportStat(
-                  icon: Icons.straighten_rounded,
-                  label: '距离',
-                  value: controller.distanceM >= 1000
-                      ? (controller.distanceM / 1000).toStringAsFixed(2)
-                      : '${controller.distanceM}',
-                  unit: controller.distanceM >= 1000 ? 'km' : 'm',
-                  color: scheme.primary,
-                ),
-              ),
-              _StatDivider(color: scheme.outlineVariant),
-              Expanded(
-                child: _SportStat(
-                  icon: Icons.local_fire_department_outlined,
-                  label: '卡路里',
-                  value: '${controller.calories}',
-                  unit: 'kcal',
-                  color: scheme.onSurface,
-                ),
-              ),
-              _StatDivider(color: scheme.outlineVariant),
-              Expanded(
-                child: _SportStat(
-                  icon: Icons.timer_outlined,
-                  label: '活跃时长',
-                  value: '${controller.activeMinutes}',
-                  unit: '分钟',
-                  color: scheme.secondary,
-                ),
-              ),
-            ],
-          );
-          if (!wide) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    ring,
-                    const SizedBox(width: 18),
-                    Expanded(child: info),
-                  ],
-                ),
-                const Divider(height: 30),
-                stats,
-              ],
-            );
-          }
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  ring,
-                  const SizedBox(width: 28),
-                  Expanded(child: info),
-                ],
-              ),
-              const Divider(height: 32),
-              stats,
-            ],
-          );
-        },
+          ),
+          if (stretch) const Spacer(),
+          const Divider(height: 28),
+          stats,
+        ],
       ),
     );
   }
@@ -907,23 +934,20 @@ class _SportStat extends StatelessWidget {
                 value,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
+                style: const TextStyle(
                   fontFamily: AppFonts.latin,
                   fontFamilyFallback: AppFonts.headingFallback,
-                  fontSize: 23,
+                  fontSize: 22,
                   height: 1,
                   fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
             ),
             const SizedBox(width: 4),
             Text(
               unit,
-              style: TextStyle(
-                color: scheme.onSurfaceVariant,
-                fontSize: 10.5,
-              ),
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 10.5),
             ),
           ],
         ),
@@ -949,26 +973,33 @@ class _StatDivider extends StatelessWidget {
 }
 
 class _DistributionCard extends StatelessWidget {
-  const _DistributionCard({required this.controller});
+  const _DistributionCard({required this.controller, required this.stretch});
 
   final WatchController controller;
+  final bool stretch;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
     final buckets = controller.sportBuckets;
     final total = buckets.fold<int>(0, (sum, value) => sum + value);
     final peak = buckets.fold<int>(0, math.max);
     return AppCard(
+      padding: const EdgeInsets.all(22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SectionHeader(
+          SectionHeader(
             title: '今日活动分布',
             subtitle: '每 2 小时一段 · 共 12 段',
+            trailing: StatusPill(
+              label: total > 0 ? '峰值 $peak 步' : '暂无步数',
+              color: total > 0 ? colors.accent : scheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 18),
-          _SportBars(buckets: buckets, color: scheme.primary),
+          _SportBars(buckets: buckets, color: colors.accent),
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -983,14 +1014,19 @@ class _DistributionCard extends StatelessWidget {
                 ),
             ],
           ),
+          if (stretch) const Spacer(),
           const SizedBox(height: 12),
-          Text(
-            total == 0
-                ? '今天还没有步数。走两步，柱状图就会长出来。'
-                : '峰值 $peak 步 / 2 小时 · 合计 $total 步',
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 10.5,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: colors.insetSurface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              total == 0
+                  ? '今天还没有步数。走两步，柱状图就会长出来。'
+                  : '峰值 $peak 步 / 2 小时 · 合计 $total 步 · 目标 ${controller.stepGoal} 步',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
             ),
           ),
         ],
@@ -1014,7 +1050,7 @@ class _SportBars extends StatelessWidget {
     final maxValue = values.fold<int>(0, math.max);
     final current = DateTime.now().hour ~/ 2;
     return SizedBox(
-      height: 118,
+      height: 126,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -1024,12 +1060,12 @@ class _SportBars extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 2.5),
                 child: Container(
                   height: maxValue == 0
-                      ? 3
-                      : (values[i] / maxValue * 118).clamp(3.0, 118.0),
+                      ? 4
+                      : (values[i] / maxValue * 126).clamp(4.0, 126.0),
                   decoration: BoxDecoration(
                     color: values[i] == 0
-                        ? scheme.outlineVariant
-                        : color.withValues(alpha: i == current ? 1 : 0.45),
+                        ? scheme.outlineVariant.withValues(alpha: 0.7)
+                        : color.withValues(alpha: i == current ? 1 : 0.48),
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -1042,78 +1078,94 @@ class _SportBars extends StatelessWidget {
 }
 
 class _SourceCard extends StatelessWidget {
-  const _SourceCard({required this.controller});
+  const _SourceCard({required this.controller, required this.wide});
 
   final WatchController controller;
+  final bool wide;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = context.appColors;
+    final infoBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.info_outline_rounded, size: 16, color: colors.accent),
+            const SizedBox(width: 8),
+            const Text(
+              '数据来源与限制',
+              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '步数由手表 MPU6050 在固件里计数（0x27 读取）；9 轴融合姿态由片上 Q14 定点算法实时融合 MPU6050 与 QMC5883P 并通过 0x13（DBG 行）回传。'
+          '进入手表「运动 → 传感器数值」按 KEY2 可完成 360° 硬铁偏置校准，按 KEY3 复位零偏与航向。',
+          style: TextStyle(
+            color: scheme.onSurfaceVariant,
+            fontSize: 11,
+            height: 1.5,
+          ),
+        ),
+      ],
+    );
+    final actions = Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        FilledButton.icon(
+          onPressed: controller.connected
+              ? () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final sportOk = await controller.refreshSport();
+                  final sensorOk = await controller.refreshSensor();
+                  if (!context.mounted) return;
+                  messenger.hideCurrentSnackBar();
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        sportOk || sensorOk
+                            ? '已同步今日运动与 9 轴姿态数据。'
+                            : '同步失败，请检查手表连接。',
+                      ),
+                    ),
+                  );
+                }
+              : null,
+          icon: const Icon(Icons.sync_rounded, size: 18),
+          label: const Text('立即同步'),
+        ),
+        if (!controller.connected)
+          OutlinedButton.icon(
+            onPressed: () => toggleWatchConnection(context, controller),
+            icon: const Icon(Icons.bluetooth_rounded, size: 17),
+            label: const Text('连接设备'),
+          ),
+      ],
+    );
+
     return AppCard(
       padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.info_outline_rounded,
-                size: 16,
-                color: scheme.primary,
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                '数据来源与限制',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '步数由手表 MPU6050 在固件里计数（0x27 读取）；9 轴融合姿态由片上 Q14 定点算法实时融合 MPU6050 与 QMC5883P 并通过 0x13（DBG 行）回传。'
-            '进入手表「运动 → 传感器数值」按 KEY2 可完成 360° 硬铁偏置校准，按 KEY3 复位零偏与航向。',
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 10.5,
-              height: 1.55,
+      child: wide
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(child: infoBlock),
+                const SizedBox(width: 20),
+                actions,
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                infoBlock,
+                const SizedBox(height: 14),
+                actions,
+              ],
             ),
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
-                onPressed: controller.connected
-                    ? () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        final sportOk = await controller.refreshSport();
-                        final sensorOk = await controller.refreshSensor();
-                        messenger.hideCurrentSnackBar();
-                        messenger.showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              sportOk || sensorOk
-                                  ? '已同步今日运动与 9 轴姿态数据。'
-                                  : '同步失败，请检查手表连接。',
-                            ),
-                          ),
-                        );
-                      }
-                    : null,
-                icon: const Icon(Icons.sync_rounded, size: 18),
-                label: const Text('立即同步'),
-              ),
-              if (!controller.connected)
-                OutlinedButton.icon(
-                  onPressed: () => toggleWatchConnection(context, controller),
-                  icon: const Icon(Icons.bluetooth_rounded, size: 17),
-                  label: const Text('连接设备'),
-                ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 }

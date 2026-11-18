@@ -29,10 +29,14 @@ class MainActivity : FlutterActivity() {
     private var events: EventChannel.EventSink? = null
     private var pendingPermission: MethodChannel.Result? = null
     private var pendingPickImage: MethodChannel.Result? = null
+    private var lastNotificationAccess = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         NotificationRules.load(applicationContext)
+        lastNotificationAccess =
+            WatchNotificationListener.hasNotificationAccess(applicationContext)
+        WatchNotificationListener.ensureBound(applicationContext)
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENTS)
             .setStreamHandler(object : EventChannel.StreamHandler {
@@ -94,10 +98,17 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                     "messageCount" -> result.success(
-                        WatchLinkService.cachedMessageCount,
+                        WatchLinkService.cachedMessageCount(applicationContext),
                     )
                     "clearMessages" -> {
-                        WatchLinkService.instance?.clearNotifications()
+                        WatchLinkService.clearMessages(applicationContext)
+                        result.success(true)
+                    }
+                    "recordManualMessage" -> {
+                        val app = call.argument<String>("app") ?: ""
+                        val title = call.argument<String>("title") ?: ""
+                        val text = call.argument<String>("text") ?: ""
+                        WatchLinkService.instance?.recordManualMessage(app, title, text)
                         result.success(true)
                     }
                     "messageRules" -> result.success(
@@ -136,13 +147,23 @@ class MainActivity : FlutterActivity() {
                     )
                     "setMediaFollow" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: true
-                        WatchLinkService.instance?.setMediaFollow(enabled)
+                        WatchLinkService.setMediaFollow(applicationContext, enabled)
                         result.success(true)
                     }
                     "setNotificationForward" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: true
-                        WatchLinkService.instance?.setNotificationForward(enabled)
+                        WatchLinkService.setNotificationForward(applicationContext, enabled)
                         result.success(true)
+                    }
+                    "setDartTransfer" -> {
+                        val active = call.argument<Boolean>("active") ?: false
+                        WatchLinkService.instance?.setDartTransferActive(active)
+                        result.success(true)
+                    }
+                    "rescanNotifications" -> {
+                        WatchNotificationListener.ensureBound(applicationContext)
+                        WatchNotificationListener.rescan()
+                        result.success(WatchNotificationListener.live != null)
                     }
                     "notificationAccess" -> result.success(hasNotificationAccess())
                     "openNotificationAccess" -> {
@@ -269,12 +290,17 @@ class MainActivity : FlutterActivity() {
             result.error("PERMISSION", "缺少蓝牙连接权限", null)
             return
         }
+        WatchLinkService.pendingConnect?.let { previous ->
+            WatchLinkService.pendingConnect = null
+            previous(false, null)
+        }
         WatchLinkService.pendingConnect = { ok, message ->
             if (!ok && !message.isNullOrBlank()) {
                 WatchLinkService.emitState(false, message)
             }
             result.success(ok)
         }
+        WatchNotificationListener.ensureBound(applicationContext)
         val intent = Intent(this, WatchLinkService::class.java).apply {
             action = WatchLinkService.ACTION_CONNECT
             putExtra(WatchLinkService.EXTRA_ADDRESS, address)
@@ -286,16 +312,21 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun hasNotificationAccess(): Boolean {
-        val enabled = Settings.Secure.getString(
-            contentResolver,
-            "enabled_notification_listeners",
-        ) ?: return false
-        return enabled.split(':').any { entry ->
-            val component = android.content.ComponentName.unflattenFromString(entry)
-            component?.packageName == packageName
+    override fun onResume() {
+        super.onResume()
+        val hasAccess = hasNotificationAccess()
+        val newlyGranted = !lastNotificationAccess && hasAccess
+        lastNotificationAccess = hasAccess
+        WatchNotificationListener.ensureBound(applicationContext)
+        if (WatchLinkService.isConnected &&
+            (newlyGranted || WatchLinkService.cachedMessageCount(applicationContext) == 0)
+        ) {
+            WatchNotificationListener.rescan()
         }
     }
+
+    private fun hasNotificationAccess(): Boolean =
+        WatchNotificationListener.hasNotificationAccess(applicationContext)
 
     private fun openNotificationAccess() {
         val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)

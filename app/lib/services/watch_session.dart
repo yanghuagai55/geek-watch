@@ -66,6 +66,7 @@ class WatchSession {
   bool _snapshotBusy = false;
   bool _sensorBusy = false;
   bool _disposed = false;
+  int _externalTransferRefs = 0;
 
   LinkState get state => _state;
 
@@ -73,6 +74,19 @@ class WatchSession {
 
   /// 抓屏期间会暂停遥测；媒体跟随等逻辑可用它避让。
   bool get isCapturing => _snapshotBusy;
+
+  /// 原生服务正在下发通知/媒体点阵时为 true，Dart 侧自动避让。
+  bool get isExternalBusy {
+    final transport = _transport;
+    return transport is AndroidSppTransport && transport.isExternalBusy;
+  }
+
+  /// 当前存在抓屏、写命令或跨端长点阵传输。
+  bool get isBusy =>
+      _snapshotBusy ||
+      _commandBusy ||
+      _externalTransferRefs > 0 ||
+      isExternalBusy;
 
   /// 状态流：连接中 / 已连接 / 失败 / 空闲。
   Stream<LinkState> get states => _states.stream;
@@ -218,32 +232,19 @@ class WatchSession {
         '点阵必须是 $watchBitmapBytes 字节',
       );
     }
-    return _serialize(() async {
+    return _serialize(() => _withExternalTransfer(() async {
       final transport = _transport;
       if (transport == null || !transport.isConnected) return false;
       for (var chunk = 0; chunk < watchBitmapChunks; chunk++) {
         final payload = Uint8List(1 + watchBitmapChunk);
         payload[0] = chunk;
         payload.setRange(1, payload.length, bits, chunk * watchBitmapChunk);
-        final ack = Completer<bool>();
-        _ack = ack;
-        _commandBusy = true;
-        try {
-          await transport.send(buildWatchFrame(WatchCmd.mediaBitmap, payload));
-          final ok = await ack.future.timeout(
-            const Duration(seconds: 2),
-            onTimeout: () => false,
-          );
-          if (!ok) return false;
-        } on TransportException {
+        if (!await _sendAckedFrame(transport, WatchCmd.mediaBitmap, payload)) {
           return false;
-        } finally {
-          _commandBusy = false;
-          if (identical(_ack, ack)) _ack = null;
         }
       }
       return true;
-    });
+    }));
   }
 
   Future<bool> setPlayState(bool playing) {
@@ -301,50 +302,74 @@ class WatchSession {
     required int width,
     required int height,
     required Uint8List bits,
-  }) async {
+  }) {
     const chunkSize = 128;
-    for (var offset = 0, chunk = 0; offset < bits.length; offset += chunkSize, chunk++) {
-      final end = (offset + chunkSize < bits.length) ? offset + chunkSize : bits.length;
-      final pay = <int>[
-        assetId & 0xFF,
-        chunk & 0xFF,
-        width & 0xFF,
-        (width >> 8) & 0xFF,
-        height & 0xFF,
-        (height >> 8) & 0xFF,
-        ...bits.sublist(offset, end),
-      ];
-      if (!await _command(WatchCmd.extAsset, pay)) {
-        return false;
+    return _serialize(() => _withExternalTransfer(() async {
+      final transport = _transport;
+      if (transport == null || !transport.isConnected) return false;
+      for (var offset = 0, chunk = 0;
+          offset < bits.length;
+          offset += chunkSize, chunk++) {
+        final end =
+            (offset + chunkSize < bits.length) ? offset + chunkSize : bits.length;
+        final pay = <int>[
+          assetId & 0xFF,
+          chunk & 0xFF,
+          width & 0xFF,
+          (width >> 8) & 0xFF,
+          height & 0xFF,
+          (height >> 8) & 0xFF,
+          ...bits.sublist(offset, end),
+        ];
+        if (!await _sendAckedFrame(
+          transport,
+          WatchCmd.extAsset,
+          pay,
+          const Duration(seconds: 3),
+        )) {
+          return false;
+        }
       }
-    }
-    return true;
+      return true;
+    }));
   }
 
   /// 分块上传可变长二进制模块/彩图包到手表 AT24C256（0x2F，id=3 3D指南针 / id=4 关于页）。
   Future<bool> sendExtBlob({
     required int assetId,
     required Uint8List blob,
-  }) async {
+  }) {
     const chunkSize = 128;
     final totalLen = blob.length;
     final crc = crc16Ccitt(blob);
-    for (var offset = 0, chunk = 0; offset < totalLen; offset += chunkSize, chunk++) {
-      final end = (offset + chunkSize < totalLen) ? offset + chunkSize : totalLen;
-      final pay = <int>[
-        assetId & 0xFF,
-        chunk & 0xFF,
-        totalLen & 0xFF,
-        (totalLen >> 8) & 0xFF,
-        crc & 0xFF,
-        (crc >> 8) & 0xFF,
-        ...blob.sublist(offset, end),
-      ];
-      if (!await _command(WatchCmd.extAsset, pay)) {
-        return false;
+    return _serialize(() => _withExternalTransfer(() async {
+      final transport = _transport;
+      if (transport == null || !transport.isConnected) return false;
+      for (var offset = 0, chunk = 0;
+          offset < totalLen;
+          offset += chunkSize, chunk++) {
+        final end =
+            (offset + chunkSize < totalLen) ? offset + chunkSize : totalLen;
+        final pay = <int>[
+          assetId & 0xFF,
+          chunk & 0xFF,
+          totalLen & 0xFF,
+          (totalLen >> 8) & 0xFF,
+          crc & 0xFF,
+          (crc >> 8) & 0xFF,
+          ...blob.sublist(offset, end),
+        ];
+        if (!await _sendAckedFrame(
+          transport,
+          WatchCmd.extAsset,
+          pay,
+          const Duration(seconds: 3),
+        )) {
+          return false;
+        }
       }
-    }
-    return true;
+      return true;
+    }));
   }
 
   /// 跨平台下发一条富文本通知点阵到手表 AT24C256 动态 ROM（0x2D + 0x26/0x23）。
@@ -352,57 +377,70 @@ class WatchSession {
     required Uint8List rowBytes,
     required Uint8List detailBytes,
     required int count,
+    bool vibrate = true,
   }) {
     if (rowBytes.length != 352 || detailBytes.length != 2560) {
       throw ArgumentError('消息点阵大小需为行 352B + 详情 2560B');
     }
-    return _serialize(() async {
+    return _serialize(() => _withExternalTransfer(() async {
       final transport = _transport;
       if (transport == null || !transport.isConnected) return false;
+      const ackTimeout = Duration(seconds: 3);
 
-      Future<bool> sendOne(int cmd, List<int> payload) async {
-        final ack = Completer<bool>();
-        _ack = ack;
-        _commandBusy = true;
-        try {
-          await transport.send(buildWatchFrame(cmd, payload));
-          return await ack.future.timeout(
-            const Duration(seconds: 3),
-            onTimeout: () => false,
-          );
-        } on TransportException {
-          return false;
-        } finally {
-          _commandBusy = false;
-          if (identical(_ack, ack)) _ack = null;
-        }
-      }
-
-      if (!await sendOne(WatchCmd.extOp, <int>[0x01, count.clamp(1, 20)])) {
+      if (!await _sendAckedFrame(
+        transport,
+        WatchCmd.extOp,
+        <int>[
+          0x01,
+          count.clamp(1, 20),
+          if (!vibrate) 0x00,
+        ],
+        ackTimeout,
+      )) {
         return false;
       }
       final rowChunks = (rowBytes.length + 127) ~/ 128;
       for (var sub = 0; sub < rowChunks; sub++) {
         final start = sub * 128;
-        final end = (start + 128 < rowBytes.length) ? start + 128 : rowBytes.length;
+        final end =
+            (start + 128 < rowBytes.length) ? start + 128 : rowBytes.length;
         final payload = <int>[0x02, sub, ...rowBytes.sublist(start, end)];
-        if (!await sendOne(WatchCmd.extOp, payload)) return false;
+        if (!await _sendAckedFrame(
+          transport,
+          WatchCmd.extOp,
+          payload,
+          ackTimeout,
+        )) {
+          return false;
+        }
       }
       final detailChunks = detailBytes.length ~/ 128;
       for (var chunk = 0; chunk < detailChunks; chunk++) {
         final offset = chunk * 128;
         final rle = _rleEncode128(detailBytes, offset);
         final ok = rle.length <= 125
-            ? await sendOne(WatchCmd.maskRle, <int>[5, 0, chunk, ...rle])
-            : await sendOne(
+            ? await _sendAckedFrame(
+                transport,
+                WatchCmd.maskRle,
+                <int>[5, 0, chunk, ...rle],
+                ackTimeout,
+              )
+            : await _sendAckedFrame(
+                transport,
                 WatchCmd.msgDetailBmp,
                 <int>[0, chunk, ...detailBytes.sublist(offset, offset + 128)],
+                ackTimeout,
               );
         if (!ok) return false;
       }
-      await sendOne(WatchCmd.extOp, const <int>[0x00]);
+      await _sendAckedFrame(
+        transport,
+        WatchCmd.extOp,
+        const <int>[0x00],
+        ackTimeout,
+      );
       return true;
-    });
+    }));
   }
 
   static List<int> _rleEncode128(Uint8List bits, int offset) {
@@ -433,27 +471,10 @@ class WatchSession {
     if (bytes.isEmpty || bytes.length > 0x5400) {
       throw ArgumentError.value(bytes.length, 'bytes', '大小需在 1..21504 字节内');
     }
-    return _serialize(() async {
+    return _serialize(() => _withExternalTransfer(() async {
       final transport = _transport;
       if (transport == null || !transport.isConnected) return false;
-
-      Future<bool> sendOne(int cmd, Uint8List payload) async {
-        final ack = Completer<bool>();
-        _ack = ack;
-        _commandBusy = true;
-        try {
-          await transport.send(buildWatchFrame(cmd, payload));
-          return await ack.future.timeout(
-            const Duration(seconds: 3),
-            onTimeout: () => false,
-          );
-        } on TransportException {
-          return false;
-        } finally {
-          _commandBusy = false;
-          if (identical(_ack, ack)) _ack = null;
-        }
-      }
+      const ackTimeout = Duration(seconds: 3);
 
       final meta = Uint8List.fromList(<int>[
         width & 0xFF,
@@ -465,7 +486,14 @@ class WatchSession {
         (bytes.length >> 8) & 0xFF,
         applyDial ? 1 : 0,
       ]);
-      if (!await sendOne(WatchCmd.extImgMeta, meta)) return false;
+      if (!await _sendAckedFrame(
+        transport,
+        WatchCmd.extImgMeta,
+        meta,
+        ackTimeout,
+      )) {
+        return false;
+      }
 
       final totalChunks = (bytes.length + 127) ~/ 128;
       for (var c = 0; c < totalChunks; c++) {
@@ -475,11 +503,18 @@ class WatchSession {
         final payload = Uint8List(1 + chunkLen);
         payload[0] = c;
         payload.setRange(1, 1 + chunkLen, bytes, start);
-        if (!await sendOne(WatchCmd.extImgData, payload)) return false;
+        if (!await _sendAckedFrame(
+          transport,
+          WatchCmd.extImgData,
+          payload,
+          ackTimeout,
+        )) {
+          return false;
+        }
         onProgress?.call(c + 1, totalChunks);
       }
       return true;
-    });
+    }));
   }
 
   /// 拉取今日运动数据；手表用 0x27 回。
@@ -491,7 +526,9 @@ class WatchSession {
   Future<WatchSensorData?> requestSensor({
     Duration timeout = const Duration(milliseconds: 550),
   }) async {
-    if (_sensorBusy || _snapshotBusy || _commandBusy || _quiet) return null;
+    if (_sensorBusy || _snapshotBusy || _commandBusy || _quiet || isExternalBusy) {
+      return null;
+    }
     final transport = _transport;
     if (transport == null || !transport.isConnected) return null;
 
@@ -544,8 +581,10 @@ class WatchSession {
     final completer = Completer<WatchSnapshot?>();
     _snapshot = completer;
     try {
-      await transport.send(buildWatchFrame(WatchCmd.snapshot));
-      return await completer.future.timeout(timeout);
+      return await _withExternalTransfer(() async {
+        await transport.send(buildWatchFrame(WatchCmd.snapshot));
+        return await completer.future.timeout(timeout);
+      });
     } on TimeoutException {
       _log('抓屏超时');
       return null;
@@ -576,6 +615,65 @@ class WatchSession {
 
   // ---- 内部 ---------------------------------------------------------------
 
+  Future<void> _waitWhileExternalBusy() async {
+    final transport = _transport;
+    if (transport is! AndroidSppTransport ||
+        !transport.isExternalBusy ||
+        !transport.isConnected) {
+      return;
+    }
+    try {
+      await transport.externalBusy
+          .firstWhere((busy) => !busy)
+          .timeout(const Duration(seconds: 12));
+    } catch (_) {
+      // 超时或流关闭时继续尝试，由底层发送协调兜底。
+    }
+  }
+
+  Future<T> _withExternalTransfer<T>(Future<T> Function() action) async {
+    final transport = _transport;
+    if (transport is! AndroidSppTransport) {
+      return action();
+    }
+    if (transport.isExternalBusy) {
+      await _waitWhileExternalBusy();
+    }
+    _externalTransferRefs++;
+    if (_externalTransferRefs == 1) {
+      await transport.setTransferActive(true);
+    }
+    try {
+      return await action();
+    } finally {
+      _externalTransferRefs--;
+      if (_externalTransferRefs == 0) {
+        await transport.setTransferActive(false);
+      }
+    }
+  }
+
+  Future<bool> _sendAckedFrame(
+    WatchTransport transport,
+    int cmd, [
+    List<int> payload = const [],
+    Duration timeout = const Duration(seconds: 2),
+  ]) async {
+    if (!transport.isConnected) return false;
+    final ack = Completer<bool>();
+    _ack = ack;
+    _commandBusy = true;
+    try {
+      await transport.send(buildWatchFrame(cmd, payload));
+      return await ack.future.timeout(timeout, onTimeout: () => false);
+    } on TransportException {
+      return false;
+    } finally {
+      _commandBusy = false;
+      if (identical(_ack, ack)) _ack = null;
+    }
+  }
+
   Future<bool> _command(
     int cmd, [
     List<int> payload = const [],
@@ -584,19 +682,10 @@ class WatchSession {
     return _serialize(() async {
       final transport = _transport;
       if (transport == null || !transport.isConnected) return false;
-
-      final ack = Completer<bool>();
-      _ack = ack;
-      _commandBusy = true;
-      try {
-        await transport.send(buildWatchFrame(cmd, payload));
-        return await ack.future.timeout(timeout, onTimeout: () => false);
-      } on TransportException {
-        return false;
-      } finally {
-        _commandBusy = false;
-        if (identical(_ack, ack)) _ack = null;
+      if (transport is AndroidSppTransport && transport.isExternalBusy) {
+        await _waitWhileExternalBusy();
       }
+      return _sendAckedFrame(transport, cmd, payload, timeout);
     });
   }
 
@@ -703,7 +792,7 @@ class WatchSession {
 
   void _pollPerf() {
     final transport = _transport;
-    if (_quiet || _commandBusy || _snapshotBusy) return;
+    if (_quiet || _commandBusy || _snapshotBusy || isExternalBusy) return;
     if (transport == null || !transport.isConnected) return;
     unawaited(
       transport.send(buildWatchFrame(WatchCmd.perf)).catchError((Object _) {}),
