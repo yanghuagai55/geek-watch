@@ -56,6 +56,10 @@ void main() {
     expect(find.text('外观与动效'), findsOneWidget);
     expect(find.text('手表设置'), findsOneWidget);
 
+    expect(controller.themeMode, ThemeMode.light);
+    await tester.tap(find.byTooltip('切换到墨黑主题'));
+    await tester.pumpAndSettle();
+    expect(controller.themeMode, ThemeMode.dark);
     await tester.tap(find.byTooltip('切换到暖白主题'));
     await tester.pumpAndSettle();
     expect(controller.themeMode, ThemeMode.light);
@@ -101,6 +105,11 @@ void main() {
     await tester.tap(find.text('保存本地（连表覆盖）'));
     await tester.pumpAndSettle();
     expect(find.textContaining('AT24C256'), findsWidgets);
+
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+    expect(find.text('SPI 超频'), findsOneWidget);
+    expect(find.text('约 100KB 系统'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

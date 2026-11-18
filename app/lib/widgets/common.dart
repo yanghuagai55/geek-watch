@@ -104,31 +104,39 @@ class PageHeader extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     return LayoutBuilder(
       builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 640;
         final titleBlock = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               title,
-              style: textTheme.headlineMedium?.copyWith(
+              style: (narrow ? textTheme.headlineSmall : textTheme.headlineMedium)
+                  ?.copyWith(
                 fontWeight: FontWeight.w700,
-                letterSpacing: -0.6,
+                letterSpacing: narrow ? -0.4 : -0.6,
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Text(
               subtitle,
+              maxLines: narrow ? 2 : 3,
+              overflow: TextOverflow.ellipsis,
               style: textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: narrow ? 13 : null,
+                height: 1.35,
               ),
             ),
           ],
         );
-        if (trailing == null || constraints.maxWidth < 480) {
-          return Column(
+        if (trailing == null) return titleBlock;
+        if (narrow) {
+          return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              titleBlock,
-              if (trailing != null) ...[const SizedBox(height: 14), trailing!],
+              Expanded(child: titleBlock),
+              const SizedBox(width: 10),
+              trailing!,
             ],
           );
         }

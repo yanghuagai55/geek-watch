@@ -128,12 +128,18 @@ object WatchMessageRasterizer {
         if (item == null) return ""
         val title = item.title.trim()
         val body = item.text.trim()
-        return when {
+        val head = item.app.trim()
+        val bodyText = when {
             title.isEmpty() -> body
             body.isEmpty() -> title
             title == body -> title
             else -> "$title\n$body"
         }.replace("\r", "")
+        return if (head.isEmpty() || bodyText.startsWith(head)) {
+            bodyText
+        } else {
+            "$head\n$bodyText"
+        }
     }
 
     private fun preview(item: Item): String {

@@ -158,6 +158,7 @@ class WatchLinkService : Service() {
         NotificationRules.load(this)
         loadPersistedMessages()
         createChannel()
+        mainHandler.post { WatchNotificationListener.rescan() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -308,6 +309,7 @@ class WatchLinkService : Service() {
                 messageMode = false
                 watchMusicActive = false
                 requestWatchPoolState()
+                mainHandler.post { WatchNotificationListener.rescan() }
             } catch (error: Exception) {
                 connected.set(false)
                 val message = error.message ?: "连接失败"
@@ -898,6 +900,50 @@ class WatchLinkService : Service() {
             }
         }
 
+    data class IncomingMessage(
+        val app: String,
+        val title: String,
+        val text: String,
+        val key: String,
+        val pkg: String,
+    )
+
+    /** 用通知栏当前内容替换缓存，并整表推给手表。 */
+    fun syncMessages(incoming: List<IncomingMessage>) {
+        mainHandler.post {
+            messages.clear()
+            incoming.forEach { item ->
+                messages.addLast(
+                    CachedMessage(
+                        key = item.key,
+                        pkg = item.pkg,
+                        item = WatchMessageRasterizer.Item(item.app, item.title, item.text),
+                    ),
+                )
+            }
+            trimMessages()
+            persistMessages()
+            Log.i("WatchLink", "同步消息 ${messages.size} 条，连接=${connected.get()}")
+            if (connected.get()) pushFullList()
+        }
+    }
+
+    private fun pushFullList() {
+        val items = messages.map { it.item }
+        worker.execute {
+            synchronized(bitmapLock) {
+                writeOrReport(buildFrame(0x25, byteArrayOf(items.size.coerceIn(0, 20).toByte())))
+            }
+            if (items.isEmpty()) return@execute
+            if (sendMaskChunks(0x22, WatchMessageRasterizer.list(items), 2)) {
+                sendDetailSlot(0, WatchMessageRasterizer.detail(items.first()))
+                synchronized(bitmapLock) {
+                    writeOrReport(buildFrame(0x2D, byteArrayOf(0x00)))
+                }
+            }
+        }
+    }
+
     /** 通知入本机持久化缓存，已连接时同步增量写入手表 AT24C256 动态 ROM。 */
     fun cacheNotification(
         app: String,
@@ -971,20 +1017,13 @@ class WatchLinkService : Service() {
             messageMode = true
             mediaRunnable?.let { mainHandler.removeCallbacks(it) }
             mediaRunnable = null
-            val items = messages.map { it.item }
-            if (items.isEmpty()) {
+            if (messages.isEmpty()) {
+                Log.i("WatchLink", "手表要消息列表，缓存是空的，重新扫通知栏")
+                WatchNotificationListener.rescan()
                 return@post
             }
-            Log.d("WatchLink", "消息列表请求：${items.size} 条")
-            worker.execute {
-                // 先告诉手表实际条数，避免焦点落在空行。
-                synchronized(bitmapLock) {
-                    writeOrReport(
-                        buildFrame(0x25, byteArrayOf(items.size.toByte())),
-                    )
-                }
-                sendMaskChunks(0x22, WatchMessageRasterizer.list(items), 2)
-            }
+            Log.i("WatchLink", "手表要消息列表：${messages.size} 条")
+            pushFullList()
         }
     }
 

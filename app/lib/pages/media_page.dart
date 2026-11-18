@@ -241,8 +241,8 @@ class _MediaPageState extends State<MediaPage> {
                   const SizedBox(height: 18),
                   TextField(
                     controller: _lyrics,
-                    minLines: 7,
-                    maxLines: 10,
+                    minLines: constraints.maxWidth < 640 ? 4 : 7,
+                    maxLines: constraints.maxWidth < 640 ? 6 : 10,
                     style: const TextStyle(height: 1.8),
                     decoration: const InputDecoration(
                       hintText: '粘贴要演示的歌词…',
@@ -398,8 +398,10 @@ class _PlayerCardState extends State<_PlayerCard> {
     return AppCard(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final sideBySide = constraints.maxWidth >= 480;
-          final artSize = sideBySide ? 132.0 : 174.0;
+          final sideBySide = constraints.maxWidth >= 340;
+          final artSize = !sideBySide
+              ? 148.0
+              : (constraints.maxWidth < 520 ? 92.0 : 132.0);
           final art = Container(
             width: artSize,
             height: artSize,
@@ -418,27 +420,27 @@ class _PlayerCardState extends State<_PlayerCard> {
               alignment: Alignment.center,
               children: [
                 Container(
-                  width: 116,
-                  height: 116,
+                  width: artSize * 0.68,
+                  height: artSize * 0.68,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: AppPalette.mint.withValues(alpha: 0.28),
-                      width: 14,
+                      width: artSize < 110 ? 7 : 14,
                     ),
                   ),
                 ),
                 Container(
-                  width: 62,
-                  height: 62,
+                  width: artSize * 0.38,
+                  height: artSize * 0.38,
                   decoration: const BoxDecoration(
                     color: AppPalette.mint,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.music_note_rounded,
-                    color: Color(0xFF0A1B14),
-                    size: 30,
+                    color: const Color(0xFF0A1B14),
+                    size: artSize < 110 ? 20 : 30,
                   ),
                 ),
               ],

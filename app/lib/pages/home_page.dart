@@ -827,11 +827,12 @@ class _PortraitMetrics extends StatelessWidget {
         history: controller.fpsHistory,
       ),
     ];
-    return Column(
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var i = 0; i < cards.length; i++) ...[
-          cards[i],
-          if (i < cards.length - 1) const SizedBox(height: 8),
+          Expanded(child: cards[i]),
+          if (i < cards.length - 1) const SizedBox(width: 8),
         ],
       ],
     );
@@ -1047,11 +1048,12 @@ class _QuickActions extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns = constraints.maxWidth >= 900 ? 4 : 2;
+        final tileHeight = constraints.maxWidth < 560 ? 104.0 : 116.0;
         const gap = 12.0;
         Widget tile(int index) {
           final item = items[index];
           return SizedBox(
-            height: 116,
+            height: tileHeight,
             child: AppCard(
                   onTap: item.$4,
                   padding: const EdgeInsets.all(16),

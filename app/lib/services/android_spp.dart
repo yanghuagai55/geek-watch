@@ -133,6 +133,18 @@ class AndroidWatchBridge {
     'watch_companion/bluetooth',
   );
 
+  /// 删除系统里这块手表的配对。成功后手机不会再自动连上 HC-04。
+  static Future<String> forgetBluetooth(String address) async {
+    try {
+      final message = await _channel.invokeMethod<String>('forgetBluetooth', {
+        'address': address,
+      });
+      return message ?? '已请求清除配对';
+    } on PlatformException catch (error) {
+      return error.message ?? '清除配对失败';
+    }
+  }
+
   static Future<void> setMediaFollow(bool enabled) async {
     try {
       await _channel.invokeMethod<void>('setMediaFollow', {'enabled': enabled});

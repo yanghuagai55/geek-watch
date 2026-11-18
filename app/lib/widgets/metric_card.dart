@@ -186,7 +186,54 @@ class MiniMetricCard extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         // 极窄窗口（桌面竖屏拉很细）优先保住中文说明，必要时让出迷你曲线。
+        final column = constraints.maxWidth < 180;
         final compact = constraints.maxWidth < 340;
+        if (column) {
+          return AppCard(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, size: 16, color: color),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    height: 1,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: AppFonts.latin,
+                    fontFamilyFallback: AppFonts.headingFallback,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  unit,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
         return AppCard(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: SizedBox(

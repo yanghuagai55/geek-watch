@@ -439,7 +439,7 @@ class _DialsPageState extends State<DialsPage> {
         ),
       );
     }
-    if (maxWidth >= 620) {
+    if (maxWidth >= 400) {
       return AppCard(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -556,23 +556,6 @@ class _DialsPageState extends State<DialsPage> {
               onApplyProfile: _applyRecommendedProfile,
               screenScale: 2,
             );
-            final phoneScale = innerWidth >= 256 ? 2.0 : 1.0;
-            final phoneFace = _DialStageCard(
-              spec: current,
-              controller: controller,
-              photoImage: _previewImage,
-              encoded: _encoded,
-              profile: _profile,
-              uploading: _uploading,
-              sentChunks: _sentChunks,
-              totalChunks: _totalChunks,
-              onPushConfig: _pushDialConfig,
-              onUploadPhoto: _uploadPhotoDial,
-              onApplyProfile: _applyRecommendedProfile,
-              screenScale: phoneScale,
-              showTitle: false,
-              showControls: false,
-            );
             final phoneActions = _DialStageCard(
               spec: current,
               controller: controller,
@@ -653,24 +636,7 @@ class _DialsPageState extends State<DialsPage> {
               },
             );
             final memoryMap = _FlashPartitionCard(scheme: scheme, controller: controller);
-            final presets = _buildPresetGrid(controller, wide ? innerWidth : innerWidth);
-            final editorColumn = Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (!wide) ...[
-                  header,
-                  const SizedBox(height: 16),
-                ],
-                presets,
-                const SizedBox(height: 16),
-                customization,
-                const SizedBox(height: 16),
-                imageStudio,
-                const SizedBox(height: 16),
-                memoryMap,
-              ],
-            );
-
+            final presets = _buildPresetGrid(controller, innerWidth);
             final Widget workspace;
             if (wide) {
               workspace = Column(
@@ -713,43 +679,56 @@ class _DialsPageState extends State<DialsPage> {
                 ],
               );
             } else {
-              final innerH = math.max(0.0, constraints.maxHeight - 16 - bottom);
-              final faceBlock = 160 * phoneScale + 72;
-              final phoneEditors = Column(
+              final columnH = math.max(0.0, constraints.maxHeight - bottom);
+              final faceBudget = math.max(148.0, (columnH - 72) * 0.32);
+              final phoneScale = math.min(
+                ((innerWidth - 36) / 128).clamp(0.78, 1.15),
+                ((faceBudget - 48) / 160).clamp(0.78, 1.15),
+              );
+              final face = _DialStageCard(
+                spec: current,
+                controller: controller,
+                photoImage: _previewImage,
+                encoded: _encoded,
+                profile: _profile,
+                uploading: _uploading,
+                sentChunks: _sentChunks,
+                totalChunks: _totalChunks,
+                onPushConfig: _pushDialConfig,
+                onUploadPhoto: _uploadPhotoDial,
+                onApplyProfile: _applyRecommendedProfile,
+                screenScale: phoneScale,
+                showTitle: false,
+                showControls: false,
+              );
+              workspace = Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  phoneActions,
-                  const SizedBox(height: 12),
-                  editorColumn,
-                ],
-              );
-              if (innerH < faceBlock + 140) {
-                workspace = SingleChildScrollView(
-                  primary: false,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      phoneFace,
-                      const SizedBox(height: 12),
-                      phoneEditors,
-                    ],
-                  ),
-                );
-              } else {
-                workspace = Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    phoneFace,
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        primary: false,
-                        child: phoneEditors,
+                  header,
+                  const SizedBox(height: 8),
+                  face,
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      primary: false,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          presets,
+                          const SizedBox(height: 12),
+                          phoneActions,
+                          const SizedBox(height: 12),
+                          customization,
+                          const SizedBox(height: 12),
+                          imageStudio,
+                          const SizedBox(height: 12),
+                          memoryMap,
+                        ],
                       ),
                     ),
-                  ],
-                );
-              }
+                  ),
+                ],
+              );
             }
 
             return Padding(
@@ -856,8 +835,12 @@ class _DialStageCard extends StatelessWidget {
     final fgColor = Color(controller.dialTextColor);
     final acColor = Color(controller.dialAccentColor);
     final bgColor = Color(controller.dialBgColor);
+    final compactFace = showFace && !showTitle && !showControls;
 
     return AppCard(
+      padding: compactFace
+          ? const EdgeInsets.fromLTRB(12, 12, 12, 10)
+          : const EdgeInsets.all(20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

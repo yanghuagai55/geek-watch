@@ -22,17 +22,21 @@ import android.view.KeyEvent
  * 也依赖这个组件。
  */
 class WatchNotificationListener : NotificationListenerService() {
-    private companion object {
-        /** 系统状态与广告推送，不进手表消息列表。 */
+    companion object {
+        /** 广告和纯壳进程。应用商店更新、抖音这类通知要留下。 */
         val ignoredPackages = setOf(
-            "android",
             "com.android.shell",
             "com.android.systemui",
             "com.miui.systemAdSolution",
-            "com.miui.securitycenter",
-            "com.xiaomi.market",
             "com.xiaomi.shop",
         )
+
+        @Volatile
+        var live: WatchNotificationListener? = null
+
+        fun rescan() {
+            live?.seedActive()
+        }
     }
 
     private var controller: MediaController? = null
@@ -61,6 +65,7 @@ class WatchNotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        live = this
         try {
             getSystemService(MediaSessionManager::class.java)
                 ?.addOnActiveSessionsChangedListener(sessionsListener, component)
@@ -68,6 +73,11 @@ class WatchNotificationListener : NotificationListenerService() {
         }
         refreshSessions()
         seedActive()
+    }
+
+    override fun onDestroy() {
+        if (live === this) live = null
+        super.onDestroy()
     }
 
     override fun onListenerDisconnected() {
@@ -138,18 +148,18 @@ class WatchNotificationListener : NotificationListenerService() {
         sbn?.let { WatchLinkService.instance?.removeNotification(it.key) }
     }
 
-    /** App 重启/监听重连时把通知栏里已有的消息补进缓存。 */
+    /** 把通知栏里当前还能看到的消息一次性交给前台服务。 */
     private fun seedActive() {
         val active = try {
             activeNotifications
         } catch (_: Exception) {
             null
         } ?: return
-        active
-            .sortedBy { it.postTime }
-            .forEach { notification ->
-                val payload = notification.notification ?: return@forEach
-                val extras = payload.extras ?: return@forEach
+        val incoming = active
+            .sortedByDescending { it.postTime }
+            .mapNotNull { notification ->
+                val payload = notification.notification ?: return@mapNotNull null
+                val extras = payload.extras ?: return@mapNotNull null
                 val title = extras
                     .getCharSequence(Notification.EXTRA_TITLE)
                     ?.toString()
@@ -158,8 +168,36 @@ class WatchNotificationListener : NotificationListenerService() {
                     extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
                         ?: extras.getCharSequence(Notification.EXTRA_TEXT)
                     )?.toString().orEmpty()
-                cache(notification, title, text)
+                if (!acceptNotification(notification, title, text)) return@mapNotNull null
+                val app = appLabel(notification.packageName)
+                val kind = classifyNotification(notification.packageName, payload.category)
+                NotificationRules.rememberApp(this, notification.packageName, "$kind · $app")
+                if (!NotificationRules.allows(notification.packageName)) return@mapNotNull null
+                WatchLinkService.IncomingMessage(
+                    app = "$kind · $app",
+                    title = title,
+                    text = text,
+                    key = notification.key,
+                    pkg = notification.packageName,
+                )
             }
+        Log.i("WatchLink", "通知栏现有 ${active.size} 条，可送手表 ${incoming.size} 条")
+        WatchLinkService.instance?.syncMessages(incoming)
+            ?: Log.i("WatchLink", "前台服务还没起来，这轮通知先留在系统里")
+    }
+
+    private fun acceptNotification(
+        notification: StatusBarNotification,
+        title: String,
+        text: String,
+    ): Boolean {
+        if (notification.packageName == packageName) return false
+        if (notification.packageName in ignoredPackages) return false
+        val payload = notification.notification ?: return false
+        if (payload.flags and Notification.FLAG_GROUP_SUMMARY != 0) return false
+        if (payload.flags and Notification.FLAG_FOREGROUND_SERVICE != 0) return false
+        if (title.isBlank() && text.isBlank()) return false
+        return true
     }
 
     private fun cache(
@@ -167,36 +205,72 @@ class WatchNotificationListener : NotificationListenerService() {
         title: String,
         text: String,
     ) {
-        if (notification.packageName == packageName) return
-        if (notification.packageName in ignoredPackages) return
-        // 常驻状态（USB 充电、调试、前台服务）不是消息。
-        if (notification.isOngoing) return
-        val payload = notification.notification ?: return
-        if (payload.flags and Notification.FLAG_ONGOING_EVENT != 0) return
-        if (payload.flags and Notification.FLAG_FOREGROUND_SERVICE != 0) return
-        if (payload.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
-        val category = payload.category
-        if (category == Notification.CATEGORY_TRANSPORT ||
-            category == Notification.CATEGORY_PROGRESS
-        ) {
-            return
-        }
-        if (title.isBlank() && text.isBlank()) return
+        if (!acceptNotification(notification, title, text)) return
 
         val app = appLabel(notification.packageName)
+        val kind = classifyNotification(
+            notification.packageName,
+            notification.notification?.category,
+        )
+        val labeled = "$kind · $app"
         NotificationRules.load(this)
         // 即使当前规则不放行也先记住应用，用户才能在列表里勾选它。
-        NotificationRules.rememberApp(this, notification.packageName, app)
+        NotificationRules.rememberApp(this, notification.packageName, labeled)
         if (!NotificationRules.allows(notification.packageName)) return
-        Log.d("WatchLink", "缓存通知 $app：$title $text")
+        Log.d("WatchLink", "缓存通知 [$kind] $app：$title $text")
         // 只进缓存，手表打开消息页时再按需取；不再走 0x02 文字槽（小字库会出方框）。
         WatchLinkService.instance?.cacheNotification(
-            app,
+            labeled,
             title,
             text,
             notification.key,
             notification.packageName,
         )
+    }
+
+    /** 按系统通知类别和应用包名归类，手表列表里能看出是聊天、系统还是提醒。 */
+    private fun classifyNotification(pkg: String, category: String?): String {
+        when (category) {
+            Notification.CATEGORY_MESSAGE,
+            Notification.CATEGORY_SOCIAL -> return "聊天"
+            Notification.CATEGORY_EMAIL -> return "邮件"
+            Notification.CATEGORY_CALL -> return "来电"
+            Notification.CATEGORY_ALARM,
+            Notification.CATEGORY_REMINDER,
+            Notification.CATEGORY_EVENT -> return "提醒"
+            Notification.CATEGORY_NAVIGATION -> return "出行"
+            Notification.CATEGORY_TRANSPORT -> return "媒体"
+            Notification.CATEGORY_SYSTEM,
+            Notification.CATEGORY_ERROR,
+            Notification.CATEGORY_STATUS,
+            Notification.CATEGORY_SERVICE -> return "系统"
+            Notification.CATEGORY_PROMO,
+            Notification.CATEGORY_RECOMMENDATION -> return "推广"
+        }
+        val name = pkg.lowercase()
+        return when {
+            name.contains("mms") ||
+                name.contains("messaging") ||
+                name.contains("wechat") ||
+                name.contains("tencent.mm") ||
+                name.contains("aweme") ||
+                name.contains("gifmaker") ||
+                name.contains("weibo") ||
+                name.contains("mobileqq") ||
+                name.contains("telegram") ||
+                name.contains("whatsapp") -> "聊天"
+            name.contains("music") ||
+                name.contains("luna") ||
+                name.contains("netease") ||
+                name.contains("kugou") ||
+                name.contains("qqmusic") -> "媒体"
+            name.startsWith("com.android.") ||
+                name.startsWith("android") ||
+                name.startsWith("com.miui.") ||
+                name.startsWith("com.xiaomi.") ||
+                name.startsWith("com.google.android.") -> "系统"
+            else -> "通知"
+        }
     }
 
     private fun appLabel(pkg: String): String = try {

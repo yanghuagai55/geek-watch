@@ -21,6 +21,9 @@ void main() {
     // 调试时可在 `flutter run` 控制台看到链路日志。
     session.logs.listen(debugPrint);
     final controller = WatchController(session: session)..applyPersisted(saved);
+    if (saved['uiRevision'] is! int || (saved['uiRevision'] as int) < 2) {
+      unawaited(AppSettings.save(controller.persistedSettings));
+    }
 
     Timer? saveTimer;
     controller.onSettingsChanged = () {

@@ -69,7 +69,7 @@ class WatchController extends ChangeNotifier {
   StreamSubscription<WatchSensorData>? _sensorSub;
 
   DateTime now = DateTime.now();
-  ThemeMode themeMode = ThemeMode.dark;
+  ThemeMode themeMode = ThemeMode.light;
   TransportType transport = TransportType.spp;
   String deviceAddress = '04:26:01:08:02:0C';
   String serialPort = 'COM7';
@@ -84,11 +84,11 @@ class WatchController extends ChangeNotifier {
   /// 手表实际设置（0x1A / 0x2C 回传）与 App 最高优先级策略。
   bool appPriorityOverride = true;
   bool raiseWrist = true;
-  bool keyBeep = false;
+  bool keyBeep = true;
   int watchBrightness = 1;
   bool watchBluetooth = true;
   int ledMode = 1;
-  int screenOff = 0;
+  int screenOff = 2;
   bool watchDebugOverlay = false;
   bool watchSettingsLoaded = false;
 
@@ -1252,11 +1252,11 @@ class WatchController extends ChangeNotifier {
       if (media == null || !media.hasSession || media.title.trim().isEmpty) {
         return;
       }
-      final nextPos = media.positionMs.toDouble();
-      final nextDur = media.durationMs.toDouble();
+      final nextPos = media.positionMs / 1000.0;
+      final nextDur = media.durationMs / 1000.0;
       final progressChanged =
-          (mediaPosition - nextPos).abs() >= 400 ||
-          (mediaDuration - nextDur).abs() >= 400;
+          (mediaPosition - nextPos).abs() >= 0.4 ||
+          (mediaDuration - nextDur).abs() >= 0.4;
       mediaPosition = nextPos;
       mediaDuration = nextDur;
       if (media.title != mediaTitle || media.artist != mediaArtist) {
@@ -1423,8 +1423,8 @@ class WatchController extends ChangeNotifier {
       final title = (info['title'] as String?)?.trim() ?? '';
       final artist = (info['artist'] as String?)?.trim() ?? '';
       final isPlaying = info['playing'] == true;
-      final position = (info['positionMs'] as num?)?.toDouble() ?? 0;
-      final duration = (info['durationMs'] as num?)?.toDouble() ?? 0;
+      final position = ((info['positionMs'] as num?)?.toDouble() ?? 0) / 1000.0;
+      final duration = ((info['durationMs'] as num?)?.toDouble() ?? 0) / 1000.0;
       mediaTitle = title;
       mediaArtist = artist;
       playing = isPlaying;
@@ -1556,7 +1556,7 @@ class WatchController extends ChangeNotifier {
   }
 
   void resetSettings() {
-    themeMode = ThemeMode.dark;
+    themeMode = ThemeMode.light;
     transport = TransportType.spp;
     deviceAddress = '04:26:01:08:02:0C';
     serialPort = 'COM7';
@@ -1569,10 +1569,10 @@ class WatchController extends ChangeNotifier {
     use24Hour = true;
     appPriorityOverride = true;
     raiseWrist = true;
-    keyBeep = false;
+    keyBeep = true;
     watchBrightness = 1;
     ledMode = 1;
-    screenOff = 0;
+    screenOff = 2;
     stepGoal = 8000;
     dialId = 0;
     dialTop = 0;
@@ -1651,8 +1651,17 @@ class WatchController extends ChangeNotifier {
     final theme = readString('themeMode', themeMode.name);
     themeMode = ThemeMode.values.firstWhere(
       (mode) => mode.name == theme,
-      orElse: () => ThemeMode.dark,
+      orElse: () => ThemeMode.light,
     );
+    // 旧配置把界面默认写成墨黑、震动默认关掉、熄屏默认关。各升一次，之后再改会记住。
+    final revision = readInt('uiRevision', 0);
+    if (revision < 1) {
+      themeMode = ThemeMode.light;
+      keyBeep = true;
+    }
+    if (revision < 2) {
+      screenOff = 2;
+    }
     final transportName = readString('transport', transport.name);
     transport = TransportType.values.firstWhere(
       (item) => item.name == transportName,
@@ -1700,6 +1709,7 @@ class WatchController extends ChangeNotifier {
     'dialAccentColor': dialAccentColor,
     'dialBgColor': dialBgColor,
     'themeMode': themeMode.name,
+    'uiRevision': 2,
     'transport': transport.name,
     'deviceAddress': deviceAddress,
     'serialPort': serialPort,

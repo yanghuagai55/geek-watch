@@ -1,6 +1,8 @@
 package dev.coolw.watch_companion
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -71,6 +73,10 @@ class MainActivity : FlutterActivity() {
                     "close" -> {
                         WatchLinkService.instance?.shutdown()
                         result.success(true)
+                    }
+                    "forgetBluetooth" -> {
+                        val address = call.argument<String>("address").orEmpty()
+                        result.success(forgetBluetooth(address))
                     }
                     "isConnected" -> result.success(WatchLinkService.isConnected)
                     "nowPlaying" -> result.success(
@@ -152,6 +158,66 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * 删掉系统里这块手表的配对记录。试用过的手机会一直记住 HC-04，
+     * 之后抢着自动连上来；清掉之后必须重新输入 PIN 才能再连。
+     */
+    private fun forgetBluetooth(address: String): String {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+            ?: return "这台设备没有蓝牙"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return "没有蓝牙连接权限，无法清除配对"
+        }
+        WatchLinkService.instance?.shutdown()
+        val wanted = linkedSetOf<String>()
+        val typed = address.trim()
+        if (typed.isNotEmpty()) wanted.add(typed.uppercase())
+        if (typed.startsWith("04:", ignoreCase = true) && typed.length > 3) {
+            wanted.add("C4:${typed.substring(3)}".uppercase())
+        }
+        val bonded = adapter.bondedDevices.orEmpty()
+        for (device in bonded) {
+            val name = device.name.orEmpty()
+            val addr = device.address.uppercase()
+            if (wanted.contains(addr) || name.equals("HC-04", ignoreCase = true)) {
+                wanted.add(addr)
+            }
+        }
+        if (wanted.isEmpty()) return "没有可清除的手表地址"
+        val removed = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        for (addr in wanted) {
+            val device = try {
+                adapter.getRemoteDevice(addr)
+            } catch (_: IllegalArgumentException) {
+                failed.add(addr)
+                continue
+            }
+            val paired = device.bondState == BluetoothDevice.BOND_BONDED ||
+                bonded.any { it.address.equals(addr, ignoreCase = true) }
+            if (!paired) continue
+            val ok = try {
+                val method = device.javaClass.getMethod("removeBond")
+                method.invoke(device) as? Boolean ?: false
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) removed.add(addr) else failed.add(addr)
+        }
+        return when {
+            removed.isNotEmpty() && failed.isEmpty() ->
+                "已清除系统配对：${removed.joinToString("、")}"
+            removed.isNotEmpty() ->
+                "已清除 ${removed.joinToString("、")}，其余未成功：${failed.joinToString("、")}"
+            failed.isNotEmpty() ->
+                "系统拒绝删除配对：${failed.joinToString("、")}"
+            else -> "系统里没有这块手表的配对记录"
+        }
     }
 
     private fun requestPermissions(result: MethodChannel.Result) {

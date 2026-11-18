@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../services/android_spp.dart';
 import '../services/lrc_library.dart';
 import '../state/watch_controller.dart';
 import '../widgets/common.dart';
@@ -14,16 +15,61 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return PageScroll(
-      children: [
-        PageHeader(
+    final forgetNote = Text(
+      '试用结束后点这里。会断开连接，并删掉系统里 HC-04 的配对，手机就不会再自动连上这块表。',
+      style: TextStyle(
+        color: scheme.onSurfaceVariant,
+        fontSize: 12,
+        height: 1.4,
+      ),
+    );
+    final forgetButton = FilledButton.icon(
+      onPressed: () => _forgetBluetoothMemory(context, controller),
+      icon: const Icon(Icons.bluetooth_disabled_rounded),
+      label: const Text('清除系统蓝牙记忆'),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 960;
+        final pad = constraints.maxWidth < 560 ? 16.0 : 28.0;
+        final screen = MediaQuery.sizeOf(context);
+        final portraitPhone = screen.width < 760 && screen.height > screen.width;
+        final maxWidth = wide ? 1320.0 : 1180.0;
+        final inner = constraints.maxWidth - pad * 2;
+        final width = inner < maxWidth ? inner : maxWidth;
+
+        final header = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (Platform.isAndroid) ...[
+              if (wide)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    forgetButton,
+                    const SizedBox(width: 16),
+                    Expanded(child: forgetNote),
+                  ],
+                )
+              else ...[
+                SizedBox(width: double.infinity, child: forgetButton),
+                const SizedBox(height: 8),
+                forgetNote,
+              ],
+              const SizedBox(height: 18),
+            ],
+            PageHeader(
           title: '设置',
           subtitle: '连接、显示与设备偏好',
           trailing: StatusPill(
             label: controller.connected ? '硬件已连接' : '本地界面状态',
             icon: Icons.tune_rounded,
           ),
-        ),
+            ),
+          ],
+        );
+        final stack = <Widget>[
         const SizedBox(height: 22),
         _Section(
           icon: Icons.bluetooth_connected_rounded,
@@ -52,6 +98,7 @@ class SettingsPage extends StatelessWidget {
               ],
               selected: {controller.transport},
               showSelectedIcon: false,
+              expandedInsets: wide ? null : EdgeInsets.zero,
               onSelectionChanged: (value) =>
                   controller.setTransport(value.first),
             ),
@@ -257,25 +304,32 @@ class SettingsPage extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             SegmentedButton<ThemeMode>(
-              segments: const [
+              segments: [
                 ButtonSegment(
                   value: ThemeMode.system,
-                  icon: Icon(Icons.settings_brightness_rounded),
-                  label: Text('系统'),
+                  icon: portraitPhone
+                      ? null
+                      : const Icon(Icons.settings_brightness_rounded),
+                  label: const Text('系统'),
                 ),
                 ButtonSegment(
                   value: ThemeMode.dark,
-                  icon: Icon(Icons.dark_mode_outlined),
-                  label: Text('墨黑'),
+                  icon: portraitPhone
+                      ? null
+                      : const Icon(Icons.dark_mode_outlined),
+                  label: const Text('墨黑'),
                 ),
                 ButtonSegment(
                   value: ThemeMode.light,
-                  icon: Icon(Icons.light_mode_outlined),
-                  label: Text('暖白'),
+                  icon: portraitPhone
+                      ? null
+                      : const Icon(Icons.light_mode_outlined),
+                  label: const Text('暖白'),
                 ),
               ],
               selected: {controller.themeMode},
               showSelectedIcon: false,
+              expandedInsets: wide ? null : EdgeInsets.zero,
               onSelectionChanged: (value) =>
                   controller.setThemeMode(value.first),
             ),
@@ -335,6 +389,7 @@ class SettingsPage extends StatelessWidget {
               ],
               selected: {controller.watchBrightness},
               showSelectedIcon: false,
+              expandedInsets: wide ? null : EdgeInsets.zero,
               onSelectionChanged: (value) =>
                   controller.setWatchBrightness(value.first),
             ),
@@ -375,6 +430,7 @@ class SettingsPage extends StatelessWidget {
               ],
               selected: {controller.ledMode},
               showSelectedIcon: false,
+              expandedInsets: wide ? null : EdgeInsets.zero,
               onSelectionChanged: (value) => controller.setLedMode(value.first),
             ),
             const SizedBox(height: 14),
@@ -570,78 +626,93 @@ class SettingsPage extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 14),
+              Text(
+                '一份单片机大作业收成能戴在手上的彩色小表：片内 Flash 和片外 EEPROM 加起来大约 100KB，屏幕 SPI 按 30MHz 超频在送。',
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 12.5,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 12),
               const Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  Chip(label: Text('Token 大炮轰炸')),
-                  Chip(label: Text('额度见底警告')),
-                  Chip(label: Text('AI 神力加持')),
-                  Chip(label: Text('单片机大作业')),
+                  Chip(label: Text('约 100KB 系统')),
+                  Chip(label: Text('SPI 30MHz')),
+                  Chip(label: Text('128×160')),
                   Chip(label: Text('1207 转子马达')),
                 ],
               ),
-              const SizedBox(height: 14),
-              Text(
-                '本项目是一场纯正的「超级 Vibe Coding」大型极限拉扯现场：'
-                '从焊板调 I2C 到手搓 GUI 引擎，全程架起 Token 大炮连发轰炸，'
-                '无数次看着模型上下文额度见底红灯狂闪，硬是靠 AI 神力强行续命，'
-                '把一份普通单片机大作业魔改成了能真戴手上的 128×160 彩色小手表！\n'
-                '\n'
-                '• 极限压榨主控：AT32F421K8T7（64KB Flash / 16KB SRAM）内部极限抠出四行异步 DMA、局部脏矩形合并、Trim-RLE 汉字库与零碎片动态 RAM 池。\n'
-                '• 32KB 外置续命池：AT24C256 通过自研 ATD1 目录 + PackBits 压缩掉电保存设置、自定义相册表盘、20 条长消息与按需功能页资源。\n'
-                '• 九轴与复古触觉：MPU6050/QMI8658 + QMC5883L 九轴融合指南针；原 PA8 蜂鸣器改装为 AO3400A 低边驱动 1207 转子马达，还原老手机按键/长按/校准/新消息的多段震动灵魂。\n'
-                '• 双端全栈伴侣：Windows + Android 共用 Flutter 工程，蓝牙 SPP 传屏、通知实时光栅化、3D 姿态可视化一把梭。',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 12.5,
-                  height: 1.55,
-                ),
+              const SizedBox(height: 12),
+              _AboutFacts(
+                facts: const [
+                  (
+                    '整机存储',
+                    '大约 100KB。片内 64KB Flash 预算，再加 AT24C256 的 32KB。实测固件大约 61.5KB，片内还剩约 4KB。',
+                  ),
+                  (
+                    '主控',
+                    'AT32F421K8T7，Cortex-M4，16KB SRAM。外部 8MHz 晶振倍到 120MHz；晶振不起振时退回内部时钟。',
+                  ),
+                  (
+                    'SPI 超频',
+                    'ST7735S 手册建议 15MHz。APB2 跑在 120MHz，上电按四分频送到 30MHz，DMA1 通道 3 异步刷屏。手表设置里可以退回 15MHz。',
+                  ),
+                  (
+                    '屏幕',
+                    '1.8 寸 128×160 RGB565。全宽 4 行脏条带局部刷新，画面不动时 SPI 不传数据。',
+                  ),
+                  (
+                    '外置存储',
+                    'AT24C256 走 I2C，ATD1 目录加 PackBits。掉电仍留着设置、相册表盘、最多 20 条长消息和按需页面。',
+                  ),
+                  (
+                    '传感与震动',
+                    'MPU6050 加 QMC5883L/P 做九轴。原 PA8 蜂鸣器改成 AO3400A 低边驱动 1207 转子马达，短按、长按、校准和新消息各有一段震动。',
+                  ),
+                  (
+                    '链路',
+                    'HC-04 经典蓝牙 SPP，115200。Windows 和 Android 共用这一套 Flutter 界面，通知在手机上光栅成 128 宽点阵再送上表。',
+                  ),
+                ],
               ),
             ],
           ),
         ),
         const SizedBox(height: 20),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
+        _SettingsActions(controller: controller, stretch: portraitPhone),
+        ];
+        final cards = <Widget>[
+          for (final child in stack)
+            if (child is! SizedBox) child,
+        ];
+        final body = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            FilledButton.icon(
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                final ok = await controller.pushConfigToWatch(saveToI2c: true);
-                messenger.showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      ok ? '已以 App 最高优先级覆盖写入手表 AT24C256。' : '未连接手表：已保存在本地，连接后自动下发覆盖 I2C。',
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.upload_rounded, size: 18),
-              label: const Text('覆盖写入手表 I2C'),
-            ),
-            OutlinedButton.icon(
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                final ok = await controller.pullConfigFromWatch();
-                messenger.showSnackBar(
-                  SnackBar(
-                    content: Text(ok ? '已从手表 AT24C256 同步当前设置到 App。' : '请先连接手表。'),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.download_rounded, size: 18),
-              label: const Text('从手表 I2C 读取'),
-            ),
-            OutlinedButton.icon(
-              onPressed: controller.resetSettings,
-              icon: const Icon(Icons.restart_alt_rounded, size: 18),
-              label: const Text('恢复默认'),
-            ),
+            header,
+            if (wide)
+              Wrap(
+                spacing: 16,
+                runSpacing: 16,
+                children: [
+                  for (final card in cards)
+                    SizedBox(width: (width - 16) / 2, child: card),
+                ],
+              )
+            else
+              ...stack,
           ],
-        ),
-      ],
+        );
+        return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(pad, 24, pad, portraitPhone ? 112 : 32),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(width: width, child: body),
+          ),
+        );
+      },
     );
   }
 }
@@ -707,6 +778,169 @@ class _Section extends StatelessWidget {
           ...children,
         ],
       ),
+    );
+  }
+}
+
+Future<void> _forgetBluetoothMemory(
+  BuildContext context,
+  WatchController controller,
+) async {
+  final agreed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: const Text('清除系统蓝牙记忆'),
+        content: const Text(
+          '会立刻断开手表，并删除这台设备系统里 HC-04 的配对记录。之后要重新输入配对码才能再连接。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('清除'),
+          ),
+        ],
+      );
+    },
+  );
+  if (agreed != true || !context.mounted) return;
+  final message = await AndroidWatchBridge.forgetBluetooth(
+    controller.deviceAddress,
+  );
+  await controller.disconnect();
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+class _AboutFacts extends StatelessWidget {
+  const _AboutFacts({required this.facts});
+
+  final List<(String, String)> facts;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final two = constraints.maxWidth >= 640;
+        Widget tile((String, String) fact) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fact.$1,
+                  style: TextStyle(
+                    color: scheme.primary,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  fact.$2,
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (!two) {
+          return Column(
+            children: [
+              for (var i = 0; i < facts.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                tile(facts[i]),
+              ],
+            ],
+          );
+        }
+        final width = (constraints.maxWidth - 8) / 2;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final fact in facts) SizedBox(width: width, child: tile(fact)),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SettingsActions extends StatelessWidget {
+  const _SettingsActions({required this.controller, required this.stretch});
+
+  final WatchController controller;
+  final bool stretch;
+
+  @override
+  Widget build(BuildContext context) {
+    final buttons = <Widget>[
+      FilledButton.icon(
+        onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final ok = await controller.pushConfigToWatch(saveToI2c: true);
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                ok
+                    ? '已以 App 最高优先级覆盖写入手表 AT24C256。'
+                    : '未连接手表：已保存在本地，连接后自动下发覆盖 I2C。',
+              ),
+            ),
+          );
+        },
+        icon: const Icon(Icons.upload_rounded, size: 18),
+        label: const Text('覆盖写入手表 I2C'),
+      ),
+      OutlinedButton.icon(
+        onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final ok = await controller.pullConfigFromWatch();
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                ok ? '已从手表 AT24C256 同步当前设置到 App。' : '请先连接手表。',
+              ),
+            ),
+          );
+        },
+        icon: const Icon(Icons.download_rounded, size: 18),
+        label: const Text('从手表 I2C 读取'),
+      ),
+      OutlinedButton.icon(
+        onPressed: controller.resetSettings,
+        icon: const Icon(Icons.restart_alt_rounded, size: 18),
+        label: const Text('恢复默认'),
+      ),
+    ];
+    if (!stretch) {
+      return Wrap(spacing: 10, runSpacing: 10, children: buttons);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < buttons.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          buttons[i],
+        ],
+      ],
     );
   }
 }
