@@ -14,10 +14,7 @@ driver/
 *.png
 *.zip
 # 解说页用的实机画面和 PCB 渲染图
-!/界面/*.png
-!/渲染_等轴测.png
-!/渲染_俯视.png
-!/渲染_背面.png
+!/media/*.png
 *.pyc
 .vs/
 .idea/

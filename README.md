@@ -4,7 +4,7 @@
 
 纯 C99 的界面和动画核心，加上一块 **AT32F421K8T7** 上的参考端口。屏是 1.8 寸 ST7735S，128×160，RGB565。左右翻页，点进去放大，再点一层从右边盖上来。核心只依赖 `ui/hal.h`，换板子时重写这一层。
 
-下面先看界面怎么动，再看这块表在 16 KB 内存里怎么把画面送出去，最后是构建、烧录和调试。动图在 `动图/`。可以交互着看的解说页是 [底层架构.html](底层架构.html)。
+下面先看界面怎么动，再看这块表在 16 KB 内存里怎么把画面送出去，最后是构建、烧录和调试。画面都在 `media/`。可以交互着看的解说页是 [底层架构.html](底层架构.html)。
 
 ## 界面
 
@@ -12,30 +12,55 @@
 
 表盘上只有冒号和秒针在动，其余行不送。
 
-| 冒号 | 秒针 |
-| --- | --- |
-| <img src="动图/冒号呼吸.gif" width="168" alt="冒号呼吸"> | <img src="动图/秒针.gif" width="168" alt="秒针"> |
+<div align="center">
+<table>
+<tr>
+<td align="center"><img src="media/冒号呼吸.gif" width="200" alt="冒号"><br><b>冒号</b></td>
+<td align="center"><img src="media/秒针.gif" width="200" alt="秒针"><br><b>秒针</b></td>
+</tr>
+</table>
+</div>
 
 四个主页图标各自循环。点进去就是整页。
 
-| 跑步 | 信封 | 齿轮 | 音符 |
-| --- | --- | --- | --- |
-| <img src="动图/跑步图标.gif" width="168" alt="跑步图标"> | <img src="动图/信封开合.gif" width="168" alt="信封开合"> | <img src="动图/齿轮旋转.gif" width="168" alt="齿轮旋转"> | <img src="动图/音符摆动.gif" width="168" alt="音符摆动"> |
-
-| 进入运动 | 进入消息 | 进入设置 | 进入音乐 |
-| --- | --- | --- | --- |
-| <img src="动图/打开运动.gif" width="168" alt="打开运动"> | <img src="动图/打开消息.gif" width="168" alt="打开消息"> | <img src="动图/打开设置.gif" width="168" alt="打开设置"> | <img src="动图/打开音乐.gif" width="168" alt="打开音乐"> |
+<div align="center">
+<table>
+<tr>
+<td align="center"><img src="media/跑步图标.gif" width="168" alt="跑步"><br><b>跑步</b></td>
+<td align="center"><img src="media/信封开合.gif" width="168" alt="信封"><br><b>信封</b></td>
+<td align="center"><img src="media/齿轮旋转.gif" width="168" alt="齿轮"><br><b>齿轮</b></td>
+<td align="center"><img src="media/音符摆动.gif" width="168" alt="音符"><br><b>音符</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/打开运动.gif" width="168" alt="进入运动"><br>进入运动</td>
+<td align="center"><img src="media/打开消息.gif" width="168" alt="进入消息"><br>进入消息</td>
+<td align="center"><img src="media/打开设置.gif" width="168" alt="进入设置"><br>进入设置</td>
+<td align="center"><img src="media/打开音乐.gif" width="168" alt="进入音乐"><br>进入音乐</td>
+</tr>
+</table>
+</div>
 
 运动里有今日步数和两小时一根的柱子，滑过去是三维指南针，再进去是传感器。指南针的刻度和指针跟着九轴姿态转。消息正文是手机发来的点阵。设置里可以改抬腕、震动、亮度、熄屏，调试打开后底部多一行内存、CPU 和帧率。音乐页的柱子不分析音频，只在播放时起伏，用来添一点气氛。表盘上短按确定也可以播放或暂停。
 
-| 3D 指南针 | 音乐柱状图 |
-| --- | --- |
-| <img src="动图/3D指南针.gif" width="168" alt="3D指南针"> | <img src="动图/均衡器.gif" width="168" alt="音乐页柱状图"> |
-| 航向、俯仰和横滚随手腕变化 | 播放时上下起伏 |
+<div align="center">
+<table>
+<tr>
+<td align="center"><img src="media/3D指南针.gif" width="200" alt="3D指南针"><br><b>3D 指南针</b><br>航向、俯仰和横滚随手腕变化</td>
+<td align="center"><img src="media/均衡器.gif" width="200" alt="音乐页柱状图"><br><b>音乐柱状图</b><br>播放时上下起伏</td>
+</tr>
+</table>
+</div>
 
-| 运动子页 | 消息详情 | 亮度 | 关于 |
-| --- | --- | --- | --- |
-| <img src="动图/堆叠进入运动菜单.gif" width="168" alt="进入运动子菜单"> | <img src="动图/堆叠进入消息详情.gif" width="168" alt="进入消息详情"> | <img src="动图/堆叠进入亮度.gif" width="168" alt="进入亮度"> | <img src="动图/堆叠进入关于.gif" width="168" alt="进入关于"> |
+<div align="center">
+<table>
+<tr>
+<td align="center"><img src="media/堆叠进入运动菜单.gif" width="168" alt="运动子页"><br>运动子页</td>
+<td align="center"><img src="media/堆叠进入消息详情.gif" width="168" alt="消息详情"><br>消息详情</td>
+<td align="center"><img src="media/堆叠进入亮度.gif" width="168" alt="亮度"><br>亮度</td>
+<td align="center"><img src="media/堆叠进入关于.gif" width="168" alt="关于"><br>关于</td>
+</tr>
+</table>
+</div>
 
 ## 特性
 

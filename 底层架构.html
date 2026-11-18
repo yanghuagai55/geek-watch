@@ -733,14 +733,14 @@
         <span class="stage-badge mono" id="hero-badge">PNG · 4× PIXEL</span>
       </div>
       <div class="stage-frame">
-        <img id="hero-img" class="watch-img px" src="界面/01_数字表盘.png" alt="AT32 极客手表 实机画面">
+        <img id="hero-img" class="watch-img px" src="media/01_数字表盘.png" alt="AT32 极客手表 实机画面">
       </div>
       <p class="stage-cap" id="hero-cap">数字表盘：纸色小时、薄荷分钟、顶栏电量，静态不重绘 0 字节 SPI。</p>
       <div class="stage-switch" role="tablist" aria-label="首页舞台切换">
-        <button type="button" role="tab" aria-pressed="true" data-src="界面/01_数字表盘.png" data-kind="watch" data-badge="PNG · 128×160" data-cap="数字表盘：纸色小时、薄荷分钟、底部步数进度条，静态 0 字节 SPI。">数字表盘</button>
-        <button type="button" role="tab" aria-pressed="false" data-src="动图/秒针.gif" data-kind="watch" data-badge="GIF · ANL1 模块" data-cap="指针表盘（片外 ANL1 模块装入 SRAM 执行）：琥珀时针、薄荷分针、逐秒刷脏条。">指针动效</button>
-        <button type="button" role="tab" aria-pressed="false" data-src="界面/15_调试角标.png" data-kind="watch" data-badge="PNG · 调试角标" data-cap="调试角标：R15/16K（SRAM 已用） C0%（CPU 负载） 21（FPS），独立覆盖不推页面。">调试角标</button>
-        <button type="button" role="tab" aria-pressed="false" data-src="渲染_等轴测.png" data-kind="hw" data-badge="3D · 硬件装配" data-cap="实物 PCB 3D 装配：1.8 寸 TFT、MPU6050、QMC5883、三颗独立按键、1207 转子马达。">硬件 3D</button>
+        <button type="button" role="tab" aria-pressed="true" data-src="media/01_数字表盘.png" data-kind="watch" data-badge="PNG · 128×160" data-cap="数字表盘：纸色小时、薄荷分钟、底部步数进度条，静态 0 字节 SPI。">数字表盘</button>
+        <button type="button" role="tab" aria-pressed="false" data-src="media/秒针.gif" data-kind="watch" data-badge="GIF · ANL1 模块" data-cap="指针表盘（片外 ANL1 模块装入 SRAM 执行）：琥珀时针、薄荷分针、逐秒刷脏条。">指针动效</button>
+        <button type="button" role="tab" aria-pressed="false" data-src="media/15_调试角标.png" data-kind="watch" data-badge="PNG · 调试角标" data-cap="调试角标：R15/16K（SRAM 已用） C0%（CPU 负载） 21（FPS），独立覆盖不推页面。">调试角标</button>
+        <button type="button" role="tab" aria-pressed="false" data-src="media/渲染_等轴测.png" data-kind="hw" data-badge="3D · 硬件装配" data-cap="实物 PCB 3D 装配：1.8 寸 TFT、MPU6050、QMC5883、三颗独立按键、1207 转子马达。">硬件 3D</button>
       </div>
     </div>
   </section>
@@ -782,11 +782,11 @@
       <div class="g2" style="align-items: start; margin-bottom: 44px;">
         <div class="hw-stage">
           <div class="tabs" role="tablist" aria-label="PCB 3D 视角">
-            <button type="button" class="tab-btn" aria-pressed="true" data-hw="渲染_等轴测.png" data-hwcap="等轴测视图：1.8&quot; TFT（SPI1）、MPU6050 与 QMC5883 模块、四颗轻触开关（KEY1/2/3 + RST）。">等轴测视图</button>
-            <button type="button" class="tab-btn" aria-pressed="false" data-hw="渲染_俯视.png" data-hwcap="正面俯视图：丝印、SWD 调试口、MIC 预留座（PA0 当前未采样）、BMP580 占位（hal_baro_read 返回 0）。">正面俯视</button>
-            <button type="button" class="tab-btn" aria-pressed="false" data-hw="渲染_背面.png" data-hwcap="背面视图：LQFP-32 AT32F421K8T7 主控（U1）、8 MHz 晶振（C_X1/X2）、AO3400A 马达低边开关（Q_BEEP）与蓝牙座。">背面元件</button>
+            <button type="button" class="tab-btn" aria-pressed="true" data-hw="media/渲染_等轴测.png" data-hwcap="等轴测视图：1.8&quot; TFT（SPI1）、MPU6050 与 QMC5883 模块、四颗轻触开关（KEY1/2/3 + RST）。">等轴测视图</button>
+            <button type="button" class="tab-btn" aria-pressed="false" data-hw="media/渲染_俯视.png" data-hwcap="正面俯视图：丝印、SWD 调试口、MIC 预留座（PA0 当前未采样）、BMP580 占位（hal_baro_read 返回 0）。">正面俯视</button>
+            <button type="button" class="tab-btn" aria-pressed="false" data-hw="media/渲染_背面.png" data-hwcap="背面视图：LQFP-32 AT32F421K8T7 主控（U1）、8 MHz 晶振（C_X1/X2）、AO3400A 马达低边开关（Q_BEEP）与蓝牙座。">背面元件</button>
           </div>
-          <img id="hw-view-img" src="渲染_等轴测.png" alt="AT32 手表 PCB 3D 装配图">
+          <img id="hw-view-img" src="media/渲染_等轴测.png" alt="AT32 手表 PCB 3D 装配图">
           <p id="hw-view-cap" style="margin: 12px 0 0; font-size: 13px; color: var(--dim);">
             等轴测视图：1.8" TFT（SPI1）、MPU6050 与 QMC5883 模块、四颗轻触开关（KEY1/2/3 + RST）。
           </p>
@@ -847,12 +847,12 @@
 
       <div class="inspector-box" id="ui-inspector">
         <div class="big-screen">
-          <img id="insp-img" class="px" src="界面/01_数字表盘.png" alt="当前检视的实机界面">
+          <img id="insp-img" class="px" src="media/01_数字表盘.png" alt="当前检视的实机界面">
         </div>
         <div>
           <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
             <span class="pill pill-mint mono" id="insp-tag">表盘 · 静态截屏</span>
-            <span class="mono" style="font-size:12px; color:var(--muted);" id="insp-file">界面/01_数字表盘.png</span>
+            <span class="mono" style="font-size:12px; color:var(--muted);" id="insp-file">media/01_数字表盘.png</span>
           </div>
           <h4 class="display" id="insp-title" style="margin: 0 0 8px; font-size: 28px; color: var(--paper);">01 · 数字表盘（琥珀双色）</h4>
           <p id="insp-desc" style="margin: 0 0 12px; font-size: 15px; color: var(--dim);">
@@ -1113,7 +1113,7 @@
         <div>
           <div class="lcd-40-wrap">
             <div class="lcd-40" id="lcd-40-grid" aria-label="128x160 40条水平脏带视图">
-              <img id="dirty-underlay" class="underlay px" src="界面/01_数字表盘.png" alt="脏条带底层实机画面">
+              <img id="dirty-underlay" class="underlay px" src="media/01_数字表盘.png" alt="脏条带底层实机画面">
             </div>
           </div>
           <p class="mono" id="dirty-grid-cap" style="text-align:center; font-size:12px; margin-top:10px; color:var(--ink);">
@@ -1265,28 +1265,28 @@
       <div class="g4">
         <div class="card">
           <span class="pill pill-amber mono" style="margin-bottom:8px;">零级 → 一级 (0..255)</span>
-          <img class="px" src="动图/打开运动.gif" alt="打开运动图标放大动画" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
+          <img class="px" src="media/打开运动.gif" alt="打开运动图标放大动画" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
           <div style="font-size:13px; color:var(--dim); margin-top:8px;">
             <strong>图标放大打开 (280 ms)</strong>：前 70/255 仍画 <span class="mono">SYS1</span> 图标；过 70 才释放 <span class="mono">SYS1</span> 并淡入运动页，防变白块。
           </div>
         </div>
         <div class="card">
           <span class="pill pill-mint mono" style="margin-bottom:8px;">一级 → 二级 (STACK 200ms)</span>
-          <img class="px" src="动图/堆叠进入运动菜单.gif" alt="堆叠进入运动菜单" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
+          <img class="px" src="media/堆叠进入运动菜单.gif" alt="堆叠进入运动菜单" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
           <div style="font-size:13px; color:var(--dim); margin-top:8px;">
             <strong>盖页进入子页</strong>：父列表缩小到 ~86% 略左移并加一层暗色，新子页从右侧盖上来。
           </div>
         </div>
         <div class="card">
           <span class="pill pill-mint mono" style="margin-bottom:8px;">设置 → 亮度 + 涟漪</span>
-          <img class="px" src="动图/堆叠进入亮度.gif" alt="堆叠进入亮度" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
+          <img class="px" src="media/堆叠进入亮度.gif" alt="堆叠进入亮度" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
           <div style="font-size:13px; color:var(--dim); margin-top:8px;">
             <strong>按下涟漪 + 盖页</strong>：卡片用 <span class="mono">KIND_RIPPLE</span> 圆角裁剪扩开水波，只脏焦点那一行附近的几条带。
           </div>
         </div>
         <div class="card">
           <span class="pill pill-amber mono" style="margin-bottom:8px;">设置 → 关于（整包预备）</span>
-          <img class="px" src="动图/堆叠进入关于.gif" alt="堆叠进入关于" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
+          <img class="px" src="media/堆叠进入关于.gif" alt="堆叠进入关于" style="width:100%; max-width:180px; margin:6px auto; border:1px solid var(--line);">
           <div style="font-size:13px; color:var(--dim); margin-top:8px;">
             <strong>平推首帧预加载</strong>：进入关于页前先释放主菜单与媒体缓冲，一次备齐 1.3 KB 字 + 2.8 KB 图再滑入。
           </div>
@@ -1584,44 +1584,44 @@
 
   /* 3. 19 张实机截屏 + 15 张实机 GIF 展柜 */
   var STILL_ITEMS = [
-    { src: '界面/01_数字表盘.png', tag: '表盘 1/4 · 片内', title: '01 · 数字表盘（琥珀双色）', desc: '小时用暖纸色，分钟用薄荷色，华文琥珀 1:1 存在片内 Flash。顶部日期星期，底部步数进度条。静止时每帧脏条带数为 0。', ram: '主页环模块：SYS1（~2.7 KB）+ SHD1 标题缓存（1.6 KB）' },
-    { src: '界面/02_指针表盘.png', tag: '表盘 2/4 · ANL1', title: '02 · 指针表盘（墨竹）', desc: '由片外 Thumb 小程序 ANL1 装入 SRAM 后执行。时针琥珀、分针薄荷，圆盘刻度与底部步数可选挂件。', ram: '互斥调度：释放 SYS1，装入 ANL1（≤ 3072 B）' },
-    { src: '界面/03_九轴表盘.png', tag: '表盘 3/4 · ANL1', title: '03 · 九轴仪表表盘', desc: '实时显示 9DOF 磁航向度数、水平指示槽以及横滚 R 与俯仰 P（0.1° 精度），全部由定点 Mahony 产出。', ram: '互斥调度：共用 ANL1 小程序，数据由 pic_mod_api_t::imu_get 提供' },
-    { src: '界面/04_相册表盘.png', tag: '表盘 4/4 · DIAL_SWAP', title: '04 · 自定义相册表盘', desc: '压缩后 ≤ 9 KB 的表盘图直接烧入片内 0x0800DC00 热槽 XIP 直读，零 I2C 开销；更大图则留外置按 4 行条带流式读。', ram: '存储路径：片内 9 KB 热槽优先，其次外置双端池低端' },
-    { src: '界面/05_主页_运动.png', tag: '主页环 1 · SYS1', title: '05 · 主页：运动图标', desc: '零级只放图标与华文琥珀标题，底部 4 点指示页码并在停稳 1.4 秒后用 400 ms 淡出。', ram: '先申请 SYS1（~2.7 KB）再申请 SHD1 标题缓存，防池碎裂' },
-    { src: '界面/06_运动_步数.png', tag: '一级 · SPR1', title: '06 · 运动：今日步数柱状图', desc: '12 根 2 小时时段柱，当前时段用琥珀突出。柱状图揭幕动画从 SPR1 装入完成的那一帧起算，不被 I2C 读时间吞掉。', ram: 'zoom ≥ 70 时释放 SYS1，装入 SPR1（上限 4608 B，实占 ~3.4 KB）' },
-    { src: '界面/07_运动_指南针.png', tag: '一级 · C3D1', title: '07 · 运动：3D 立体罗盘', desc: '独立指针 c3d_buf 装载 3D 罗盘小程序，角落标有 3D 字样。若连续空间不够会先拆掉 dyn_buf 再试，仍失败则退回 2D 罗盘。', ram: '关闭 SHD1 标题缓存 + 释放 dyn_buf → C3D1（≤ 4096 B）' },
-    { src: '界面/08_运动_菜单.png', tag: '二级 · 盖页', title: '08 · 运动二级菜单', desc: '清零今日步数、查看传感器原始值；调试模式开启时额外出现「加 1000 步」。文字从片外字库尾经 10 槽环形缓存读取。', ram: '10 槽汉字缓存（36 B/字），整屏汉字零抖动' },
-    { src: '界面/09_传感器数值.png', tag: '二级 · 调试', title: '09 · 传感器原始数值页', desc: '直观列出 9DOF/6DOF 状态、温度、横滚/俯仰、磁航向、三轴 A/G/M 及 I2C 扫到的地址（图底 k2c 即 0x2C QMC5883P）。', ram: '数据来自 imu9_get() 与 port_service 50 Hz 采样' },
-    { src: '界面/10_主页_消息.png', tag: '主页环 2 · SYS1', title: '10 · 主页：消息图标', desc: '多色信封矢量图标由 SYS1 绘制，打开应用时先用图标缩放动画到 70/255，随后才切换到列表。', ram: '打开前 70/255 帧保留 SYS1，不提前抢冲缓冲' },
-    { src: '界面/11_消息列表.png', tag: '一级 · 点阵', title: '11 · 消息列表（5 行可视窗）', desc: '手机端光栅化好 1 bpp 列表点阵推入外置池；手表只把可见的 5 行窗口拉进 SRAM，外置最多可存 20 条。', ram: '只载入可视 5 行（1,760 B），离开消息即释放并恢复手机推歌' },
-    { src: '界面/12_消息详情.png', tag: '二级 · 2560 B', title: '12 · 消息详情（128×160 1bpp）', desc: '全屏 2,560 字节单色点阵，点开哪条才申请 SRAM 并从外置池读哪条，退出详情再恢复列表。', ram: '列表缓冲与详情缓冲互斥，避免 20 条同时占内存' },
-    { src: '界面/13_主页_设置.png', tag: '主页环 3 · SYS1', title: '13 · 主页：设置图标', desc: '薄荷齿轮图标在焦点时旋转，底线琥珀高亮横杠对应当前焦点。', ram: 'SYS1 绘制，不占用片内 55 KB 代码区' },
-    { src: '界面/14_设置列表.png', tag: '一级 · 9 项', title: '14 · 设置九项列表', desc: '调试模式、抬腕亮屏、震动、亮度、蓝牙、状态灯、熄屏、SPI 速率、关于。选中项用薄荷细描边与左竖条标出。', ram: '片内 ui_menu + ui_app，中文常用字片内直取' },
-    { src: '界面/15_调试角标.png', tag: '调试层 · 覆盖', title: '15 · 调试角标（R15/16K C0% 21）', desc: '单行 18 px 覆盖在底部，不推挤上方列表布局。显示整片 SRAM（含栈）、CPU 负载 tenths%、以及排除角标自身重绘的 FPS。', ram: 'hal_ram_get() = (静态区 - 动态池空闲) + MSP 栈深' },
-    { src: '界面/16_亮度.png', tag: '二级 · PWM', title: '16 · 亮度三级子页', desc: '低 80/255、中 160/255、高 255/255，直接写 TMR3 CH3 20 kHz PWM 比较寄存器，并同步写回外置双槽配置。', ram: '栈叠盖页，父级列表缩小至 86% 并暗化' },
-    { src: '界面/17_关于.png', tag: '二级 · ABT2', title: '17 · 关于页（彩图 + 三行简介）', desc: '彩图 RGB565（~2.8 KB）加三行简介（~1.3 KB）。推入动画前等主菜单与媒体释完，先拿 1.3 KB 字，再拿 2.8 KB 图。', ram: '若连续空洞不够整张图，自动退化为逐行流式读外置' },
-    { src: '界面/18_主页_音乐.png', tag: '主页环 4 · SYS1', title: '18 · 主页：音乐图标', desc: '双色音符与底部 5 根装饰短柱，向右边一滑就是 0 序号表盘（无缝环形队列）。', ram: 'SYS1 矢量绘制' },
-    { src: '界面/19_音乐播放.png', tag: '一级 · MUS1', title: '19 · 音乐播放与歌词点阵', desc: '连上手机伴侣后显示点阵曲名（128×32, 512 B）或 UTF-8 歌词、5 根动态氛围柱状图（中间琥珀），表上按键经 0x10 帧控手机切歌。', ram: '独立 mus_buf 装入 MUS1 + 媒体点阵，离开即释' }
+    { src: 'media/01_数字表盘.png', tag: '表盘 1/4 · 片内', title: '01 · 数字表盘（琥珀双色）', desc: '小时用暖纸色，分钟用薄荷色，华文琥珀 1:1 存在片内 Flash。顶部日期星期，底部步数进度条。静止时每帧脏条带数为 0。', ram: '主页环模块：SYS1（~2.7 KB）+ SHD1 标题缓存（1.6 KB）' },
+    { src: 'media/02_指针表盘.png', tag: '表盘 2/4 · ANL1', title: '02 · 指针表盘（墨竹）', desc: '由片外 Thumb 小程序 ANL1 装入 SRAM 后执行。时针琥珀、分针薄荷，圆盘刻度与底部步数可选挂件。', ram: '互斥调度：释放 SYS1，装入 ANL1（≤ 3072 B）' },
+    { src: 'media/03_九轴表盘.png', tag: '表盘 3/4 · ANL1', title: '03 · 九轴仪表表盘', desc: '实时显示 9DOF 磁航向度数、水平指示槽以及横滚 R 与俯仰 P（0.1° 精度），全部由定点 Mahony 产出。', ram: '互斥调度：共用 ANL1 小程序，数据由 pic_mod_api_t::imu_get 提供' },
+    { src: 'media/04_相册表盘.png', tag: '表盘 4/4 · DIAL_SWAP', title: '04 · 自定义相册表盘', desc: '压缩后 ≤ 9 KB 的表盘图直接烧入片内 0x0800DC00 热槽 XIP 直读，零 I2C 开销；更大图则留外置按 4 行条带流式读。', ram: '存储路径：片内 9 KB 热槽优先，其次外置双端池低端' },
+    { src: 'media/05_主页_运动.png', tag: '主页环 1 · SYS1', title: '05 · 主页：运动图标', desc: '零级只放图标与华文琥珀标题，底部 4 点指示页码并在停稳 1.4 秒后用 400 ms 淡出。', ram: '先申请 SYS1（~2.7 KB）再申请 SHD1 标题缓存，防池碎裂' },
+    { src: 'media/06_运动_步数.png', tag: '一级 · SPR1', title: '06 · 运动：今日步数柱状图', desc: '12 根 2 小时时段柱，当前时段用琥珀突出。柱状图揭幕动画从 SPR1 装入完成的那一帧起算，不被 I2C 读时间吞掉。', ram: 'zoom ≥ 70 时释放 SYS1，装入 SPR1（上限 4608 B，实占 ~3.4 KB）' },
+    { src: 'media/07_运动_指南针.png', tag: '一级 · C3D1', title: '07 · 运动：3D 立体罗盘', desc: '独立指针 c3d_buf 装载 3D 罗盘小程序，角落标有 3D 字样。若连续空间不够会先拆掉 dyn_buf 再试，仍失败则退回 2D 罗盘。', ram: '关闭 SHD1 标题缓存 + 释放 dyn_buf → C3D1（≤ 4096 B）' },
+    { src: 'media/08_运动_菜单.png', tag: '二级 · 盖页', title: '08 · 运动二级菜单', desc: '清零今日步数、查看传感器原始值；调试模式开启时额外出现「加 1000 步」。文字从片外字库尾经 10 槽环形缓存读取。', ram: '10 槽汉字缓存（36 B/字），整屏汉字零抖动' },
+    { src: 'media/09_传感器数值.png', tag: '二级 · 调试', title: '09 · 传感器原始数值页', desc: '直观列出 9DOF/6DOF 状态、温度、横滚/俯仰、磁航向、三轴 A/G/M 及 I2C 扫到的地址（图底 k2c 即 0x2C QMC5883P）。', ram: '数据来自 imu9_get() 与 port_service 50 Hz 采样' },
+    { src: 'media/10_主页_消息.png', tag: '主页环 2 · SYS1', title: '10 · 主页：消息图标', desc: '多色信封矢量图标由 SYS1 绘制，打开应用时先用图标缩放动画到 70/255，随后才切换到列表。', ram: '打开前 70/255 帧保留 SYS1，不提前抢冲缓冲' },
+    { src: 'media/11_消息列表.png', tag: '一级 · 点阵', title: '11 · 消息列表（5 行可视窗）', desc: '手机端光栅化好 1 bpp 列表点阵推入外置池；手表只把可见的 5 行窗口拉进 SRAM，外置最多可存 20 条。', ram: '只载入可视 5 行（1,760 B），离开消息即释放并恢复手机推歌' },
+    { src: 'media/12_消息详情.png', tag: '二级 · 2560 B', title: '12 · 消息详情（128×160 1bpp）', desc: '全屏 2,560 字节单色点阵，点开哪条才申请 SRAM 并从外置池读哪条，退出详情再恢复列表。', ram: '列表缓冲与详情缓冲互斥，避免 20 条同时占内存' },
+    { src: 'media/13_主页_设置.png', tag: '主页环 3 · SYS1', title: '13 · 主页：设置图标', desc: '薄荷齿轮图标在焦点时旋转，底线琥珀高亮横杠对应当前焦点。', ram: 'SYS1 绘制，不占用片内 55 KB 代码区' },
+    { src: 'media/14_设置列表.png', tag: '一级 · 9 项', title: '14 · 设置九项列表', desc: '调试模式、抬腕亮屏、震动、亮度、蓝牙、状态灯、熄屏、SPI 速率、关于。选中项用薄荷细描边与左竖条标出。', ram: '片内 ui_menu + ui_app，中文常用字片内直取' },
+    { src: 'media/15_调试角标.png', tag: '调试层 · 覆盖', title: '15 · 调试角标（R15/16K C0% 21）', desc: '单行 18 px 覆盖在底部，不推挤上方列表布局。显示整片 SRAM（含栈）、CPU 负载 tenths%、以及排除角标自身重绘的 FPS。', ram: 'hal_ram_get() = (静态区 - 动态池空闲) + MSP 栈深' },
+    { src: 'media/16_亮度.png', tag: '二级 · PWM', title: '16 · 亮度三级子页', desc: '低 80/255、中 160/255、高 255/255，直接写 TMR3 CH3 20 kHz PWM 比较寄存器，并同步写回外置双槽配置。', ram: '栈叠盖页，父级列表缩小至 86% 并暗化' },
+    { src: 'media/17_关于.png', tag: '二级 · ABT2', title: '17 · 关于页（彩图 + 三行简介）', desc: '彩图 RGB565（~2.8 KB）加三行简介（~1.3 KB）。推入动画前等主菜单与媒体释完，先拿 1.3 KB 字，再拿 2.8 KB 图。', ram: '若连续空洞不够整张图，自动退化为逐行流式读外置' },
+    { src: 'media/18_主页_音乐.png', tag: '主页环 4 · SYS1', title: '18 · 主页：音乐图标', desc: '双色音符与底部 5 根装饰短柱，向右边一滑就是 0 序号表盘（无缝环形队列）。', ram: 'SYS1 矢量绘制' },
+    { src: 'media/19_音乐播放.png', tag: '一级 · MUS1', title: '19 · 音乐播放与歌词点阵', desc: '连上手机伴侣后显示点阵曲名（128×32, 512 B）或 UTF-8 歌词、5 根动态氛围柱状图（中间琥珀），表上按键经 0x10 帧控手机切歌。', ram: '独立 mus_buf 装入 MUS1 + 媒体点阵，离开即释' }
   ];
 
   var ANIM_ITEMS = [
-    { src: '动图/3D指南针.gif', tag: 'GIF · C3D1', title: '3D 指南针', desc: '刻度盘和指针跟着九轴姿态转，下面是航向、俯仰和横滚。小程序装进 SRAM 后再画，装不下就退回平面罗盘。', ram: 'C3D1 独立缓冲，上限 4096 B' },
-    { src: '动图/冒号呼吸.gif', tag: 'GIF · 微动效', title: '冒号呼吸', desc: '数字表盘中段冒号走 ui_anim_pulse，每帧只脏中间 2–3 条 4 行带。', ram: '局部刷新典型案例' },
-    { src: '动图/秒针.gif', tag: 'GIF · ANL1', title: '指针表盘秒针', desc: '每秒只在指针扫过的脏条带范围光栅并送 DMA，其余条带跳过。', ram: 'ANL1 在 SRAM 中执行' },
-    { src: '动图/跑步图标.gif', tag: 'GIF · SYS1', title: '跑步 5 帧关节动画', desc: '60 ms 一帧驱动运动图标关节，仅在主页卡片盒内触发脏带重绘。', ram: '零浮点矢量插值' },
-    { src: '动图/信封开合.gif', tag: 'GIF · SYS1', title: '消息信封开合', desc: '多色矢量信封盖开合，只在图标卡片区域生成脏区包围盒。', ram: 'SYS1 矢量指令序列' },
-    { src: '动图/齿轮旋转.gif', tag: 'GIF · SYS1', title: '设置齿轮旋转', desc: '整数旋转投影绘制齿轮齿廓，平稳运行在 16 ms 帧预算内。', ram: 'SYS1 矢量指令序列' },
-    { src: '动图/音符摆动.gif', tag: 'GIF · SYS1', title: '音乐音符摆动', desc: '音符随相位摇摆，底部五条装饰短柱跟随跳动添氛围。', ram: 'SYS1 矢量指令序列' },
-    { src: '动图/均衡器.gif', tag: 'GIF · MUS1', title: '播放中动态氛围柱状图', desc: '并非音频频谱：music_mod.c 用 now_ms + 相位偏移驱动五根柱（中间柱琥珀）做 ease_in_out 循环起伏以增加播放氛围，暂停时收成静线。', ram: 'MUS1 独立缓冲执行' },
-    { src: '动图/打开运动.gif', tag: 'GIF · 0→1', title: '打开运动（图标放大）', desc: '280 ms ease_out 缩放；zoom < 70 保留 SYS1 图标，过 70 释 SYS1 并加载 SPR1。', ram: '关键阈值 zoom = 70' },
-    { src: '动图/打开消息.gif', tag: 'GIF · 0→1', title: '打开消息（按需拉取）', desc: '展开过程中不抢载 SYS1 冲掉刚准备的列表缓冲，展开完毕即显示 5 行消息。', ram: 'list_buf 与 SYS1 互斥' },
-    { src: '动图/打开设置.gif', tag: 'GIF · 0→1', title: '打开设置列表', desc: '从齿轮卡片缩放铺满 128×160 屏，选中行焦点框保持垂直居中。', ram: '片内 ui_menu 驱动' },
-    { src: '动图/打开音乐.gif', tag: 'GIF · 0→1', title: '打开音乐播放器', desc: '图标放大展开后由 MUS1 接管播放界面与曲名点阵渲染。', ram: 'mus_buf + 媒体点阵' },
-    { src: '动图/堆叠进入运动菜单.gif', tag: 'GIF · 1→2', title: '堆叠进入运动菜单', desc: 'STACK 200 ms：步数页缩小左移并压暗，运动菜单从右侧滑入覆盖。', ram: '页面变换 scale256/ox/oy' },
-    { src: '动图/堆叠进入消息详情.gif', tag: 'GIF · 1→2', title: '堆叠进入消息详情', desc: '列表退掉 1,760 B 缓冲，腾出空间给 2,560 B 1bpp 详情图全屏滑入。', ram: '列表与详情按页切换' },
-    { src: '动图/堆叠进入亮度.gif', tag: 'GIF · 1→2', title: '堆叠进入亮度调节', desc: '可见按下水波纹与右侧子页盖页的连续脏条带更新过程。', ram: '50–64 fps 局部刷新' },
-    { src: '动图/堆叠进入关于.gif', tag: 'GIF · 1→2', title: '堆叠进入关于页', desc: '首帧前已完成字+图整包缓存，平移动画期间零 I2C 阻塞。', ram: '1.3 KB 字先于 2.8 KB 图' }
+    { src: 'media/3D指南针.gif', tag: 'GIF · C3D1', title: '3D 指南针', desc: '刻度盘和指针跟着九轴姿态转，下面是航向、俯仰和横滚。小程序装进 SRAM 后再画，装不下就退回平面罗盘。', ram: 'C3D1 独立缓冲，上限 4096 B' },
+    { src: 'media/冒号呼吸.gif', tag: 'GIF · 微动效', title: '冒号呼吸', desc: '数字表盘中段冒号走 ui_anim_pulse，每帧只脏中间 2–3 条 4 行带。', ram: '局部刷新典型案例' },
+    { src: 'media/秒针.gif', tag: 'GIF · ANL1', title: '指针表盘秒针', desc: '每秒只在指针扫过的脏条带范围光栅并送 DMA，其余条带跳过。', ram: 'ANL1 在 SRAM 中执行' },
+    { src: 'media/跑步图标.gif', tag: 'GIF · SYS1', title: '跑步 5 帧关节动画', desc: '60 ms 一帧驱动运动图标关节，仅在主页卡片盒内触发脏带重绘。', ram: '零浮点矢量插值' },
+    { src: 'media/信封开合.gif', tag: 'GIF · SYS1', title: '消息信封开合', desc: '多色矢量信封盖开合，只在图标卡片区域生成脏区包围盒。', ram: 'SYS1 矢量指令序列' },
+    { src: 'media/齿轮旋转.gif', tag: 'GIF · SYS1', title: '设置齿轮旋转', desc: '整数旋转投影绘制齿轮齿廓，平稳运行在 16 ms 帧预算内。', ram: 'SYS1 矢量指令序列' },
+    { src: 'media/音符摆动.gif', tag: 'GIF · SYS1', title: '音乐音符摆动', desc: '音符随相位摇摆，底部五条装饰短柱跟随跳动添氛围。', ram: 'SYS1 矢量指令序列' },
+    { src: 'media/均衡器.gif', tag: 'GIF · MUS1', title: '播放中动态氛围柱状图', desc: '并非音频频谱：music_mod.c 用 now_ms + 相位偏移驱动五根柱（中间柱琥珀）做 ease_in_out 循环起伏以增加播放氛围，暂停时收成静线。', ram: 'MUS1 独立缓冲执行' },
+    { src: 'media/打开运动.gif', tag: 'GIF · 0→1', title: '打开运动（图标放大）', desc: '280 ms ease_out 缩放；zoom < 70 保留 SYS1 图标，过 70 释 SYS1 并加载 SPR1。', ram: '关键阈值 zoom = 70' },
+    { src: 'media/打开消息.gif', tag: 'GIF · 0→1', title: '打开消息（按需拉取）', desc: '展开过程中不抢载 SYS1 冲掉刚准备的列表缓冲，展开完毕即显示 5 行消息。', ram: 'list_buf 与 SYS1 互斥' },
+    { src: 'media/打开设置.gif', tag: 'GIF · 0→1', title: '打开设置列表', desc: '从齿轮卡片缩放铺满 128×160 屏，选中行焦点框保持垂直居中。', ram: '片内 ui_menu 驱动' },
+    { src: 'media/打开音乐.gif', tag: 'GIF · 0→1', title: '打开音乐播放器', desc: '图标放大展开后由 MUS1 接管播放界面与曲名点阵渲染。', ram: 'mus_buf + 媒体点阵' },
+    { src: 'media/堆叠进入运动菜单.gif', tag: 'GIF · 1→2', title: '堆叠进入运动菜单', desc: 'STACK 200 ms：步数页缩小左移并压暗，运动菜单从右侧滑入覆盖。', ram: '页面变换 scale256/ox/oy' },
+    { src: 'media/堆叠进入消息详情.gif', tag: 'GIF · 1→2', title: '堆叠进入消息详情', desc: '列表退掉 1,760 B 缓冲，腾出空间给 2,560 B 1bpp 详情图全屏滑入。', ram: '列表与详情按页切换' },
+    { src: 'media/堆叠进入亮度.gif', tag: 'GIF · 1→2', title: '堆叠进入亮度调节', desc: '可见按下水波纹与右侧子页盖页的连续脏条带更新过程。', ram: '50–64 fps 局部刷新' },
+    { src: 'media/堆叠进入关于.gif', tag: 'GIF · 1→2', title: '堆叠进入关于页', desc: '首帧前已完成字+图整包缓存，平移动画期间零 I2C 阻塞。', ram: '1.3 KB 字先于 2.8 KB 图' }
   ];
 
   var gGrid = document.getElementById('gallery-grid');
@@ -1906,7 +1906,7 @@
 
   var DIRTY_PRESETS = {
     idle: {
-      img: '界面/01_数字表盘.png',
+      img: 'media/01_数字表盘.png',
       bands: [],
       heal: false,
       cmds: [
@@ -1918,7 +1918,7 @@
       note: '哈希与包围盒全未变化 → 循环跳过所有条带：0 字节 SPI，0 次光栅。'
     },
     colon: {
-      img: '界面/01_数字表盘.png',
+      img: 'media/01_数字表盘.png',
       bands: [17, 18, 19],
       heal: false,
       cmds: [
@@ -1930,7 +1930,7 @@
       note: '仅第 17–19 条（3 条 × 1024 B = 3,072 B）送屏幕，左右边界虽窄仍强制整宽 128 送出。'
     },
     badge: {
-      img: '界面/15_调试角标.png',
+      img: 'media/15_调试角标.png',
       bands: [34, 35, 36, 37, 38],
       heal: false,
       cmds: [
@@ -1942,7 +1942,7 @@
       note: '角标跳字仅弄脏底部 5 条带（5,120 B），fps_update() 会排除这种角标重绘，静止时 FPS 归 0。'
     },
     scroll: {
-      img: '界面/14_设置列表.png',
+      img: 'media/14_设置列表.png',
       bands: [10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27],
       heal: false,
       cmds: [
@@ -1954,7 +1954,7 @@
       note: '旧包围盒 + 新包围盒并集产生 18 条脏带（18,432 B），实测帧率稳定在 50–64 fps。'
     },
     heal: {
-      img: '界面/14_设置列表.png',
+      img: 'media/14_设置列表.png',
       bands: Array.from({ length: 40 }, function (_, i) { return i; }),
       heal: true,
       cmds: [
