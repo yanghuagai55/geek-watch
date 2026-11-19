@@ -1,6 +1,6 @@
 # AT32 手表 UI
 
-![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-14.3%2F16KB-green) ![flash](https://img.shields.io/badge/flash-53.9%2F64KB-orange) ![fps](https://img.shields.io/badge/FPS-partial--refresh-brightgreen)
+![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-14.3%2F16KB-green) ![flash](https://img.shields.io/badge/flash-55.0%2F64KB-orange) ![fps](https://img.shields.io/badge/FPS-partial--refresh-brightgreen)
 
 纯 C99 的界面和动画核心，加上一块 **AT32F421K8T7** 上的参考端口。屏是 1.8 寸 ST7735S，128×160，RGB565。左右翻页，点进去放大，再点一层从右边盖上来。核心只依赖 `ui/hal.h`，换板子时重写这一层。
 
@@ -89,7 +89,7 @@
 | I2C | PA9 SCL / PA10 SDA，I2C1 主机 400 kHz。MPU6050 `0x68`、QMC5883P `0x2C`、外置存储 `0x50`。这条总线和屏幕抢同一个 DMA 通道，所以 I2C 不用 DMA |
 | 其他 | PB3 状态灯。PB1 蓝牙连接状态。PA8 驱动 1207 震动马达。PA0 麦克风座已接成模拟输入，当前固件不采集 |
 
-最近一次链接：片内镜像约 **55160** 字节，落在 55 KB 代码区里，还剩约 1 KB。静态 RAM **14656 / 16384** 字节，栈大约还剩 1.7 KB。调试角标里的 `R15/16K` 就是这片 SRAM 加上当前栈。
+最近一次实机构建（`ab8f254`）：代码 **56316 / 56320** 字节，55 KB 代码区只剩 4 字节。静态 RAM 仍按上一份链接地图计 **14656 / 16384** 字节，栈大约还剩 1.7 KB。调试角标里的 `R` 是整片 SRAM 加上当前栈。`at32/obj/` 里的 `watch.bin` 不进仓库，烧录文件单独上传。
 
 窗口地址不要改成对称偏移。这块面板的起点不加偏移，列终点 +2，行终点 +1。窄列窗口会画成梳齿，所以脏区再小也按整行送。
 
@@ -118,13 +118,15 @@ SRAM 里的动态池是 12608 字节，其中双缓冲占 2048 字节。主菜�
 ## 目录
 
 ```
-ui/            可移植核心（hal.h 为唯一硬件边界）
-  ui.h         公共 API
-  hal.h        每个板子写一份同名实现
-  src/         绘制、动画、协议、字模
-at32/          AT32F421 端口（port.c、build.bat、链接脚本）
-host/          PC 模拟、回归、字模工具、蓝牙调试
-  winui/       WinUI 3 调试台
+ui/                 可移植核心。hal.h 是唯一硬件边界，ui.h 是公共 API
+at32/               AT32F421 端口：port.c、build.bat、AT32F421x8_FLASH.ld
+  bsp/              I2C、MPU6050、QMC5883、外置存储、电池、灯、马达
+  packs/            烧录用的 ArteryTek.AT32F421_DFP.2.2.0.pack
+host/               PC 模拟和工具：build.bat、ble_tool.py、benchmark_device.py
+                    gen_font.c、gen_clock.c、subset_font.py、pack_pic_mods.py、upload_asset.py
+app/                Flutter 伴侣（Windows / Android），GPL-3.0-or-later
+media/              实机截图、动图、PCB 渲染，README 和解说页共用
+底层架构.html        可交互的底层解说页
 ```
 
 ## 固件构建
@@ -135,9 +137,7 @@ host/          PC 模拟、回归、字模工具、蓝牙调试
 at32\build.bat
 ```
 
-默认就是精简构建：`AT32_SLIM_ROM`，设置常用字留在片内，页面绘制尽量放到外置模块里。产物是 `at32/obj/watch.elf`、`watch.bin` 和 `at32/obj/libui.a`。
-
-完整消息字模超出 64 KB，不要打开 `full` 再期望它能链进这颗芯片。
+`at32\build.bat` 只有这一种固件：带 `AT32_SLIM_ROM`，设置常用字留在片内，运动、表盘、音乐、指南针的绘制放到外置模块。产物在 `at32/obj/`：`watch.elf`、`watch.bin`、`libui.a`。这个目录被忽略，不进仓库。
 
 ## 烧录
 
@@ -154,20 +154,7 @@ SWD 只接 PA13（SWDIO）、PA14（SWCLK）、GND、3V3。探针可以同时给
 
 ## 调试工具
 
-### WinUI 3
-
-`host/winui/At32Debugger.csproj`，需要 .NET 8 SDK 和 Windows App SDK。
-
-```bat
-cd host\winui
-dotnet build At32Debugger.csproj -c Debug -p:Platform=x64
-```
-
-启动后默认走经典 SPP。连上以后自动校时、回到表盘并抓一帧屏。主页每秒读一次性能帧，显示 RAM、CPU 和帧率。也可以切到 BLE、串口或演示。抓屏能存成 PNG。
-
-### 命令行
-
-`host/ble_tool.py`。默认经典 SPP，地址 `04:26:01:08:02:0C`，通道 1。`--ble` 走 BLE，`--port COM7` 走串口。`--mon-port` 可以另开一个口看模块的 UART。
+仓库里没有 WinUI 工程。电脑侧调试用 `host/ble_tool.py`：默认经典 SPP，地址 `04:26:01:08:02:0C`，通道 1。`--ble` 走 BLE（默认 `C4:26:01:08:02:0C`），`--port COM7` 走串口。`--mon-port` 可以另开一个口看模块的 UART。依赖是 `pyserial`、`bleak`、`winrt-Windows.Devices.Bluetooth`。
 
 ```bash
 python host/ble_tool.py ping
@@ -175,6 +162,7 @@ python host/ble_tool.py time
 python host/ble_tool.py msg 0 "HELLO WATCH"
 python host/ble_tool.py music "DEMO LYRIC" 1
 python host/ble_tool.py snap host/obj/shot.bmp
+python host/ble_tool.py sensor
 
 python host/ble_tool.py --port COM7 ping
 python host/ble_tool.py --ble ping
@@ -182,7 +170,7 @@ python host/ble_tool.py --ble ping
 
 抓屏一帧 40964 字节。经典 SPP 大约 4 秒，HC-04 的 BLE 大约 3.7 秒，CH340 有线大约 1 到 2 秒。HC-08 只有大约 151 字节/秒，不适合传画面。
 
-按键注入只在调试模式生效。`key` 和 `longkey` 会先打开调试。`longkey 2` 是从子页返回。
+`key 1|2|4` 会自动按下再松开。`longkey 2` 长按确定键约 600 ms，用来从子页返回。`unpair` 只对 BLE 有效。
 
 ### 协议
 
@@ -250,11 +238,26 @@ cd host && python benchmark_device.py --port COM5
 
 第三行是实机。`--odd` 用 128×163，用来确认条带高不能整除屏幕高度时仍然对齐。
 
+## 伴侣应用
+
+`app/` 编出来的 Windows 程序是 `app/build/windows/x64/runner/Release/watch_companion.exe`，窗口标题是「AT32 手表助手」。窗口够宽时用左侧导航，窄到竖屏比例时改成底部五个入口。下面两张是本机 Release 的界面，当时没有连上手表，所以遥测是演示数据。
+
+<div align="center">
+<table>
+<tr>
+<td align="center"><img src="media/伴侣_横屏.png" width="560" alt="伴侣应用宽窗口"><br><b>宽窗口</b><br>左侧导航，表盘和 3D 姿态并排</td>
+<td align="center"><img src="media/伴侣_竖屏.png" width="220" alt="伴侣应用窄窗口"><br><b>窄窗口</b><br>底部导航，内容和手机竖屏同一套</td>
+</tr>
+</table>
+</div>
+
+消息这边已经修好，不再算作遗留：清空之后滞留的分块写不回旧通知，动态池空间不够时先丢掉可重拉的详情缓存，不再把消息行挤没；安卓通知监听被系统强停后会自己重绑。
+
 ## 已知问题
 
 ### 经典蓝牙不要走系统分配的 COM 口
 
-Windows 给 SPP 分配的虚拟串口会超时或卡死。驱动和配对是好的，裸 RFCOMM 套接字连通道 1 可以通，ping 大约 81 ms。命令行和 WinUI 走的都是这条。
+Windows 给 SPP 分配的虚拟串口会超时或卡死。驱动和配对是好的，裸 RFCOMM 套接字连通道 1 可以通，ping 大约 81 ms。`host/ble_tool.py` 走的就是这条，不要自己去开系统分配的 COM 口。
 
 HC-04 同一时刻只服务一个无线对端。手机连着的时候电脑连不上。先在系统蓝牙里断开手机。
 
@@ -282,4 +285,4 @@ python host/ble_tool.py --addr C4:26:01:08:02:0C unpair
 
 Flutter 配套应用（`app/`）是 GPL-3.0-or-later，因为用了 FlClash 的 `prism_ui`。分发这个应用的二进制时要带上对应源码。
 
-字模表不入库。历史表从商业字体光栅而来，不能公开传。克隆之后用 `host/gen_font.c`、`host/gen_clock.c`、`host/subset_font.py` 在本地生成。若要入库，换站酷庆科黄油体、思源黑体或 Inter 重新光栅。
+字模表不入库。历史表从商业字体光栅而来，不能公开传。克隆之后用 `host/gen_font.c`、`host/gen_clock.c`、`host/subset_font.py` 在本地生成。ASCII 小字可以用仓库里的 `host/fonts/Inter-Medium.ttf`。若要入库，换站酷庆科黄油体、思源黑体或 Inter 重新光栅。
