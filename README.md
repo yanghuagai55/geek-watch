@@ -2,7 +2,11 @@
 
 ![target](https://img.shields.io/badge/target-AT32F421K8T7-blue) ![ram](https://img.shields.io/badge/RAM-14.3%2F16KB-green) ![flash](https://img.shields.io/badge/flash-55.0%2F64KB-orange) ![fps](https://img.shields.io/badge/FPS-partial--refresh-brightgreen)
 
-纯 C99 的界面和动画核心，加上一块 **AT32F421K8T7** 上的参考端口。屏是 1.8 寸 ST7735S，128×160，RGB565。左右翻页，点进去放大，再点一层从右边盖上来。核心只依赖 `ui/hal.h`，换板子时重写这一层。
+## 没有操作系统。存储一共 96 KB，比很多代码单文件都小。
+
+能存东西的地方是片内 Flash 64 KB，加上外置 I2C 存储 32 KB。运行时内存再另算，SRAM 只有 16 KB。
+
+在这么小的地方上跑一套纯 C99 的界面和动画，参考端口是 **AT32F421K8T7**。屏是 1.8 寸 ST7735S，128×160，RGB565。左右翻页，点进去放大，再点一层从右边盖上来。核心只依赖 `ui/hal.h`，换板子时重写这一层。
 
 下面先看界面怎么动，再看这块表在 16 KB 内存里怎么把画面送出去，最后是构建、烧录和调试。画面都在 `media/`。可以交互着看的解说页是 [底层架构.html](底层架构.html)。
 
