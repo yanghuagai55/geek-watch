@@ -427,31 +427,9 @@ static int ext_collect_blks(ext_blk_t *blks, int cap) {
     return n;
 }
 
-static void ext_dir_save(void) {
-    uint8_t rec[EXT_DIR_RECLEN];
-    uint32_t next;
-    int i;
-
-    if (!hal_ext_flash_present()) {
-        return;
-    }
-    memset(rec, 0, sizeof rec);
-    lk.ext_dir.seq++;
-    u32_put(rec + 0, EXT_DIR_MAGIC);
-    u32_put(rec + 4, lk.ext_dir.seq);
-    rec[8] = EXT_DIR_VER;
-    rec[9] = lk.ext_dir.msg_count <= LINK_EXT_MSG_MAX ? lk.ext_dir.msg_count : LINK_EXT_MSG_MAX;
-    for (i = 0; i < EXT_BLK_TOTAL; i++) {
-        u16_put(rec + 10 + i * 4, lk.ext_dir.blks[i].off);
-        u16_put(rec + 12 + i * 4, lk.ext_dir.blks[i].len);
-    }
-    u16_put(rec + EXT_DIR_RECLEN - 2u, settings_crc16(rec, EXT_DIR_RECLEN - 2u));
-    next = (lk.ext_dir.active_slot ^ 1u) ? EXT_DIR_SLOT1 : EXT_DIR_SLOT0;
-    if (hal_ext_flash_write(next, rec, EXT_DIR_RECLEN)) {
-        lk.ext_dir.active_slot ^= 1u;
-    }
-}
-
+#if defined(AT32_SLIM_ROM)
+__attribute__((noinline))
+#endif
 static int ext_dir_read_slot(uint32_t off, uint8_t *rec) {
     if (!hal_ext_flash_read(off, rec, EXT_DIR_RECLEN)) {
         return 0;
@@ -460,6 +438,40 @@ static int ext_dir_read_slot(uint32_t off, uint8_t *rec) {
         return 0;
     }
     return u16_get(rec + EXT_DIR_RECLEN - 2u) == settings_crc16(rec, EXT_DIR_RECLEN - 2u);
+}
+
+static void ext_dir_save(void) {
+    uint8_t rec[EXT_DIR_RECLEN];
+    uint32_t next_seq;
+    uint8_t mc;
+    int try_i, i;
+
+    if (!hal_ext_flash_present()) {
+        return;
+    }
+    next_seq = lk.ext_dir.seq + 1u;
+    mc = lk.ext_dir.msg_count <= LINK_EXT_MSG_MAX ? lk.ext_dir.msg_count : LINK_EXT_MSG_MAX;
+    for (try_i = 0; try_i < 3; try_i++) {
+        uint8_t slot = (uint8_t)(lk.ext_dir.active_slot ^ (try_i < 2 ? 1u : 0u));
+        uint32_t target = slot ? EXT_DIR_SLOT1 : EXT_DIR_SLOT0;
+        u32_put(rec + 0, EXT_DIR_MAGIC);
+        u32_put(rec + 4, next_seq);
+        rec[8] = EXT_DIR_VER;
+        rec[9] = mc;
+        for (i = 0; i < EXT_BLK_TOTAL; i++) {
+            u16_put(rec + 10 + i * 4, lk.ext_dir.blks[i].off);
+            u16_put(rec + 12 + i * 4, lk.ext_dir.blks[i].len);
+        }
+        u16_put(rec + EXT_DIR_RECLEN - 2u, settings_crc16(rec, EXT_DIR_RECLEN - 2u));
+        if (hal_ext_flash_write(target, rec, EXT_DIR_RECLEN) &&
+            ext_dir_read_slot(target, rec) &&
+            u32_get(rec + 4) == next_seq &&
+            rec[9] == mc) {
+            lk.ext_dir.seq = next_seq;
+            lk.ext_dir.active_slot = slot;
+            return;
+        }
+    }
 }
 
 static int blk_ok(uint16_t off, uint16_t blen) {
@@ -513,6 +525,18 @@ static int ext_pool_alloc_ex(uint16_t need, int top_down,
         if (lk.ext_dir.blks[EXT_BLK_MEDIA].len > 0u) {
             lk.ext_dir.blks[EXT_BLK_MEDIA].off = 0u;
             lk.ext_dir.blks[EXT_BLK_MEDIA].len = 0u;
+            continue;
+        }
+        for (i = (int)lk.ext_dir.msg_count - 1; i >= 0; i--) {
+            ext_blk_t *db = &lk.ext_dir.blks[EXT_BLK_MSG0 + i * 2 + 1];
+            if (db->len > 0u) {
+                db->off = 0u;
+                db->len = 0u;
+                lk.msg_det_valid_mask &= ~(1u << i);
+                break;
+            }
+        }
+        if (i >= 0) {
             continue;
         }
         if (lk.ext_dir.msg_count == 0u) {
@@ -739,6 +763,16 @@ static void ext_save_msg_row(int slot, const uint8_t *row352) {
     (void)ext_store_blob(row352, LINK_ROW_BYTES, 1, &blk->off, &blk->len);
 }
 
+#if defined(AT32_SLIM_ROM)
+__attribute__((noinline))
+#endif
+static void reset_det_stage(void) {
+    lk.det_stage_off = 0u;
+    lk.det_stage_pos = 0u;
+    lk.det_stage_chunk = 0u;
+    lk.det_stage_ok = 0u;
+}
+
 static void free_rx_scratch(void) {
     if (lk.rx_row) {
         ui_mem_free(lk.rx_row);
@@ -911,10 +945,8 @@ void link_clear_ext_messages(void) {
     lk.msg_list_loading = 0;
     lk.msg_list_empty = 1;
     lk.msg_det_valid_mask = 0u;
-    lk.det_stage_off = 0u;
-    lk.det_stage_pos = 0u;
-    lk.det_stage_chunk = 0u;
-    lk.det_stage_ok = 0u;
+    lk.img_msg_preview = 0u;
+    reset_det_stage();
     lk.msg_det_gen++;
     free_rx_scratch();
     if (lk.dyn_kind == DYN_MSG_LIST) {
@@ -967,10 +999,8 @@ void link_load_ext(void) {
     lk.about_ready = 0u;
     lk.hdr_ready = 0u;
     lk.msg_det_valid_mask = 0u;
-    lk.det_stage_off = 0u;
-    lk.det_stage_pos = 0u;
-    lk.det_stage_chunk = 0u;
-    lk.det_stage_ok = 0u;
+    lk.img_msg_preview = 0u;
+    reset_det_stage();
     free_hdr_buf();
     if (!hal_ext_flash_present()) {
         ui_app_set_message_count(0);
@@ -1029,6 +1059,7 @@ void link_load_ext(void) {
         link_clear_ext_messages();
         return;
     }
+    lk.msg_list_empty = (lk.ext_dir.msg_count == 0u);
     ui_app_set_message_count(lk.ext_dir.msg_count);
 }
 
@@ -1504,11 +1535,8 @@ void link_request_message_detail(int index) {
 void link_leave_messages(void) {
     lk.msg_list_ready = 0;
     lk.msg_list_loading = 0;
-    lk.msg_list_empty = 0;
-    lk.det_stage_off = 0u;
-    lk.det_stage_pos = 0u;
-    lk.det_stage_chunk = 0u;
-    lk.det_stage_ok = 0u;
+    lk.msg_list_empty = (lk.ext_dir.msg_count == 0u);
+    reset_det_stage();
     free_rx_scratch();
     if (lk.dyn_kind == DYN_MSG_LIST) {
         free_dyn_buf();
@@ -1579,6 +1607,9 @@ static void msg_list_chunk(uint8_t chunk, const uint8_t *src, int n) {
         return;
     }
     if (ui_app_message_active() == UI_MENU_CHILD) {
+        return;
+    }
+    if (lk.msg_list_empty && lk.list_target_n == 0u) {
         return;
     }
     if (chunk == 0) {
@@ -1655,7 +1686,8 @@ static void msg_detail_slot_chunk(uint8_t slot, uint8_t chunk, const uint8_t *sr
     uint8_t idx[2];
     int ok = 1;
 
-    if (slot >= LINK_EXT_MSG_MAX || chunk >= LINK_MSG_DETAIL_CHUNKS ||
+    if (slot >= lk.ext_dir.msg_count || slot >= LINK_EXT_MSG_MAX ||
+        lk.msg_list_empty || chunk >= LINK_MSG_DETAIL_CHUNKS ||
         n < LINK_BMP_CHUNK || !hal_ext_flash_present()) {
         return;
     }
@@ -1700,18 +1732,12 @@ static void msg_detail_slot_chunk(uint8_t slot, uint8_t chunk, const uint8_t *sr
     lk.det_stage_chunk++;
     if (chunk == LINK_MSG_DETAIL_CHUNKS - 1) {
         ext_blk_t *blk;
-        if (slot >= (int)lk.ext_dir.msg_count) {
-            lk.ext_dir.msg_count = (uint8_t)(slot + 1);
-        }
         blk = &lk.ext_dir.blks[EXT_BLK_MSG0 + (int)slot * 2 + 1];
         blk->off = lk.det_stage_off;
         blk->len = lk.det_stage_pos;
         lk.msg_det_valid_mask |= (1u << slot);
         lk.msg_det_gen++;
-        lk.det_stage_off = 0u;
-        lk.det_stage_pos = 0u;
-        lk.det_stage_chunk = 0u;
-        lk.det_stage_ok = 0u;
+        reset_det_stage();
         ext_dir_save();
         if (ui_app_message_active() == UI_MENU_CHILD && slot == lk.detail_slot) {
             ui_draw_invalidate();
@@ -2118,10 +2144,7 @@ static void apply_frame(void) {
                     lk.ext_dir.msg_count = p[1];
                 }
                 lk.msg_det_valid_mask = (lk.msg_det_valid_mask << 1) & ((1u << lk.ext_dir.msg_count) - 1u);
-                lk.det_stage_off = 0u;
-                lk.det_stage_pos = 0u;
-                lk.det_stage_chunk = 0u;
-                lk.det_stage_ok = 0u;
+                reset_det_stage();
                 if (ui_app_message_active() == UI_MENU_CHILD &&
                     lk.detail_slot + 1u < lk.ext_dir.msg_count) {
                     lk.detail_slot++;
@@ -2135,6 +2158,9 @@ static void apply_frame(void) {
                 ext_dir_save();
             } else if (p[0] == 2u && l >= 3) {
                 uint16_t off = (uint16_t)p[1] * LINK_BMP_CHUNK;
+                if (lk.ext_dir.msg_count == 0u || lk.msg_list_empty) {
+                    break;
+                }
                 if (p[1] == 0u && !lk.rx_row) {
                     lk.rx_row = alloc_rx_scratch(LINK_ROW_BYTES);
                 }
@@ -2173,7 +2199,6 @@ static void apply_frame(void) {
     case LINK_MSG_CLEAR:
         if (l == 0) {
             link_clear_ext_messages();
-            send_ext_pool_state();
         }
         break;
     case LINK_MSG_COUNT:

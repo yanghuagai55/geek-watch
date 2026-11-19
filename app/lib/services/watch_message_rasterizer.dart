@@ -37,6 +37,8 @@ abstract final class WatchMessageRasterizer {
   static const int msgEmptyH = 40;
   static const int msgEmptyBytes = msgEmptyW * msgEmptyH ~/ 8;
   static const double _margin = 4;
+  // 手表端卡片可视区域裁剪宽度为 89px，列表行文本严格约束在可视区内避免右侧半字裁断。
+  static const double cardVisibleWidth = 88;
 
   static TextStyle _style(double size, {FontWeight weight = FontWeight.w400}) {
     return TextStyle(
@@ -67,7 +69,7 @@ abstract final class WatchMessageRasterizer {
       textDirection: ui.TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
-    )..layout(maxWidth: width - _margin * 2);
+    )..layout(maxWidth: cardVisibleWidth - _margin - 2);
     final dy = (rowHeight - painter.height) / 2;
     painter.paint(canvas, ui.Offset(_margin, dy));
     painter.dispose();

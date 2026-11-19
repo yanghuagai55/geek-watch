@@ -406,11 +406,52 @@ void main() {
       isTrue,
     );
 
+    const longItem = WatchMessageItem(
+      app: '这是一个超级无敌长到必然超过手表显示裁切区域的测试应用名称',
+      title: '标题',
+      text: '正文',
+    );
+    final longRowBits = await WatchMessageRasterizer.renderRow(longItem);
+    expect(longRowBits.length, 352);
+    for (var row = 0; row < WatchMessageRasterizer.rowHeight; row++) {
+      for (var colByte = 12; colByte < 16; colByte++) {
+        expect(longRowBits[row * 16 + colByte], 0);
+      }
+    }
+
     final cleared = await controller.clearWatchMessages();
     expect(cleared, isTrue);
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(controller.extPoolMsgCount, 0);
+    expect(controller.localMessages, isEmpty);
+    expect(controller.cachedNotifications, 0);
     expect(mock.sent.any((f) => f[1] == WatchCmd.msgClear), isTrue);
+
+    // 验证手表主动发起清空（0x2E msgCount 从 >0 变为 0）时，Controller 同步清理本地消息列表。
+    await controller.pushRichMessage(
+      app: '微信',
+      title: '同步测试',
+      text: '手表清空联动验证',
+    );
+    expect(controller.localMessages, isNotEmpty);
+    final twoPool = Uint8List(13)
+      ..[0] = 0x00
+      ..[1] = 0x7D
+      ..[10] = 1
+      ..[11] = 20
+      ..[12] = 0xEF;
+    mock.pushBytes(buildWatchFrame(WatchCmd.extPoolState, twoPool));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final zeroPool = Uint8List(13)
+      ..[0] = 0x00
+      ..[1] = 0x7D
+      ..[10] = 0
+      ..[11] = 20
+      ..[12] = 0xEF;
+    mock.pushBytes(buildWatchFrame(WatchCmd.extPoolState, zeroPool));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(controller.localMessages, isEmpty);
+    expect(controller.cachedNotifications, 0);
 
     controller.setAutoClearMessages(true);
     await Future<void>.delayed(const Duration(milliseconds: 50));

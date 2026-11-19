@@ -136,6 +136,7 @@ class WatchController extends ChangeNotifier {
   bool _pullingFromWatch = false;
   bool _syncingAssets = false;
   int _syncedAssetMask = 0;
+  int _lastExtMsgCount = -1;
   bool _disposed = false;
 
   /// 今日运动（0x27）。断开后保留最后一次读数，界面会标明“上次同步”。
@@ -177,8 +178,9 @@ class WatchController extends ChangeNotifier {
   /// all = 全部通知；selected = 只转发勾选的应用。
   String routeMode = 'all';
   Set<String> routePackages = <String>{};
-  int maxMessages = 5;
+  int maxMessages = 10;
   bool mergeNotifications = true;
+  bool filterPromo = true;
   List<NotificationApp> knownApps = const <NotificationApp>[];
   bool messageRulesLoaded = false;
 
@@ -510,9 +512,11 @@ class WatchController extends ChangeNotifier {
   }
 
   /// 重新绑定系统通知监听并立即补推当前通知栏消息，返回监听服务是否已绑定。
-  Future<bool> rescanNotifications() async {
+  Future<bool> rescanNotifications({bool ignoreDismissed = false}) async {
     if (!Platform.isAndroid) return false;
-    final bound = await AndroidWatchBridge.rescanNotifications();
+    final bound = await AndroidWatchBridge.rescanNotifications(
+      ignoreDismissed: ignoreDismissed,
+    );
     await refreshAndroidStatus();
     await _pollMessageCount();
     return bound;
@@ -526,8 +530,8 @@ class WatchController extends ChangeNotifier {
       if (_disposed) return;
       await refreshMessageRules();
       if (_disposed) return;
-      if (connected &&
-          ((!prevAccess && notificationAccess) || cachedNotifications == 0)) {
+      // 仅在权限刚刚恢复时补扫，避免用户清空手表通知后切换回 App 时误拉回旧通知。
+      if (connected && !prevAccess && notificationAccess) {
         await AndroidWatchBridge.rescanNotifications();
       }
       await _pollMessageCount();
@@ -644,8 +648,14 @@ class WatchController extends ChangeNotifier {
 
   void _applyExtPool(WatchExtPoolState pool) {
     final prevMusic = watchMusicActive;
+    final prevMsgCount = _lastExtMsgCount;
+    _lastExtMsgCount = pool.msgCount;
     extPoolState = pool;
     watchMusicActive = pool.watchMusicActive;
+    if (prevMsgCount > 0 && pool.msgCount == 0) {
+      localMessages = <WatchMessageItem>[];
+      cachedNotifications = 0;
+    }
     if (prevMusic != watchMusicActive) {
       if (!watchMusicActive) {
         _mediaCueKey = '';
@@ -1180,8 +1190,9 @@ class WatchController extends ChangeNotifier {
       for (final item in (rules['packages'] as List<Object?>? ?? const []))
         '$item',
     };
-    maxMessages = ((rules['maxMessages'] as num?)?.toInt() ?? 5).clamp(1, 20);
+    maxMessages = ((rules['maxMessages'] as num?)?.toInt() ?? 10).clamp(1, 20);
     mergeNotifications = rules['merge'] != false;
+    filterPromo = rules['filterPromo'] != false;
     final apps = await AndroidWatchBridge.notificationApps();
     knownApps = <NotificationApp>[
       for (final item in apps)
@@ -1230,6 +1241,12 @@ class WatchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setFilterPromo(bool value) {
+    filterPromo = value;
+    unawaited(_pushMessageRules());
+    notifyListeners();
+  }
+
   Future<void> _pushMessageRules() {
     if (!Platform.isAndroid) return Future<void>.value();
     return AndroidWatchBridge.setMessageRules(
@@ -1237,6 +1254,7 @@ class WatchController extends ChangeNotifier {
       packages: routePackages,
       maxMessages: maxMessages,
       merge: mergeNotifications,
+      filterPromo: filterPromo,
     );
   }
 

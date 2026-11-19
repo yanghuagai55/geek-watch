@@ -7,13 +7,13 @@
 static uint8_t flash_addr;
 static uint8_t flash_probed;
 
-/* 等待 EEPROM 内部页编程完成（FRAM 首次即 ACK；EEPROM 典型 2..5ms）。 */
+/* 等待 EEPROM 内部页编程完成（FRAM 首次即 ACK；EEPROM 典型 2..5ms，留足 ~30ms 余量）。 */
 static int wait_ready(void) {
     int tries;
     if (!flash_addr) {
         return 0;
     }
-    for (tries = 0; tries < 500; tries++) {
+    for (tries = 0; tries < 1200; tries++) {
         if (i2c_probe(flash_addr)) {
             return 1;
         }
@@ -74,10 +74,15 @@ int ext_flash_write(uint32_t offset, const uint8_t *src, uint32_t len) {
     while (len > 0) {
         uint32_t page_rem = EXT_FLASH_PAGE_SIZE - (offset & (EXT_FLASH_PAGE_SIZE - 1u));
         uint32_t chunk = len < page_rem ? len : page_rem;
-        if (!wait_ready()) {
-            return 0;
+        int ok = 0;
+        int attempt;
+        for (attempt = 0; attempt < 3; attempt++) {
+            if (wait_ready() && i2c_write16(flash_addr, (uint16_t)offset, src, (int)chunk)) {
+                ok = 1;
+                break;
+            }
         }
-        if (!i2c_write16(flash_addr, (uint16_t)offset, src, (int)chunk)) {
+        if (!ok) {
             return 0;
         }
         offset += chunk;

@@ -891,8 +891,15 @@ class _NotificationRules extends StatelessWidget {
           const SizedBox(height: 6),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            title: const Text('过滤营销与推广通知'),
+            subtitle: const Text('自动拦截营销活动、签到福利、热搜弹窗等低价值推广'),
+            value: controller.filterPromo,
+            onChanged: enabled ? controller.setFilterPromo : null,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('重复应用合并显示'),
-            subtitle: const Text('同一应用的新通知覆盖旧条目，避免占满全部位置'),
+            subtitle: const Text('同一应用+同一分类的新通知覆盖旧条目，避免聊天与账单互吞'),
             value: controller.mergeNotifications,
             onChanged: enabled ? controller.setMergeNotifications : null,
           ),
@@ -927,6 +934,27 @@ class _NotificationRules extends StatelessWidget {
                 icon: const Icon(Icons.cleaning_services_outlined, size: 16),
                 label: const Text('立即清理手表通知'),
               ),
+              if (enabled)
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final bound = await controller.rescanNotifications(
+                      ignoreDismissed: true,
+                    );
+                    if (!context.mounted) return;
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          bound
+                              ? '已重新同步手机状态栏现有通知并分类下发手表。'
+                              : '通知监听服务尚未就绪，请确认已开启通知读取权限。',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.sync_rounded, size: 16),
+                  label: const Text('同步状态栏'),
+                ),
               Text(
                 enabled
                     ? '本机已缓存 ${controller.cachedNotifications} 条'

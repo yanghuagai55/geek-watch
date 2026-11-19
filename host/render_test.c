@@ -1416,6 +1416,39 @@ static int test_persist_and_compressed_dials(void) {
             REQUIRE(empty_ink, "cleared messages displays STHupo empty state");
         }
         hal_host_set_keys(HAL_KEY2); step(32); hal_host_set_keys(0); step(36);
+        {
+            /* 回归：清空后滞留在途的 0x23 详情、无 0x25 的 0x22 列表及无 0x2D[1] 的 0x2D[2] 均不得复活消息，且重启后仍为 0 条。 */
+            uint8_t stale[130];
+            for (c = 0; c < 20; c++) {
+                stale[0] = 2u;
+                stale[1] = (uint8_t)c;
+                memset(stale + 2, 0xAAu, 128);
+                push_link_frame(0x23u, stale, 130);
+                step(1);
+            }
+            for (c = 0; c < 14; c++) {
+                stale[0] = (uint8_t)c;
+                memset(stale + 1, 0x55u, 128);
+                push_link_frame(0x22u, stale, 129);
+                step(1);
+            }
+            for (c = 0; c < 3; c++) {
+                int len_c = (c == 2) ? 96 : 128;
+                stale[0] = 2u;
+                stale[1] = (uint8_t)c;
+                memset(stale + 2, 0xCCu, (size_t)len_c);
+                push_link_frame(0x2Du, stale, 2 + len_c);
+                step(1);
+            }
+            REQUIRE(link_msg_count() == 0,
+                    "stale 0x23/0x22/0x2D[2] frames after clear must not resurrect messages");
+            ui_init();
+            hal_host_set_frame_step_us(16000);
+            step(4);
+            link_ext_pool_stats(&p_tot, &p_used, &p_free, &p_mb, &p_ib, &p_mn);
+            REQUIRE(link_msg_count() == 0 && p_mn == 0u && p_mb == 0u && p_ib > 0u,
+                    "cleared messages remain 0 across reboot while dial image persists");
+        }
 
         /* 7. 验证 Plan B 3D 指南针 (ARM M4 PIC -> SRAM 运行) 与关于彩图包的 0x2F 持久化与动态 RAM 释放 */
         {

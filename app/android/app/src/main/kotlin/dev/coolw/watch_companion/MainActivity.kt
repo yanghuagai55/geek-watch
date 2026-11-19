@@ -117,6 +117,7 @@ class MainActivity : FlutterActivity() {
                             "packages" to NotificationRules.packages.toList(),
                             "maxMessages" to NotificationRules.maxMessages,
                             "merge" to NotificationRules.merge,
+                            "filterPromo" to NotificationRules.filterPromo,
                         ),
                     )
                     "setMessageRules" -> {
@@ -129,8 +130,10 @@ class MainActivity : FlutterActivity() {
                             maxMessages = call
                                 .argument<Number>("maxMessages")
                                 ?.toInt()
-                                ?: 5,
+                                ?: 10,
                             merge = call.argument<Boolean>("merge") ?: true,
+                            filterPromo = call.argument<Boolean>("filterPromo")
+                                ?: NotificationRules.filterPromo,
                         )
                         WatchLinkService.instance?.applyMessageRules()
                         android.util.Log.d(
@@ -138,7 +141,8 @@ class MainActivity : FlutterActivity() {
                             "消息规则 mode=${NotificationRules.mode} " +
                                 "apps=${NotificationRules.packages.size} " +
                                 "max=${NotificationRules.maxMessages} " +
-                                "merge=${NotificationRules.merge}",
+                                "merge=${NotificationRules.merge} " +
+                                "promo=${NotificationRules.filterPromo}",
                         )
                         result.success(true)
                     }
@@ -161,8 +165,9 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                     "rescanNotifications" -> {
-                        WatchNotificationListener.ensureBound(applicationContext)
-                        WatchNotificationListener.rescan()
+                        val ignoreDismissed = call.argument<Boolean>("ignoreDismissed") ?: false
+                        WatchNotificationListener.ensureBound(applicationContext, forceToggle = true)
+                        WatchNotificationListener.rescan(ignoreDismissed)
                         result.success(WatchNotificationListener.live != null)
                     }
                     "notificationAccess" -> result.success(hasNotificationAccess())
@@ -318,9 +323,8 @@ class MainActivity : FlutterActivity() {
         val newlyGranted = !lastNotificationAccess && hasAccess
         lastNotificationAccess = hasAccess
         WatchNotificationListener.ensureBound(applicationContext)
-        if (WatchLinkService.isConnected &&
-            (newlyGranted || WatchLinkService.cachedMessageCount(applicationContext) == 0)
-        ) {
+        // 仅在刚获得通知权限时补扫，避免用户清空手表通知后切换回 App 时把状态栏旧通知重新拉起。
+        if (WatchLinkService.isConnected && newlyGranted) {
             WatchNotificationListener.rescan()
         }
     }

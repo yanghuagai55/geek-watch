@@ -117,6 +117,8 @@ class WatchLinkService : Service() {
                                 app = obj.optString("app"),
                                 title = obj.optString("title"),
                                 text = obj.optString("text"),
+                                categoryId = obj.optString("catId"),
+                                categoryLabel = obj.optString("catLabel"),
                             ),
                             isGroupSummary = obj.optBoolean("summary", false),
                             groupKey = obj.optString("groupKey").takeIf { it.isNotEmpty() },
@@ -138,12 +140,17 @@ class WatchLinkService : Service() {
                 obj.put("app", entry.item.app)
                 obj.put("title", entry.item.title)
                 obj.put("text", entry.item.text)
+                if (entry.item.categoryId.isNotEmpty()) obj.put("catId", entry.item.categoryId)
+                if (entry.item.categoryLabel.isNotEmpty()) obj.put("catLabel", entry.item.categoryLabel)
                 if (entry.isGroupSummary) obj.put("summary", true)
                 if (!entry.groupKey.isNullOrEmpty()) obj.put("groupKey", entry.groupKey)
                 arr.put(obj)
             }
             prefs.edit().putString(KEY_MESSAGES, arr.toString()).apply()
         }
+
+        private fun mergeKey(pkg: String, categoryId: String): String =
+            if (categoryId.isNotEmpty()) "$pkg\u0000$categoryId" else pkg
 
         /** 前台服务未启动时把通知写入持久化缓存，连接手表后立即补推。 */
         fun cacheOfflineNotification(
@@ -153,16 +160,20 @@ class WatchLinkService : Service() {
             text: String,
             key: String,
             pkg: String,
+            categoryId: String = "",
+            categoryLabel: String = "",
             isGroupSummary: Boolean = false,
             groupKey: String? = null,
         ): Boolean {
             if (!NotificationRules.isNotificationForwardEnabled(context)) return false
             NotificationRules.load(context)
+            val targetMerge = mergeKey(pkg, categoryId)
             synchronized(offlineStoreLock) {
                 val list = loadOfflineList(context)
                 val unchanged = list.any {
                     it.key == key && it.item.app == app &&
-                        it.item.title == title && it.item.text == text
+                        it.item.title == title && it.item.text == text &&
+                        it.item.categoryId == categoryId
                 }
                 if (unchanged) return false
                 if (!isGroupSummary && !groupKey.isNullOrEmpty()) {
@@ -170,14 +181,20 @@ class WatchLinkService : Service() {
                 }
                 list.removeAll { it.key == key }
                 if (NotificationRules.merge) {
-                    list.removeAll { it.pkg == pkg }
+                    list.removeAll { mergeKey(it.pkg, it.item.categoryId) == targetMerge }
                 }
                 list.add(
                     0,
                     CachedMessage(
                         key = key,
                         pkg = pkg,
-                        item = WatchMessageRasterizer.Item(app, title, text),
+                        item = WatchMessageRasterizer.Item(
+                            app = app,
+                            title = title,
+                            text = text,
+                            categoryId = categoryId,
+                            categoryLabel = categoryLabel,
+                        ),
                         isGroupSummary = isGroupSummary,
                         groupKey = groupKey,
                     ),
@@ -199,14 +216,21 @@ class WatchLinkService : Service() {
                 val manual = existing.filter { it.pkg == MANUAL_PKG }
                 val next = mutableListOf<CachedMessage>()
                 next.addAll(manual)
-                val seenPkgs = HashSet<String>()
+                val seenMergeKeys = HashSet<String>()
                 for (item in incoming) {
-                    if (NotificationRules.merge && !seenPkgs.add(item.pkg)) continue
+                    val mk = mergeKey(item.pkg, item.categoryId)
+                    if (NotificationRules.merge && !seenMergeKeys.add(mk)) continue
                     next.add(
                         CachedMessage(
                             key = item.key,
                             pkg = item.pkg,
-                            item = WatchMessageRasterizer.Item(item.app, item.title, item.text),
+                            item = WatchMessageRasterizer.Item(
+                                app = item.app,
+                                title = item.title,
+                                text = item.text,
+                                categoryId = item.categoryId,
+                                categoryLabel = item.categoryLabel,
+                            ),
                             isGroupSummary = item.isGroupSummary,
                             groupKey = item.groupKey,
                         ),
@@ -261,6 +285,10 @@ class WatchLinkService : Service() {
             if (svc != null) {
                 svc.clearNotifications()
                 return
+            }
+            val snapshots = WatchNotificationListener.captureActiveSnapshots()
+            if (snapshots.isNotEmpty()) {
+                NotificationRules.markDismissedBatch(context, snapshots)
             }
             synchronized(offlineStoreLock) {
                 saveOfflineList(context, emptyList())
@@ -345,10 +373,19 @@ class WatchLinkService : Service() {
     private var messageMode = false
     @Volatile
     private var watchMusicActive = false
+    @Volatile
+    private var lastWatchMsgCount = -1
+    @Volatile
+    private var phoneClearGuardUntil = 0L
+    @Volatile
+    private var lastPushedSignature = ""
+    @Volatile
+    private var urgentDetailSlot = -1
+    private var lastListenerCheckMs = 0L
     private val messages = ArrayDeque<CachedMessage>()
 
     private val scanner = FrameScanner(
-        onFrame = { cmd, first ->
+        onFrame = { cmd, first, second ->
             when (cmd) {
                 0x10 -> {
                     MediaBridge.control(first, applicationContext)
@@ -361,7 +398,7 @@ class WatchLinkService : Service() {
                 0x14 -> onMessageListRequested()
                 0x15 -> onMessageDetailRequested(first)
                 0x16 -> onMessageLeave()
-                0x2E -> onWatchExtFlags(first)
+                0x2E -> onWatchExtPoolState(flags = first, msgCount = second)
             }
         },
         onAck = { ok ->
@@ -384,7 +421,6 @@ class WatchLinkService : Service() {
         loadPersistedMessages()
         createChannel()
         WatchNotificationListener.ensureBound(applicationContext)
-        mainHandler.post { WatchNotificationListener.rescan() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -519,6 +555,12 @@ class WatchLinkService : Service() {
                             }
                         }
                         if (acquired) {
+                            if (dartTransferActive) {
+                                dartTransferUntil = maxOf(
+                                    dartTransferUntil,
+                                    SystemClock.uptimeMillis() + 8_000L,
+                                )
+                            }
                             val ok = try {
                                 writeOrReport(bytes, bypassImageGuard = (cmd == 0x06))
                             } finally {
@@ -581,7 +623,14 @@ class WatchLinkService : Service() {
             messageMode = false
             watchMusicActive = false
             WatchNotificationListener.ensureBound(applicationContext)
-            mainHandler.postDelayed({ WatchNotificationListener.rescan() }, 450)
+            mainHandler.postDelayed({
+                if (!connected.get()) return@postDelayed
+                if (WatchNotificationListener.live != null) {
+                    WatchNotificationListener.rescan()
+                } else {
+                    pushPersistedIfConnected()
+                }
+            }, 650)
             return
         }
         stopping.set(false)
@@ -608,6 +657,9 @@ class WatchLinkService : Service() {
                 }
                 connected.set(true)
                 lastTraffic = SystemClock.uptimeMillis()
+                lastWatchMsgCount = -1
+                lastPushedSignature = ""
+                urgentDetailSlot = -1
                 prefs.edit().putString(KEY_ADDRESS, address).apply()
                 startReadLoop(candidate)
                 statusText = "已连接手表"
@@ -622,7 +674,14 @@ class WatchLinkService : Service() {
                 finishConnect(true, null)
                 startKeepAlive()
                 WatchNotificationListener.ensureBound(applicationContext)
-                mainHandler.postDelayed({ WatchNotificationListener.rescan() }, 450)
+                mainHandler.postDelayed({
+                    if (!connected.get()) return@postDelayed
+                    if (WatchNotificationListener.live != null) {
+                        WatchNotificationListener.rescan()
+                    } else {
+                        pushPersistedIfConnected()
+                    }
+                }, 650)
             } catch (error: Exception) {
                 connected.set(false)
                 val message = error.message ?: "连接失败"
@@ -861,6 +920,10 @@ class WatchLinkService : Service() {
             override fun run() {
                 if (!connected.get()) return
                 val now = SystemClock.uptimeMillis()
+                if (notificationForward && now - lastListenerCheckMs > 10_000L) {
+                    lastListenerCheckMs = now
+                    WatchNotificationListener.ensureBound(applicationContext)
+                }
                 if (!bitmapBusy.get() &&
                     !isDartTransferValid() &&
                     !scanner.imageGuardActive() &&
@@ -915,9 +978,17 @@ class WatchLinkService : Service() {
         mediaPollRunnable = null
     }
 
-    private fun onWatchExtFlags(flags: Int) {
+    private fun onWatchExtPoolState(flags: Int, msgCount: Int) {
         val active = (flags and 0x10) != 0
+        val prevCount = lastWatchMsgCount
+        lastWatchMsgCount = msgCount
+        val clearedOnWatch = prevCount > 0 &&
+            msgCount == 0 &&
+            SystemClock.uptimeMillis() > phoneClearGuardUntil
         mainHandler.post {
+            if (clearedOnWatch) {
+                clearNotificationsFromWatch()
+            }
             if (active == watchMusicActive) return@post
             watchMusicActive = active
             if (active) {
@@ -1235,8 +1306,13 @@ class WatchLinkService : Service() {
     }
 
     fun clearNotifications() {
+        val snapshots = WatchNotificationListener.captureActiveSnapshots()
+        NotificationRules.markDismissedBatch(applicationContext, snapshots)
+        phoneClearGuardUntil = SystemClock.uptimeMillis() + 3_000L
         synchronized(messagesLock) {
             pushListGen++
+            lastPushedSignature = ""
+            urgentDetailSlot = -1
             messages.clear()
             persistMessagesLocked()
         }
@@ -1247,6 +1323,23 @@ class WatchLinkService : Service() {
                     writeWithAck(buildFrame(0x2D, byteArrayOf(0x00)))
                 }
             }
+        }
+    }
+
+    private fun clearNotificationsFromWatch() {
+        val snapshots = WatchNotificationListener.captureActiveSnapshots()
+        NotificationRules.markDismissedBatch(applicationContext, snapshots)
+        val hadMessages: Boolean
+        synchronized(messagesLock) {
+            pushListGen++
+            lastPushedSignature = ""
+            urgentDetailSlot = -1
+            hadMessages = messages.isNotEmpty()
+            messages.clear()
+            persistMessagesLocked()
+        }
+        if (hadMessages) {
+            Log.i("WatchLink", "手表端清空通知，已同步清空手机缓存并记录状态栏基线（${snapshots.size} 条）")
         }
     }
 
@@ -1282,7 +1375,8 @@ class WatchLinkService : Service() {
                 }
                 if (sendDetailSlot(0, detailBits)) {
                     writeWithAck(buildFrame(0x2D, byteArrayOf(0x00)))
-                    Log.i("WatchLink", "新通知已送达手表：${item.app} - ${item.title}")
+                    lastPushedSignature = ""
+                    Log.i("WatchLink", "新通知已送达手表：[${item.categoryLabel}] ${item.app} - ${item.title}")
                 } else {
                     Log.w("WatchLink", "新通知详情槽 0 下发失败：${item.app}")
                 }
@@ -1290,12 +1384,15 @@ class WatchLinkService : Service() {
         }
     }
 
-    private fun sendDetailSlot(slot: Int, bits: ByteArray): Boolean =
+    private fun sendDetailSlot(slot: Int, bits: ByteArray, backgroundWarm: Boolean = false): Boolean =
         withBitmapTransfer {
             if (bits.isEmpty() || bits.size % 128 != 0 || slot !in 0..19) return@withBitmapTransfer false
             val chunks = bits.size / 128
             for (chunk in 0 until chunks) {
                 if (!connected.get()) return@withBitmapTransfer false
+                if (backgroundWarm && (isDartTransferValid() || (urgentDetailSlot in 0..19 && urgentDetailSlot != slot))) {
+                    return@withBitmapTransfer false
+                }
                 waitForCapture()
                 if (!connected.get()) return@withBitmapTransfer false
                 val encoded = rleEncode(bits, chunk * 128)
@@ -1329,12 +1426,28 @@ class WatchLinkService : Service() {
         val pkg: String,
         val isGroupSummary: Boolean = false,
         val groupKey: String? = null,
+        val categoryId: String = "",
+        val categoryLabel: String = "",
     )
 
     /** 记录从 Flutter UI 手动发送的消息，避免打开消息页或重扫通知时将其冲掉。 */
     fun recordManualMessage(app: String, title: String, text: String) {
+        val classification = NotificationClassifier.classify(
+            NotificationSignal(
+                pkg = MANUAL_PKG,
+                appName = app,
+                title = title,
+                text = text,
+            ),
+        )
         synchronized(messagesLock) {
-            val item = WatchMessageRasterizer.Item(app, title, text)
+            val item = WatchMessageRasterizer.Item(
+                app = app,
+                title = title,
+                text = text,
+                categoryId = classification.category.id,
+                categoryLabel = classification.category.label,
+            )
             messages.addFirst(
                 CachedMessage(
                     key = "manual:${SystemClock.uptimeMillis()}",
@@ -1342,6 +1455,7 @@ class WatchLinkService : Service() {
                     item = item,
                 ),
             )
+            lastPushedSignature = ""
             trimMessagesLocked()
             persistMessagesLocked()
         }
@@ -1371,16 +1485,23 @@ class WatchLinkService : Service() {
                 for (m in manual) {
                     messages.addLast(m)
                 }
-                val seenPkgs = HashSet<String>()
+                val seenMergeKeys = HashSet<String>()
                 for (item in incoming) {
-                    if (NotificationRules.merge && !seenPkgs.add(item.pkg)) {
+                    val mk = mergeKey(item.pkg, item.categoryId)
+                    if (NotificationRules.merge && !seenMergeKeys.add(mk)) {
                         continue
                     }
                     messages.addLast(
                         CachedMessage(
                             key = item.key,
                             pkg = item.pkg,
-                            item = WatchMessageRasterizer.Item(item.app, item.title, item.text),
+                            item = WatchMessageRasterizer.Item(
+                                app = item.app,
+                                title = item.title,
+                                text = item.text,
+                                categoryId = item.categoryId,
+                                categoryLabel = item.categoryLabel,
+                            ),
                             isGroupSummary = item.isGroupSummary,
                             groupKey = item.groupKey,
                         ),
@@ -1395,16 +1516,33 @@ class WatchLinkService : Service() {
         if (shouldPush) pushFullList()
     }
 
-    private fun pushFullList(notifyAlert: Boolean = false) {
+    private fun listSignature(items: List<WatchMessageRasterizer.Item>): String =
+        items.joinToString("\n") { "${it.categoryId}|${it.app}|${it.title}|${it.text}" }
+
+    private fun pushFullList(notifyAlert: Boolean = false, force: Boolean = false) {
+        val scheduledSig: String
         val gen = synchronized(messagesLock) {
             if (messages.isEmpty()) return
+            val sig = listSignature(messages.map { it.item })
+            if (!notifyAlert && !force && sig == lastPushedSignature) {
+                Log.d("WatchLink", "消息列表无变化，跳过重复整表推送（${messages.size} 条）")
+                return
+            }
+            lastPushedSignature = sig
+            scheduledSig = sig
             ++pushListGen
         }
         txExecutor.execute {
-            if (!connected.get()) return@execute
-            if (!notifyAlert && gen != pushListGen) return@execute
+            if (!connected.get()) {
+                synchronized(messagesLock) {
+                    if (lastPushedSignature == scheduledSig) lastPushedSignature = ""
+                }
+                return@execute
+            }
+            if (!notifyAlert && !force && gen != pushListGen) return@execute
             val items = synchronized(messagesLock) { messages.map { it.item } }
             if (items.isEmpty()) return@execute
+            val sig = listSignature(items)
             withBitmapTransfer {
                 if (!connected.get()) return@withBitmapTransfer
                 if (notifyAlert) {
@@ -1416,13 +1554,23 @@ class WatchLinkService : Service() {
                         retryTimeout = true,
                     )
                 ) {
+                    synchronized(messagesLock) {
+                        if (lastPushedSignature == scheduledSig) lastPushedSignature = ""
+                    }
                     Log.w("WatchLink", "0x25 消息数量帧失败（count=${items.size}）")
                     return@withBitmapTransfer
                 }
                 if (sendMaskChunks(0x22, WatchMessageRasterizer.list(items), 2)) {
+                    lastPushedSignature = sig
+                    // 仅预热槽 0 详情，其余槽位由手表点开时通过 0x15 按需拉取；
+                    // 避免连续后台预热 1..7 槽详情（每槽暂存需 2.6KB）撑爆 AT24C256 动态池并反过来驱逐消息行。
                     sendDetailSlot(0, WatchMessageRasterizer.detail(items.first()))
                     writeWithAck(buildFrame(0x2D, byteArrayOf(0x00)))
                     Log.i("WatchLink", "消息列表整表已送达手表（${items.size} 条）")
+                } else {
+                    synchronized(messagesLock) {
+                        if (lastPushedSignature == scheduledSig) lastPushedSignature = ""
+                    }
                 }
             }
         }
@@ -1437,29 +1585,33 @@ class WatchLinkService : Service() {
         pkg: String,
         isGroupSummary: Boolean = false,
         groupKey: String? = null,
+        categoryId: String = "",
+        categoryLabel: String = "",
     ) {
         if (!notificationForward) return
         val item: WatchMessageRasterizer.Item
         val hadSame: Boolean
         val count: Int
+        val mk = mergeKey(pkg, categoryId)
         synchronized(messagesLock) {
             val unchanged = messages.any {
                 it.key == key && it.item.app == app &&
-                    it.item.title == title && it.item.text == text
+                    it.item.title == title && it.item.text == text &&
+                    it.item.categoryId == categoryId
             }
             if (unchanged) return
             if (!isGroupSummary && !groupKey.isNullOrEmpty()) {
                 messages.removeAll { it.isGroupSummary && it.pkg == pkg && it.groupKey == groupKey }
             }
             hadSame = messages.any {
-                it.key == key || (NotificationRules.merge && it.pkg == pkg)
+                it.key == key || (NotificationRules.merge && mergeKey(it.pkg, it.item.categoryId) == mk)
             }
             messages.removeAll { it.key == key }
             if (NotificationRules.merge) {
-                // 同一应用只留最新一条，避免占满全部位置。
-                messages.removeAll { it.pkg == pkg }
+                // 同应用同分类只留最新一条，不同分类（如聊天与支付）并存互不覆盖。
+                messages.removeAll { mergeKey(it.pkg, it.item.categoryId) == mk }
             }
-            item = WatchMessageRasterizer.Item(app, title, text)
+            item = WatchMessageRasterizer.Item(app, title, text, categoryId, categoryLabel)
             messages.addFirst(CachedMessage(key, pkg, item, isGroupSummary, groupKey))
             trimMessagesLocked()
             persistMessagesLocked()
@@ -1477,6 +1629,7 @@ class WatchLinkService : Service() {
     fun removeNotification(key: String) {
         synchronized(messagesLock) {
             if (messages.removeAll { it.key == key }) {
+                lastPushedSignature = ""
                 persistMessagesLocked()
             }
         }
@@ -1485,6 +1638,7 @@ class WatchLinkService : Service() {
     /** 规则修改后立即把缓存收紧到新的条数上限，并重扫通知栏以匹配新规则。 */
     fun applyMessageRules() {
         synchronized(messagesLock) {
+            lastPushedSignature = ""
             trimMessagesLocked()
             persistMessagesLocked()
         }
@@ -1504,7 +1658,7 @@ class WatchLinkService : Service() {
 
     fun messageCount(): Int = synchronized(messagesLock) { messages.size }
 
-    /** 手表打开一级消息页：若本机有缓存则同步点阵，无缓存时保留手表 AT24C256 持久化历史。 */
+    /** 手表打开一级消息页：若本机有缓存则同步点阵，无缓存时保留手表历史/已清空状态不强行拉起状态栏。 */
     private fun onMessageListRequested() {
         mainHandler.post {
             messageMode = true
@@ -1512,23 +1666,28 @@ class WatchLinkService : Service() {
             mediaRunnable = null
             val currentCount = synchronized(messagesLock) { messages.size }
             if (currentCount == 0) {
-                Log.i("WatchLink", "手表要消息列表，缓存是空的，重新扫通知栏")
-                WatchNotificationListener.ensureBound(applicationContext)
-                WatchNotificationListener.rescan()
+                Log.i("WatchLink", "手表要消息列表：本机当前 0 条，保持已清空/手表本地历史")
                 return@post
             }
             Log.i("WatchLink", "手表要消息列表：$currentCount 条")
-            pushFullList()
+            pushFullList(force = true)
         }
     }
 
-    /** 选中某条消息：本机存在缓存时刷新 128×160 详情点阵；否则沿用手表本地动态 ROM。 */
+    /** 选中某条消息：本机存在缓存时优先刷新 128×160 详情点阵；否则沿用手表本地动态 ROM。 */
     private fun onMessageDetailRequested(index: Int) {
         mainHandler.post {
             messageMode = true
             val item = synchronized(messagesLock) { messages.getOrNull(index)?.item } ?: return@post
+            urgentDetailSlot = index
             txExecutor.execute {
-                sendDetailSlot(index, WatchMessageRasterizer.detail(item))
+                try {
+                    sendDetailSlot(index, WatchMessageRasterizer.detail(item))
+                } finally {
+                    if (urgentDetailSlot == index) {
+                        urgentDetailSlot = -1
+                    }
+                }
             }
         }
     }
@@ -1646,7 +1805,7 @@ private data class CachedMessage(
  * 否则里面的随机字节会被误判成控制命令。
  */
 private class FrameScanner(
-    private val onFrame: (Int, Int) -> Unit,
+    private val onFrame: (Int, Int, Int) -> Unit,
     private val onAck: (Boolean) -> Unit,
 ) {
     private var buffer = ByteArray(1024)
@@ -1785,10 +1944,11 @@ private class FrameScanner(
                     } else {
                         0
                     }
-                    onFrame(cmd, first)
+                    onFrame(cmd, first, 0)
                 } else if (cmd == 0x2E && payload >= 13) {
+                    val msgCount = buffer[index + header + 10].toInt() and 0xFF
                     val flags = buffer[index + header + 12].toInt() and 0xFF
-                    onFrame(cmd, flags)
+                    onFrame(cmd, flags, msgCount)
                 }
                 if (cmd == 0x11) {
                     imageUntil = SystemClock.uptimeMillis() + 150

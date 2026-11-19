@@ -3057,6 +3057,9 @@ void ui_app_set_message_count(int count) {
     if (st->messages.child_focus >= count) {
         st->messages.child_focus = 0;
     }
+    if (count == 0 && st->messages.level == UI_MENU_CHILD) {
+        ui_menu_back(&st->messages);
+    }
 }
 
 void ui_settings_set_debug(int enabled) {
@@ -3288,7 +3291,9 @@ static void msg_link_sync(void) {
     }
     if (st->msg_prev_level == UI_MENU_CHILD && level == UI_MENU_LIST) {
         st->msg_detail_pending = 0;
-        link_request_messages();
+        if (!link_msg_list_ready()) {
+            link_request_messages();
+        }
     }
     if (open && level == UI_MENU_LIST && !link_msg_list_ready()) {
         link_restore_msg_list();
@@ -3653,7 +3658,7 @@ void ui_app_go_home(void) {
     link_leave_pic_analog();
     link_hdr_active(0);
     reset_menu_home(&st->settings, SET_N);
-    reset_menu_home(&st->messages, MSG_N);
+    reset_menu_home(&st->messages, link_msg_count() > 0 ? link_msg_count() + 1 : 0);
     reset_menu_home(&st->sport, 1);
     reset_menu_home(&st->music, 1);
     st->msg_was_open = 0;

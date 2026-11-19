@@ -329,6 +329,7 @@ class AndroidWatchBridge {
     required Set<String> packages,
     required int maxMessages,
     required bool merge,
+    bool? filterPromo,
   }) async {
     try {
       await _channel.invokeMethod<void>('setMessageRules', {
@@ -336,6 +337,7 @@ class AndroidWatchBridge {
         'packages': packages.toList(),
         'maxMessages': maxMessages,
         'merge': merge,
+        'filterPromo': ?filterPromo,
       });
     } on PlatformException {
       // 服务未启动时忽略，下次连接会重新下发。
@@ -360,9 +362,12 @@ class AndroidWatchBridge {
   }
 
   /// 触发原生通知监听服务重新绑定并扫描当前状态栏活动通知。
-  static Future<bool> rescanNotifications() async {
+  static Future<bool> rescanNotifications({bool ignoreDismissed = false}) async {
     try {
-      final bound = await _channel.invokeMethod<bool>('rescanNotifications');
+      final bound = await _channel.invokeMethod<bool>(
+        'rescanNotifications',
+        {'ignoreDismissed': ignoreDismissed},
+      );
       return bound == true;
     } on MissingPluginException {
       return false;
