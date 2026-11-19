@@ -124,7 +124,7 @@ at32/               AT32F421 端口：port.c、build.bat、AT32F421x8_FLASH.ld
   packs/            烧录用的 ArteryTek.AT32F421_DFP.2.2.0.pack
 host/               PC 模拟和工具：build.bat、ble_tool.py、benchmark_device.py
                     gen_font.c、gen_clock.c、subset_font.py、pack_pic_mods.py、upload_asset.py
-app/                Flutter 伴侣（Windows / Android），GPL-3.0-or-later
+app/                Flutter 伴侣（Windows / Android）。GPL-3.0-or-later，不适用根目录 MIT
 media/              实机截图、动图、PCB 渲染，README 和解说页共用
 底层架构.html        可交互的底层解说页
 ```
@@ -281,8 +281,15 @@ python host/ble_tool.py --addr C4:26:01:08:02:0C unpair
 
 ## 许可与字体
 
-固件和 PC 工具（`ui/`、`at32/`、`host/`）是 MIT。`ui_ease_in_out` 来自 LVGL 缓动的整数移植。
+两套许可证，互不覆盖。
 
-Flutter 配套应用（`app/`）是 GPL-3.0-or-later，因为用了 FlClash 的 `prism_ui`。分发这个应用的二进制时要带上对应源码。
+| 目录 | 许可证 | 文件 |
+| --- | --- | --- |
+| `ui/`、`at32/`、`host/` | MIT | 仓库根目录 [LICENSE](LICENSE) |
+| `app/` | **GPL-3.0-or-later，不是 MIT** | [app/LICENSE](app/LICENSE) |
+
+根目录的 MIT 文本只适用于固件和 PC 工具。`app/` 使用了 FlClash 的 `prism_ui`，整份伴侣应用按 GPL-3.0-or-later 发布。分发 `app/` 的二进制时要同时提供这份目录的完整源码。说明见 [app/THIRD_PARTY_NOTICES.md](app/THIRD_PARTY_NOTICES.md)。
+
+`ui_ease_in_out` 来自 LVGL 缓动的整数移植，LVGL 本身是 MIT。
 
 字模表不入库。历史表从商业字体光栅而来，不能公开传。克隆之后用 `host/gen_font.c`、`host/gen_clock.c`、`host/subset_font.py` 在本地生成。ASCII 小字可以用仓库里的 `host/fonts/Inter-Medium.ttf`。若要入库，换站酷庆科黄油体、思源黑体或 Inter 重新光栅。

@@ -20,6 +20,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+This MIT grant covers the firmware and PC tools in ui/, at32/, and host/.
+It does not cover app/. The Flutter companion in app/ is GPL-3.0-or-later;
+see app/LICENSE and app/THIRD_PARTY_NOTICES.md.
+
 ---
 
 Note: the easing helper ui_ease_in_out is an integer port of LVGL's
