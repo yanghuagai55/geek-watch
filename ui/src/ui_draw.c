@@ -1668,6 +1668,9 @@ void ui_gif_post(int16_t x, int16_t y, int16_t w, int16_t h,
 }
 #endif
 
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
 static void wait_display(void) {
     uint32_t start = hal_tick_us();
     while (hal_display_busy()) {
@@ -1712,7 +1715,7 @@ static void flush_gif(void) {
 }
 
 void ui_draw_flush(void) {
-    int y, n, next_buffer = 0;
+    int y, n, next_buffer = 0, in_run = 0;
     int snapshot, heal = 0;
     uint32_t start = hal_tick_us(), t0;
     memset(&stats, 0, sizeof stats);
@@ -1741,6 +1744,7 @@ void ui_draw_flush(void) {
         }
     }
     for (y = 0; y < UI_H; y += UI_BAND_H) {
+        int bi = y / UI_BAND_H;
         int first = 0;
         int w, h = UI_H - y;
         if (output_preempt && !snapshot) {
@@ -1748,7 +1752,14 @@ void ui_draw_flush(void) {
             break;
         }
         if (h > UI_BAND_H) h = UI_BAND_H;
-        if (dirty[y / UI_BAND_H].x1 <= dirty[y / UI_BAND_H].x0) continue;
+        if (dirty[bi].x1 <= dirty[bi].x0) {
+            if (in_run) {
+                wait_display();
+                hal_display_end_run();
+                in_run = 0;
+            }
+            continue;
+        }
         /* Full-width bands: narrow column windows mis-address this panel. */
         clip_x0 = 0;
         clip_x1 = UI_W;
@@ -1794,6 +1805,15 @@ void ui_draw_flush(void) {
         }
         stats.raster_us += hal_tick_us() - t0;
         wait_display();
+        if (!in_run) {
+            int nb = bi + 1;
+            int y_end;
+            while (nb < BAND_N && dirty[nb].x1 > dirty[nb].x0) nb++;
+            y_end = nb * UI_BAND_H;
+            if (y_end > UI_H) y_end = UI_H;
+            hal_display_begin_run(0, (int16_t)y, UI_W, (int16_t)(y_end - y));
+            in_run = 1;
+        }
         hal_display_flush((int16_t)clip_x0, (int16_t)y, (int16_t)w, (int16_t)h, band);
         stats.pixels += (uint32_t)(w * h);
         stats.bands++;
@@ -1802,6 +1822,7 @@ void ui_draw_flush(void) {
         ui_service();
     }
     wait_display();
+    hal_display_end_run();
     link_snap_end();
     flush_gif();
     heal_pending = (stats.bands > 0 && !heal && !snapshot);

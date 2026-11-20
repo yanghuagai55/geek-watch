@@ -569,6 +569,13 @@ static void finish_transfer(void) {
     display_stats.completed++;
 }
 
+void hal_display_begin_run(int16_t x, int16_t y, int16_t w, int16_t h) {
+    (void)x; (void)y; (void)w; (void)h;
+}
+
+void hal_display_end_run(void) {
+}
+
 void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint16_t *pixels) {
     if (transfer.pixels) {

@@ -43,6 +43,8 @@ uint8_t hal_key_level(void);
 /* RGB565 buffer stays borrowed until hal_display_busy() returns zero. */
 void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint16_t *pixels);
+void hal_display_begin_run(int16_t x, int16_t y, int16_t w, int16_t h);
+void hal_display_end_run(void);
 int hal_display_busy(void);
 /* 设置 LCD SPI 时钟：15 或 30 MHz。端口不支持时可为空实现。 */
 void hal_display_set_clock(uint8_t mhz);

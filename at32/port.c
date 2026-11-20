@@ -60,6 +60,7 @@ static uint32_t meter_t0;
 static uint32_t idle_us;
 static uint32_t meter_idle0;
 static int display_active;
+static uint8_t display_run;
 static uint32_t cpu_smooth;
 static uint32_t cpu_shown;
 static uint32_t cpu_shown_ms;
@@ -309,11 +310,11 @@ static void spi_wait(void) {
     (void)SPI1->sts;
 }
 
-static void spi_bits(int wide) {
+static __attribute__((noinline)) void spi_bits(int wide) {
     spi_wait();
-    spi_enable(SPI1, FALSE);
-    spi_frame_bit_num_set(SPI1, wide ? SPI_FRAME_16BIT : SPI_FRAME_8BIT);
-    spi_enable(SPI1, TRUE);
+    SPI1->ctrl1_bit.spien = 0;
+    SPI1->ctrl1_bit.fbn = wide ? 1u : 0u;
+    SPI1->ctrl1_bit.spien = 1;
 }
 
 static void spi_byte(unsigned char data) {
@@ -334,20 +335,14 @@ static void spi_dma(const uint16_t *px, int n) {
 }
 
 static void lcd_cmd(unsigned char cmd) {
-    gpio_bits_reset(GPIOA, PIN_DC);
+    GPIOA->clr = PIN_DC;
     spi_byte(cmd);
     spi_wait();
 }
 
-static void lcd_data(unsigned char data) {
-    gpio_bits_set(GPIOA, PIN_DC);
-    spi_byte(data);
-    spi_wait();
-}
-
-static void lcd_range(unsigned char cmd, unsigned char a, unsigned char b) {
+static __attribute__((noinline)) void lcd_range(unsigned char cmd, unsigned char a, unsigned char b) {
     lcd_cmd(cmd);
-    gpio_bits_set(GPIOA, PIN_DC);
+    GPIOA->scr = PIN_DC;
     spi_byte(0);
     spi_byte(a);
     spi_byte(0);
@@ -358,13 +353,8 @@ static void lcd_range(unsigned char cmd, unsigned char a, unsigned char b) {
 static void lcd_window(int x, int y, int w, int h) {
     /* 这块 CTC180 面板：起始地址不加偏移，终点列 +2、行 +1。
        改成对称偏移会把起始点也移走，每行少 2 像素，带会变成梳齿。 */
-    unsigned int x0 = (unsigned int)x;
-    unsigned int y0 = (unsigned int)y;
-    unsigned int x1 = x0 + (unsigned int)w - 1u;
-    unsigned int y1 = y0 + (unsigned int)h - 1u;
-
-    lcd_range(0x2A, (unsigned char)x0, (unsigned char)(x1 + 2u));
-    lcd_range(0x2B, (unsigned char)y0, (unsigned char)(y1 + 1u));
+    lcd_range(0x2A, (unsigned char)x, (unsigned char)(x + w + 1));
+    lcd_range(0x2B, (unsigned char)y, (unsigned char)(y + h));
     lcd_cmd(0x2C);
 }
 
@@ -391,19 +381,23 @@ static void lcd_init(void) {
     const unsigned char *p = seq;
     const unsigned char *end = seq + sizeof seq;
 
-    gpio_bits_set(GPIOA, PIN_RES);
+    GPIOA->scr = PIN_RES;
     delay_ms(1);
-    gpio_bits_reset(GPIOA, PIN_RES);
+    GPIOA->clr = PIN_RES;
     delay_ms(1);
-    gpio_bits_set(GPIOA, PIN_RES);
+    GPIOA->scr = PIN_RES;
     delay_ms(120);
     while(p + 2 <= end) {
         unsigned char cmd = *p++;
         unsigned char n = *p++;
         unsigned char i;
         lcd_cmd(cmd);
-        for(i = 0; i < n; i++) {
-            lcd_data(*p++);
+        if(n) {
+            GPIOA->scr = PIN_DC;
+            for(i = 0; i < n; i++) {
+                spi_byte(*p++);
+            }
+            spi_wait();
         }
         if(cmd == 0x11) {
             delay_ms(120);
@@ -525,34 +519,57 @@ uint8_t hal_key_level(void) {
     return keys;
 }
 
-void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels) {
-    if(!pixels || x < 0 || y < 0 || w <= 0 || h <= 0 ||
-       x + w > HAL_LCD_W || y + h > HAL_LCD_H) {
-        return;
-    }
-    if(hal_display_busy()) {
-        return;
-    }
+static int display_rect_ok(int16_t x, int16_t y, int16_t w, int16_t h) {
+    return x >= 0 && y >= 0 && w > 0 && h > 0 &&
+           x + w <= HAL_LCD_W && y + h <= HAL_LCD_H;
+}
+
+static __attribute__((noinline)) void display_open(int x, int y, int w, int h) {
     lcd_window(x, y, w, h);
     spi_bits(1);
-    gpio_bits_set(GPIOA, PIN_DC);
+    GPIOA->scr = PIN_DC;
+}
+
+void hal_display_begin_run(int16_t x, int16_t y, int16_t w, int16_t h) {
+    if(!display_rect_ok(x, y, w, h)) {
+        return;
+    }
+    hal_display_end_run();
+    display_open(x, y, w, h);
+    display_run = 1u;
+}
+
+__attribute__((noinline)) void hal_display_end_run(void) {
+    while(hal_display_busy()) {
+    }
+    if(display_run) {
+        spi_bits(0);
+        display_run = 0u;
+    }
+}
+
+void hal_display_flush(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels) {
+    if(!pixels || !display_rect_ok(x, y, w, h) || hal_display_busy()) {
+        return;
+    }
+    if(!display_run) {
+        display_open(x, y, w, h);
+    }
     spi_dma(pixels, w * h);
 }
 
-int hal_display_busy(void) {
+__attribute__((noinline)) int hal_display_busy(void) {
     if(!display_active) {
         return 0;
     }
     if((DMA1->sts & DMA1_FDT3_FLAG) == 0u) {
         return 1;
     }
-    /* FDT 只说明最后一个半字进了 DR，还没移出。两个都要等。 */
-    if(SPI1->sts_bit.tdbe == 0 || SPI1->sts_bit.bf) {
-        return 1;
-    }
     DMA1_CHANNEL3->ctrl_bit.chen = 0;
     SPI1->ctrl2_bit.dmaten = 0;
-    spi_bits(0);
+    if(!display_run) {
+        spi_bits(0);
+    }
     DMA1->clr = DMA1_FDT3_FLAG;
     __asm volatile("dmb" ::: "memory");
     display_active = 0;
@@ -597,11 +614,12 @@ void hal_display_set_clock(uint8_t mhz) {
     uint32_t div = (mhz >= 30u) ? SPI_MCLK_DIV_4 : SPI_MCLK_DIV_8;
     /* MDIV 分频位必须在 SPIEN=0 时写，使能状态下写会被硬件忽略，
        表现就是设置里切 15/30MHz 没有效果。 */
+    hal_display_end_run();
     spi_wait();
-    spi_enable(SPI1, FALSE);
+    SPI1->ctrl1_bit.spien = 0;
     SPI1->ctrl2_bit.mdiv_h = 0;
     SPI1->ctrl1_bit.mdiv_l = div;
-    spi_enable(SPI1, TRUE);
+    SPI1->ctrl1_bit.spien = 1;
 }
 
 void hal_frame_pace(void) {
@@ -934,7 +952,7 @@ void port_service(void) {
     hal_imu_t imu;
     hal_mag_t mag;
 
-    if(display_active) {
+    if(display_active || display_run) {
         return;
     }
     now = tick_ms;
