@@ -244,7 +244,7 @@ cd host && python benchmark_device.py --port COM5
 
 ## 伴侣应用
 
-`app/` 编出来的 Windows 程序是 `app/build/windows/x64/runner/Release/watch_companion.exe`，窗口标题是「AT32 手表助手」。窗口够宽时用左侧导航，窄到竖屏比例时改成底部五个入口。安卓端把液态玻璃从超采样降到标准档，竖屏底栏五个图标重画过，避免小尺寸认不出。下面两张是本机 Windows Release 的界面，当时没有连上手表，所以遥测是演示数据。
+`app/` 编出来的 Windows 程序是 `app/build/windows/x64/runner/Release/watch_companion.exe`，窗口标题是「AT32 手表助手」。窗口够宽时用左侧导航，窄到竖屏比例时改成底部五个入口。竖屏底栏的液态玻璃可在「设置 → 外观与动效」里选挡位：极致（默认，全分辨率抓帧加透镜双层折射）、标准（1/8 降采样单层模糊，省 GPU）或关闭。竖屏底栏五个图标重画过，避免小尺寸认不出。下面两张是本机 Windows Release 的界面，当时没有连上手表，所以遥测是演示数据。
 
 <div align="center">
 <table>

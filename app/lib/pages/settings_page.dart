@@ -47,7 +47,11 @@ class SettingsPage extends StatelessWidget {
                 : (Platform.isWindows
                       ? _buildWindowsSection(context, scheme)
                       : null);
-            final appearanceSection = _buildAppearanceSection(wide, narrow);
+            final appearanceSection = _buildAppearanceSection(
+              context,
+              wide,
+              narrow,
+            );
             final watchSection = _buildWatchSection(
               context,
               scheme,
@@ -357,7 +361,12 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  Widget _buildAppearanceSection(bool wide, bool narrow) {
+  Widget _buildAppearanceSection(
+    BuildContext context,
+    bool wide,
+    bool narrow,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
     return _Section(
       icon: Icons.palette_outlined,
       title: '外观与动效',
@@ -408,12 +417,57 @@ class SettingsPage extends StatelessWidget {
           value: controller.demoStreaming,
           onChanged: controller.setDemoStreaming,
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('液态玻璃底栏'),
-          subtitle: const Text('竖屏底栏使用实时着色器；如遇闪烁或异常可关闭'),
-          value: controller.liquidGlass,
-          onChanged: controller.setLiquidGlass,
+        const SizedBox(height: 8),
+        const Text(
+          '液态玻璃底栏',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '竖屏（窄版）底栏的实时折射玻璃，切换即刻生效。',
+          style: TextStyle(
+            color: scheme.onSurfaceVariant,
+            fontSize: 12,
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 10),
+        SegmentedButton<LiquidGlassLevel>(
+          segments: [
+            ButtonSegment(
+              value: LiquidGlassLevel.off,
+              icon: narrow ? null : const Icon(Icons.block_rounded),
+              label: const Text('关闭'),
+            ),
+            ButtonSegment(
+              value: LiquidGlassLevel.standard,
+              icon: narrow ? null : const Icon(Icons.water_drop_outlined),
+              label: const Text('标准'),
+            ),
+            ButtonSegment(
+              value: LiquidGlassLevel.ultra,
+              icon: narrow ? null : const Icon(Icons.blur_on_rounded),
+              label: const Text('极致'),
+            ),
+          ],
+          selected: {controller.liquidGlassLevel},
+          showSelectedIcon: false,
+          expandedInsets: wide ? null : EdgeInsets.zero,
+          onSelectionChanged: (value) =>
+              controller.setLiquidGlassLevel(value.first),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          switch (controller.liquidGlassLevel) {
+            LiquidGlassLevel.off => '改用 Material 胶囊底栏，零着色器开销，最省电。',
+            LiquidGlassLevel.standard => '1/8 边长降采样后单层模糊，像素开销约为极致档的 1/64；透镜不单独折光，文字更清晰。',
+            LiquidGlassLevel.ultra => '全分辨率抓帧 + 透镜双层折射与色散，最接近 iOS 液态玻璃；GPU 与电量开销明显更高。',
+          },
+          style: TextStyle(
+            color: scheme.onSurfaceVariant,
+            fontSize: 11.5,
+            height: 1.45,
+          ),
         ),
       ],
     );

@@ -32,6 +32,12 @@ class NotificationApp {
 /// KEY2 磁强计 360° 硬铁校准阶段（与手表 `传感器数值` 页面同步）。
 enum MagCalPhase { idle, calibrating, readyToFinish, done }
 
+/// 竖屏液态玻璃底栏的显示挡位。
+///
+/// [off] 走 Material 胶囊底栏；[standard] 是 1/8 降采样单层模糊；
+/// [ultra] 是全分辨率抓帧 + 透镜双层折射与色散，最接近 iOS 液态玻璃。
+enum LiquidGlassLevel { off, standard, ultra }
+
 class WatchController extends ChangeNotifier {
   WatchController({bool startTicker = true, this.session})
     : _autoTick = startTicker {
@@ -92,7 +98,12 @@ class WatchController extends ChangeNotifier {
   bool autoSyncTime = true;
   bool animations = true;
   bool demoStreaming = true;
-  bool liquidGlass = true;
+
+  /// 液态玻璃挡位：默认回到 ultra（原最高挡），设置页可降到 standard 或关闭。
+  LiquidGlassLevel liquidGlassLevel = LiquidGlassLevel.ultra;
+
+  /// 是否启用液态玻璃底栏（[liquidGlassLevel] 非关闭）。
+  bool get liquidGlass => liquidGlassLevel != LiquidGlassLevel.off;
   bool use24Hour = true;
 
   /// 手表实际设置（0x1A / 0x2C 回传）与 App 最高优先级策略。
@@ -1651,7 +1662,12 @@ class WatchController extends ChangeNotifier {
 
   void setAnimations(bool value) => _update(() => animations = value);
   void setDemoStreaming(bool value) => _update(() => demoStreaming = value);
-  void setLiquidGlass(bool value) => _update(() => liquidGlass = value);
+  void setLiquidGlassLevel(LiquidGlassLevel value) {
+    if (liquidGlassLevel == value) return;
+    liquidGlassLevel = value;
+    notifyListeners();
+    onSettingsChanged?.call();
+  }
   void setUse24Hour(bool value) {
     use24Hour = value;
     _pushFullConfigIfOnline();
@@ -1686,7 +1702,7 @@ class WatchController extends ChangeNotifier {
     autoSyncTime = true;
     animations = true;
     demoStreaming = true;
-    liquidGlass = true;
+    liquidGlassLevel = LiquidGlassLevel.ultra;
     use24Hour = true;
     appPriorityOverride = true;
     raiseWrist = true;
@@ -1752,6 +1768,11 @@ class WatchController extends ChangeNotifier {
     backgroundEnabled = readBool('backgroundEnabled', backgroundEnabled);
     autoConnect = readBool('autoConnect', autoConnect);
     autoSyncTime = readBool('autoSyncTime', autoSyncTime);
+    final glassLevel = readString('liquidGlassLevel', liquidGlassLevel.name);
+    liquidGlassLevel = LiquidGlassLevel.values.firstWhere(
+      (level) => level.name == glassLevel,
+      orElse: () => LiquidGlassLevel.ultra,
+    );
     appPriorityOverride = readBool('appPriorityOverride', appPriorityOverride);
     use24Hour = readBool('use24Hour', use24Hour);
     raiseWrist = readBool('raiseWrist', raiseWrist);
@@ -1814,6 +1835,7 @@ class WatchController extends ChangeNotifier {
     'backgroundEnabled': backgroundEnabled,
     'autoConnect': autoConnect,
     'autoSyncTime': autoSyncTime,
+    'liquidGlassLevel': liquidGlassLevel.name,
     'appPriorityOverride': appPriorityOverride,
     'use24Hour': use24Hour,
     'raiseWrist': raiseWrist,

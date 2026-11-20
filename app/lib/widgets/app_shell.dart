@@ -36,9 +36,9 @@ class _AppShellState extends State<AppShell>
     reverseCurve: Curves.easeInCubic,
   );
 
-  /// 液态玻璃开关需要立刻生效，但又不能让 1 Hz 演示数据把它整棵子树刷一遍，
+  /// 液态玻璃挡位需要立刻生效，但又不能让 1 Hz 演示数据把它整棵子树刷一遍，
   /// 所以单独记一份值，只在真的变化时 setState。
-  late bool _liquidGlass = widget.controller.liquidGlass;
+  late LiquidGlassLevel _glassLevel = widget.controller.liquidGlassLevel;
 
   /// 缓存给 prism_ui 的 ThemeData：prism.ThemeData 未覆写 ==，
   /// 每次 build 新建会让 InheritedTheme 误触发整个液态玻璃底栏重建。
@@ -140,8 +140,8 @@ class _AppShellState extends State<AppShell>
   }
 
   void _syncGlassSetting() {
-    if (widget.controller.liquidGlass == _liquidGlass) return;
-    setState(() => _liquidGlass = widget.controller.liquidGlass);
+    if (widget.controller.liquidGlassLevel == _glassLevel) return;
+    setState(() => _glassLevel = widget.controller.liquidGlassLevel);
   }
 
   void _setExpanded(bool value) {
@@ -174,7 +174,7 @@ class _AppShellState extends State<AppShell>
             constraints.maxWidth < 760 &&
             constraints.maxHeight > constraints.maxWidth;
         if (portrait) {
-          if (!_liquidGlass) {
+          if (_glassLevel == LiquidGlassLevel.off) {
             return Scaffold(
               body: SafeArea(child: content),
               bottomNavigationBar: NavigationBar(
@@ -199,9 +199,13 @@ class _AppShellState extends State<AppShell>
             data: _resolvePrismTheme(materialTheme),
             child: prism.LiquidGlassScope(
               enabled: true,
-              // Android 移动端使用 standard 档：单层 1/8 降采样模糊图集（较 ultra 减少约 64× 像素抓帧与 3× 片元采样），
-              // 并去掉按压抬起时的第三级 Clip.antiAliasWithSaveLayer + 重复折射捕获，同时保持底栏文字更清晰。
-              quality: prism.LiquidGlassQuality.standard,
+              // 挡位来自设置页，切换即刻重建着色器与抓帧路径：
+              // ultra 走全分辨率抓帧 + 透镜双层折射与色散（最还原，最耗电）；
+              // standard 用 1/8 降采样单层模糊图集（像素开销约为 ultra 的 1/64），
+              // 并去掉按压抬起时的第三级 Clip.antiAliasWithSaveLayer + 重复折射捕获。
+              quality: _glassLevel == LiquidGlassLevel.ultra
+                  ? prism.LiquidGlassQuality.ultra
+                  : prism.LiquidGlassQuality.standard,
               child: prism.LiquidGlassHost(
                 enabled: true,
                 child: Scaffold(

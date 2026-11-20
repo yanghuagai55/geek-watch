@@ -248,7 +248,9 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(390, 840));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    final controller = WatchController(startTicker: true);
+    // 默认挡位是 ultra；这里显式降到 standard，验证省电档的抓帧路径。
+    final controller = WatchController(startTicker: true)
+      ..setLiquidGlassLevel(LiquidGlassLevel.standard);
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(WatchCompanionApp(controller: controller));
@@ -339,5 +341,64 @@ void main() {
     expect(sensorNotifies, 3);
     expect(mainNotifies, 1);
     expect(controller.headingDeg, 40);
+  });
+
+  test('液态玻璃挡位随 settings.json 往返，旧配置回落最高挡', () {
+    final controller = WatchController(startTicker: false);
+    addTearDown(controller.dispose);
+    expect(controller.liquidGlassLevel, LiquidGlassLevel.ultra);
+    expect(controller.liquidGlass, isTrue);
+
+    controller.setLiquidGlassLevel(LiquidGlassLevel.standard);
+    expect(controller.persistedSettings['liquidGlassLevel'], 'standard');
+
+    final restored = WatchController(startTicker: false)
+      ..applyPersisted(controller.persistedSettings);
+    addTearDown(restored.dispose);
+    expect(restored.liquidGlassLevel, LiquidGlassLevel.standard);
+
+    restored.setLiquidGlassLevel(LiquidGlassLevel.off);
+    expect(restored.liquidGlass, isFalse);
+
+    // 旧版本 settings.json 没有该键：回到被临时移除的 ultra 挡。
+    final legacy = WatchController(startTicker: false)
+      ..applyPersisted(<String, dynamic>{'uiRevision': 2});
+    addTearDown(legacy.dispose);
+    expect(legacy.liquidGlassLevel, LiquidGlassLevel.ultra);
+  });
+
+  testWidgets('挡位切换立刻改变 LiquidGlassScope，关闭后回到 Material 底栏', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 840));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = WatchController(startTicker: true);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(WatchCompanionApp(controller: controller));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 30));
+    }
+
+    final dock = find.byKey(const Key('mobile-liquid-nav'));
+    expect(dock, findsOneWidget);
+    expect(
+      LiquidGlassScope.qualityOf(tester.element(dock)),
+      LiquidGlassQuality.ultra,
+    );
+
+    controller.setLiquidGlassLevel(LiquidGlassLevel.standard);
+    await tester.pump();
+    expect(
+      LiquidGlassScope.qualityOf(tester.element(dock)),
+      LiquidGlassQuality.standard,
+    );
+
+    controller.setLiquidGlassLevel(LiquidGlassLevel.off);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('mobile-liquid-nav')), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
