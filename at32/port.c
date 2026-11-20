@@ -10,6 +10,8 @@
 #include "at32f421_usart.h"
 #include "at32f421_misc.h"
 #include "at32f421_flash.h"
+#include "at32f421_wdt.h"
+#include "at32f421_debug.h"
 
 #include "board_config.h"
 #include "i2c_bus.h"
@@ -65,9 +67,8 @@ static int cpu_shown_ok;
 static int clock_on;
 static hal_clock_t clock_base;
 static uint32_t clock_ms;
-static unsigned char rx_q[256];
-static volatile unsigned char rx_r;
-static volatile uint16_t rx_n;
+static volatile unsigned char rx_q[256];
+static unsigned char rx_r;
 static unsigned char clock_src;
 
 /* 上电自检结果与最近一次采样，供 SWD 直接读 RAM 验证（不依赖蓝牙）。
@@ -98,8 +99,18 @@ void SysTick_Handler(void) {
     beep_tick(now);
 }
 
-/* DMA1_CH3(SPI1_TX): fdtien|dtd(M2P)|mincm|16bit->16bit|priority=high */
-#define DMA_SPI_TX_CTRL 0x2592u
+/* DMA1_CH3(SPI1_TX):  fdtien|dtd(M2P)|mincm|16bit->16bit|priority=high
+   DMA1_CH5(USART2_RX): chen|lm(circular)|mincm|8bit->8bit|priority=high */
+#define DMA_SPI_TX_CTRL  0x2592u
+#define DMA_UART_RX_CTRL 0x20A1u
+
+static void wdt_feed(void) {
+    WDT->cmd = WDT_CMD_RELOAD;
+}
+
+static unsigned char rx_w(void) {
+    return (unsigned char)((sizeof rx_q - DMA1_CHANNEL5->dtcnt) & (sizeof rx_q - 1u));
+}
 
 void DMA1_Channel3_2_IRQHandler(void) {
     /* 只关中断源，FDT 标志留着给 hal_display_busy() 判断。 */
@@ -244,20 +255,27 @@ static void usart_setup(void) {
     crm_periph_clock_enable(CRM_USART2_PERIPH_CLOCK, TRUE);
     USART2->baudr_bit.div = (apb_hz + BLE_UART_BAUD / 2u) / BLE_UART_BAUD;
     USART2->ctrl2_bit.stopbn = USART_STOP_1_BIT;
-    USART2->ctrl1 = (1u << 2) | (1u << 3) | (1u << 5) | (1u << 13); /* ren|ten|rdbfien|uen */
+
+    /* USART2_RX -> DMA1_CH5 循环搬运到 rx_q[256]，避免片内 Flash 擦除停顿丢字节。 */
+    DMA1_CHANNEL5->ctrl = 0u;
+    DMA1->clr = DMA1_GL5_FLAG;
+    DMA1_CHANNEL5->paddr = (uint32_t)&USART2->dt;
+    DMA1_CHANNEL5->maddr = (uint32_t)rx_q;
+    DMA1_CHANNEL5->dtcnt = sizeof rx_q;
+    DMA1_CHANNEL5->ctrl = DMA_UART_RX_CTRL;
+
+    USART2->ctrl3_bit.dmaren = 1;
+    USART2->ctrl1 = (1u << 2) | (1u << 3) | (1u << 4) | (1u << 13); /* ren|ten|idleien|uen */
     nvic_irq_enable(USART2_IRQn, 2, 0);
 }
 
 void USART2_IRQHandler(void) {
-    if(USART2->sts_bit.rdbf) {
-        unsigned char c = (unsigned char)USART2->dt;
-        if(rx_n < sizeof rx_q) {
-            rx_q[(rx_r + rx_n) % sizeof rx_q] = c;
-            rx_n++;
-        }
-    } else {
-        (void)USART2->dt;
+    uint32_t n = 32u;
+    /* 等 DMA1_CH5 先取走可能刚到的字节，再按 sts->dt 顺序清 IDLEF 与错误标志。 */
+    while(USART2->sts_bit.rdbf && n--) {
     }
+    (void)USART2->sts;
+    (void)USART2->dt;
 }
 
 static void uart_putc(unsigned char c) {
@@ -453,7 +471,8 @@ void hal_idle(void) {
     uint32_t mask = irq_save();
     uint32_t before;
 
-    if(rx_n || (display_active && (DMA1->sts & DMA1_FDT3_FLAG) != 0u)) {
+    wdt_feed();
+    if(rx_r != rx_w() || (display_active && (DMA1->sts & DMA1_FDT3_FLAG) != 0u)) {
         irq_restore(mask);
         return;
     }
@@ -586,6 +605,7 @@ void hal_display_set_clock(uint8_t mhz) {
 }
 
 void hal_frame_pace(void) {
+    wdt_feed();
     /* 保证即使重负载动画帧（>=16ms）每帧也能推进 1 个 64B 片外资产块，不饥饿。 */
     link_asset_pump(64u);
     for(;;) {
@@ -600,19 +620,10 @@ void hal_frame_pace(void) {
 }
 
 int hal_link_read(uint8_t *out) {
-    uint32_t mask;
-    if(!out) {
+    if(!out || rx_r == rx_w()) {
         return 0;
     }
-    mask = irq_save();
-    if(rx_n == 0) {
-        irq_restore(mask);
-        return 0;
-    }
-    *out = rx_q[rx_r];
-    rx_r = (unsigned char)((rx_r + 1u) % sizeof rx_q);
-    rx_n--;
-    irq_restore(mask);
+    *out = rx_q[rx_r++];
     return 1;
 }
 
@@ -621,9 +632,24 @@ void hal_link_write(const uint8_t *data, int len) {
     if(!data || len <= 0) {
         return;
     }
+    wdt_feed();
     for(i = 0; i < len; i++) {
         uart_putc(data[i]);
     }
+}
+
+static void wdt_setup(void) {
+    uint32_t to = 200000u;
+    /* SWD 挂起调试时暂停 WDT 计数，避免断点/单步触发看门狗复位。 */
+    DEBUGMCU->ctrl |= DEBUG_WDT_PAUSE;
+    /* LICK(约40kHz) / 64 = 625Hz，rld=2500 -> 典型 4.0s（极限 60kHz 下约 2.67s）。 */
+    WDT->cmd = WDT_CMD_ENABLE;
+    WDT->cmd = WDT_CMD_UNLOCK;
+    WDT->div = WDT_CLK_DIV_64;
+    WDT->rld = 2500u;
+    while(WDT->sts && to--) {
+    }
+    WDT->cmd = WDT_CMD_RELOAD;
 }
 
 void board_init(void) {
@@ -655,6 +681,7 @@ void board_init(void) {
     uart_puts(g_debug_line);
     uart_puts("\r\n");
 #endif
+    wdt_setup();
 }
 
 /* ---- 传感器/执行器 HAL 包装 ---- */
@@ -993,6 +1020,7 @@ int hal_int_img_write(uint32_t offset, const uint8_t *src, uint32_t len) {
         uint32_t addr = (uint32_t)(base + offset + i);
         uint16_t lo, hi;
         if ((addr & 0x3FFu) == 0u) {
+            wdt_feed();
             FLASH->ctrl_bit.secers = 1;
             FLASH->addr = addr;
             FLASH->ctrl_bit.erstr = 1;
