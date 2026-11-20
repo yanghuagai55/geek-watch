@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "BATDIR=%~dp0"
-if not defined ARM_GCC_BIN set "ARM_GCC_BIN=D:\dev\arm-none-eabi-gcc\bin"
+if not defined ARM_GCC_BIN set "ARM_GCC_BIN=%~dp0..\..\arm-none-eabi-gcc\bin"
 set "GCC=%ARM_GCC_BIN%\arm-none-eabi-gcc.exe"
 set "AR=%ARM_GCC_BIN%\arm-none-eabi-gcc-ar.exe"
 set "OBJCOPY=%ARM_GCC_BIN%\arm-none-eabi-objcopy.exe"
