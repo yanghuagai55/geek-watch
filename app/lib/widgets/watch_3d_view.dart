@@ -73,6 +73,12 @@ class _Watch3DViewState extends State<Watch3DView>
   double _orbitPitchDeg = 46.0;
   double _zoom = 1.0;
 
+  String _lastClockText = '';
+  int _lastHudRoll = 0;
+  int _lastHudPitch = 0;
+  int _lastHudHeading = 0;
+  final _Watch3DPoseNotifier _pose = _Watch3DPoseNotifier();
+  final ValueNotifier<int> _hudRevision = ValueNotifier<int>(0);
   final _Watch3DRenderScratch _scratch = _Watch3DRenderScratch();
 
   @override
@@ -83,20 +89,77 @@ class _Watch3DViewState extends State<Watch3DView>
       _orbitPitchDeg = 44.0;
       widget.controller.acquireSensorBoost();
     }
+    _lastClockText = _formatClock(
+      widget.controller.now,
+      widget.controller.use24Hour,
+    );
     _ticker = AnimationController(
       vsync: this,
       duration: const Duration(days: 1),
     )..addListener(_onTick);
     widget.controller.addListener(_onControllerChanged);
+    widget.controller.sensorListenable.addListener(_onSensorChanged);
+    widget.controller.clockListenable.addListener(_onClockChanged);
     _syncTickerState();
+    _syncPoseSnapshot(notify: false);
     _loadModel();
   }
 
   void _onControllerChanged() {
     if (!mounted) return;
     _syncTickerState();
+    _syncPoseSnapshot(notify: true);
+    setState(() {});
+  }
+
+  void _onSensorChanged() {
+    if (!mounted) return;
+    _syncTickerState();
     if (!_ticker.isAnimating) {
-      setState(() {});
+      _syncPoseSnapshot(notify: true);
+    }
+  }
+
+  void _onClockChanged() {
+    if (!mounted) return;
+    final next = _formatClock(
+      widget.controller.now,
+      widget.controller.use24Hour,
+    );
+    if (next == _lastClockText) return;
+    _lastClockText = next;
+    _pose.timeText = next;
+    _pose.notify();
+  }
+
+  void _syncPoseSnapshot({required bool notify}) {
+    final c = widget.controller;
+    final (dispRoll, dispPitch, dispHeading) = _poseSeeded
+        ? (_smoothRoll, _smoothPitch, _smoothHeading)
+        : _targetEulerDegrees(c);
+    _pose
+      ..rollDeg = dispRoll
+      ..pitchDeg = dispPitch
+      ..headingDeg = dispHeading
+      ..orbitYawDeg = _orbitYawDeg
+      ..orbitPitchDeg = _orbitPitchDeg
+      ..zoom = _zoom
+      ..pulsePhase = _demoTimeSec;
+    if (notify) {
+      _pose.notify();
+      final r = dispRoll.round();
+      final p = dispPitch.round();
+      final h = dispHeading.round();
+      if (r != _lastHudRoll || p != _lastHudPitch || h != _lastHudHeading) {
+        _lastHudRoll = r;
+        _lastHudPitch = p;
+        _lastHudHeading = h;
+        _hudRevision.value++;
+      }
+    } else {
+      _lastHudRoll = dispRoll.round();
+      _lastHudPitch = dispPitch.round();
+      _lastHudHeading = dispHeading.round();
     }
   }
 
@@ -116,7 +179,11 @@ class _Watch3DViewState extends State<Watch3DView>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_onControllerChanged);
+      oldWidget.controller.sensorListenable.removeListener(_onSensorChanged);
+      oldWidget.controller.clockListenable.removeListener(_onClockChanged);
       widget.controller.addListener(_onControllerChanged);
+      widget.controller.sensorListenable.addListener(_onSensorChanged);
+      widget.controller.clockListenable.addListener(_onClockChanged);
     }
     if (oldWidget.mode != widget.mode) {
       if (widget.mode == Watch3DMode.stageLarge) {
@@ -205,7 +272,9 @@ class _Watch3DViewState extends State<Watch3DView>
     if (settled) {
       _ticker.stop();
     }
-    if (mounted) setState(() {});
+    if (mounted) {
+      _syncPoseSnapshot(notify: true);
+    }
   }
 
   (double, double, double) _targetEulerDegrees(WatchController c) {
@@ -234,20 +303,24 @@ class _Watch3DViewState extends State<Watch3DView>
   }
 
   void _resetCamera() {
-    setState(() {
-      _orbitYawDeg = widget.mode == Watch3DMode.stageLarge ? 26.0 : 22.0;
-      _orbitPitchDeg = widget.mode == Watch3DMode.stageLarge ? 44.0 : 46.0;
-      _zoom = 1.0;
-    });
+    _orbitYawDeg = widget.mode == Watch3DMode.stageLarge ? 26.0 : 22.0;
+    _orbitPitchDeg = widget.mode == Watch3DMode.stageLarge ? 44.0 : 46.0;
+    _zoom = 1.0;
+    _syncPoseSnapshot(notify: true);
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onControllerChanged);
+    widget.controller.sensorListenable.removeListener(_onSensorChanged);
+    widget.controller.clockListenable.removeListener(_onClockChanged);
     if (widget.mode == Watch3DMode.stageLarge) {
       widget.controller.releaseSensorBoost();
     }
     _ticker.dispose();
+    _pose.dispose();
+    _hudRevision.dispose();
+    _scratch.dispose();
     super.dispose();
   }
 
@@ -259,9 +332,9 @@ class _Watch3DViewState extends State<Watch3DView>
     final isCalibrating =
         c.magCalPhase == MagCalPhase.calibrating ||
         c.magCalPhase == MagCalPhase.readyToFinish;
-    final (dispRoll, dispPitch, dispHeading) = _poseSeeded
-        ? (_smoothRoll, _smoothPitch, _smoothHeading)
-        : _targetEulerDegrees(c);
+    _lastClockText = _formatClock(c.now, c.use24Hour);
+    _pose.timeText = _lastClockText;
+    _syncPoseSnapshot(notify: false);
 
     Widget canvasStage = ClipRRect(
       borderRadius: BorderRadius.circular(
@@ -300,38 +373,36 @@ class _Watch3DViewState extends State<Watch3DView>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            CustomPaint(
-              painter: _Watch3DPainter(
-                model: _model,
-                loadFailed: _loadFailed,
-                dark: dark,
-                compact: widget.mode == Watch3DMode.heroCompact,
-                rollDeg: dispRoll,
-                pitchDeg: dispPitch,
-                headingDeg: dispHeading,
-                orbitYawDeg: _orbitYawDeg,
-                orbitPitchDeg: _orbitPitchDeg,
-                zoom: _zoom,
-                calPhase: c.magCalPhase,
-                pulsePhase: _demoTimeSec,
-                liveSensor: c.liveSensor,
-                fusedAxes: c.fusedAxes,
-                deviceScreen: c.deviceScreen,
-                timeText: _formatClock(c.now, c.use24Hour),
-                showAxesTriad:
-                    widget.showAxesTriad &&
-                    widget.mode == Watch3DMode.stageLarge,
-                scratch: _scratch,
+            RepaintBoundary(
+              child: CustomPaint(
+                painter: _Watch3DPainter(
+                  pose: _pose,
+                  model: _model,
+                  loadFailed: _loadFailed,
+                  dark: dark,
+                  compact: widget.mode == Watch3DMode.heroCompact,
+                  calPhase: c.magCalPhase,
+                  liveSensor: c.liveSensor,
+                  fusedAxes: c.fusedAxes,
+                  deviceScreen: c.deviceScreen,
+                  showAxesTriad:
+                      widget.showAxesTriad &&
+                      widget.mode == Watch3DMode.stageLarge,
+                  scratch: _scratch,
+                ),
               ),
             ),
             if (widget.showHudOverlay)
-              _buildHudOverlay(
-                context,
-                c,
-                dark,
-                dispRoll,
-                dispPitch,
-                dispHeading,
+              ValueListenableBuilder<int>(
+                valueListenable: _hudRevision,
+                builder: (context, _, _) => _buildHudOverlay(
+                  context,
+                  c,
+                  dark,
+                  _pose.rollDeg,
+                  _pose.pitchDeg,
+                  _pose.headingDeg,
+                ),
               ),
           ],
         ),
@@ -342,21 +413,19 @@ class _Watch3DViewState extends State<Watch3DView>
       canvasStage = Listener(
         onPointerSignal: (event) {
           if (event is PointerScrollEvent) {
-            setState(() {
-              _zoom = (_zoom - event.scrollDelta.dy * 0.0012).clamp(0.75, 2.2);
-            });
+            _zoom = (_zoom - event.scrollDelta.dy * 0.0012).clamp(0.75, 2.2);
+            _syncPoseSnapshot(notify: true);
           }
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanUpdate: (details) {
-            setState(() {
-              _orbitYawDeg = (_orbitYawDeg + details.delta.dx * 0.55) % 360.0;
-              _orbitPitchDeg = (_orbitPitchDeg - details.delta.dy * 0.55).clamp(
-                -88.0,
-                88.0,
-              );
-            });
+            _orbitYawDeg = (_orbitYawDeg + details.delta.dx * 0.55) % 360.0;
+            _orbitPitchDeg = (_orbitPitchDeg - details.delta.dy * 0.55).clamp(
+              -88.0,
+              88.0,
+            );
+            _syncPoseSnapshot(notify: true);
           },
           onDoubleTap: _resetCamera,
           child: canvasStage,
@@ -364,10 +433,15 @@ class _Watch3DViewState extends State<Watch3DView>
       );
     }
 
+    // 用紧约束 SizedBox + RepaintBoundary + 局部 LayoutBuilder 建立独立的 BuildScope /
+    // RelayoutBoundary / RepaintBoundary：避免 HUD 角度更新冒泡到页面外层 LayoutBuilder 和
+    // Scaffold 触发整页重排与底部液态玻璃重抓帧。
     return SizedBox(
       width: widget.width,
       height: widget.height,
-      child: canvasStage,
+      child: RepaintBoundary(
+        child: LayoutBuilder(builder: (_, _) => canvasStage),
+      ),
     );
   }
 
@@ -523,8 +597,10 @@ class _Watch3DViewState extends State<Watch3DView>
                 icon: Icons.zoom_in_rounded,
                 color: textPrimary,
                 tooltip: '放大模型',
-                onTap: () =>
-                    setState(() => _zoom = (_zoom + 0.18).clamp(0.75, 2.2)),
+                onTap: () {
+                  _zoom = (_zoom + 0.18).clamp(0.75, 2.2);
+                  _syncPoseSnapshot(notify: true);
+                },
               ),
               const SizedBox(width: 6),
               _HudIconBtn(
@@ -533,8 +609,10 @@ class _Watch3DViewState extends State<Watch3DView>
                 icon: Icons.zoom_out_rounded,
                 color: textPrimary,
                 tooltip: '缩小模型',
-                onTap: () =>
-                    setState(() => _zoom = (_zoom - 0.18).clamp(0.75, 2.2)),
+                onTap: () {
+                  _zoom = (_zoom - 0.18).clamp(0.75, 2.2);
+                  _syncPoseSnapshot(notify: true);
+                },
               ),
               const SizedBox(width: 6),
               _HudIconBtn(
@@ -725,7 +803,21 @@ class _AngleChip extends StatelessWidget {
   }
 }
 
-/// 预分配的高速可复用三角面排序与顶点缓冲，避免 60FPS GC 抖动。
+/// 3D 实时姿态重绘通知源：驱动 CustomPaint 直接重绘，避免 60FPS 重建外层 Widget 树。
+class _Watch3DPoseNotifier extends ChangeNotifier {
+  double rollDeg = 0;
+  double pitchDeg = 0;
+  double headingDeg = 0;
+  double orbitYawDeg = 22.0;
+  double orbitPitchDeg = 46.0;
+  double zoom = 1.0;
+  double pulsePhase = 0;
+  String timeText = '';
+
+  void notify() => notifyListeners();
+}
+
+/// 预分配的高速可复用三角面排序、顶点缓冲与文本段落缓存，避免 60FPS GC 与段落泄漏。
 class _Watch3DRenderScratch {
   static const int bucketCount = 1024;
   Float32List transformed = Float32List(0);
@@ -735,6 +827,7 @@ class _Watch3DRenderScratch {
   Int32List triColorList = Int32List(0);
   Float32List drawPos = Float32List(0);
   Int32List drawCol = Int32List(0);
+  final Map<Object, TextPainter> _textCache = <Object, TextPainter>{};
 
   void ensureCapacity(int vertexCount, int maxTris) {
     if (transformed.length < vertexCount * 3) {
@@ -750,51 +843,72 @@ class _Watch3DRenderScratch {
       drawCol = Int32List(maxTris * 3);
     }
   }
+
+  TextPainter cachedText(Object key, String text, TextStyle style) {
+    final existing = _textCache[key];
+    if (existing != null) {
+      return existing;
+    }
+    if (_textCache.length > 32) {
+      for (final tp in _textCache.values) {
+        tp.dispose();
+      }
+      _textCache.clear();
+    }
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    _textCache[key] = tp;
+    return tp;
+  }
+
+  void dispose() {
+    for (final tp in _textCache.values) {
+      tp.dispose();
+    }
+    _textCache.clear();
+  }
 }
 
 class _Watch3DPainter extends CustomPainter {
   const _Watch3DPainter({
+    required this.pose,
     required this.model,
     required this.loadFailed,
     required this.dark,
     required this.compact,
-    required this.rollDeg,
-    required this.pitchDeg,
-    required this.headingDeg,
-    required this.orbitYawDeg,
-    required this.orbitPitchDeg,
-    required this.zoom,
     required this.calPhase,
-    required this.pulsePhase,
     required this.liveSensor,
     required this.fusedAxes,
     required this.deviceScreen,
-    required this.timeText,
     required this.showAxesTriad,
     required this.scratch,
-  });
+  }) : super(repaint: pose);
 
+  final _Watch3DPoseNotifier pose;
   final WatchGlbModel? model;
   final bool loadFailed;
   final bool dark;
   final bool compact;
-  final double rollDeg;
-  final double pitchDeg;
-  final double headingDeg;
-  final double orbitYawDeg;
-  final double orbitPitchDeg;
-  final double zoom;
   final MagCalPhase calPhase;
-  final double pulsePhase;
   final bool liveSensor;
   final int fusedAxes;
   final ui.Image? deviceScreen;
-  final String timeText;
   final bool showAxesTriad;
   final _Watch3DRenderScratch scratch;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final rollDeg = pose.rollDeg;
+    final pitchDeg = pose.pitchDeg;
+    final headingDeg = pose.headingDeg;
+    final orbitYawDeg = pose.orbitYawDeg;
+    final orbitPitchDeg = pose.orbitPitchDeg;
+    final zoom = pose.zoom;
+    final pulsePhase = pose.pulsePhase;
+    final timeText = pose.timeText;
+
     final cx = size.width * 0.5;
     final cy = size.height * 0.5;
     final minDim = math.min(size.width, size.height);
@@ -821,7 +935,7 @@ class _Watch3DPainter extends CustomPainter {
     // 3. 当正在进行 KEY2 校准时，在表体周围绘制 3D 8 字/球面引导光环。
     if (calPhase == MagCalPhase.calibrating ||
         calPhase == MagCalPhase.readyToFinish) {
-      _drawCalibrationRings(canvas, cx, cy, baseScale, vMat);
+      _drawCalibrationRings(canvas, cx, cy, baseScale, vMat, pulsePhase);
     }
 
     // 4. 变换所有 3D 顶点，并记录深度范围用于 O(N) 桶排序。
@@ -909,7 +1023,10 @@ class _Watch3DPainter extends CustomPainter {
         final diff1 = math.max(0.0, nx * lx + ny * ly + nz * lz);
         final diff2 = math.max(0.0, nx * rx + ny * ry + nz * rz);
         final ndh = math.max(0.0, nx * hx + ny * hy + nz * hz);
-        final spec = math.pow(ndh, 18) * specGain;
+        final p2 = ndh * ndh;
+        final p4 = p2 * p2;
+        final p8 = p4 * p4;
+        final spec = (p8 * p8 * p2) * specGain;
 
         int r, g, b;
         if (isGlass) {
@@ -990,7 +1107,18 @@ class _Watch3DPainter extends CustomPainter {
     }
 
     // 5. 若 `TFT_GLASS` 朝向摄像机，将实时手表界面/数字时钟透视绘制在 3D 玻璃上！
-    _drawProjectedGlassScreen(canvas, cx, cy, baseScale, fullMat, m);
+    _drawProjectedGlassScreen(
+      canvas,
+      cx,
+      cy,
+      baseScale,
+      fullMat,
+      m,
+      rollDeg,
+      pitchDeg,
+      headingDeg,
+      timeText,
+    );
 
     // 6. 大视图可选绘制手表本体坐标系 (+X_b/+Y_b/+Z_b) 三轴箭头。
     if (showAxesTriad) {
@@ -1048,6 +1176,12 @@ class _Watch3DPainter extends CustomPainter {
       (180, 'S', false),
       (270, 'W', false),
     ];
+    final northTickPaint = Paint()
+      ..strokeWidth = 2.0
+      ..color = dark ? AppPalette.mint : AppPalette.mintDeep;
+    final minorTickPaint = Paint()
+      ..strokeWidth = 1.0
+      ..color = ringColor;
     for (var deg = 0; deg < 360; deg += 30) {
       final rad = deg * math.pi / 180.0;
       final inner = deg % 90 == 0 ? 0.90 : 0.95;
@@ -1057,15 +1191,7 @@ class _Watch3DPainter extends CustomPainter {
         ringZ,
       );
       final p1 = proj(ringR * math.sin(rad), ringR * math.cos(rad), ringZ);
-      canvas.drawLine(
-        p0,
-        p1,
-        Paint()
-          ..strokeWidth = deg == 0 ? 2.0 : 1.0
-          ..color = (deg == 0
-              ? (dark ? AppPalette.mint : AppPalette.mintDeep)
-              : ringColor),
-      );
+      canvas.drawLine(p0, p1, deg == 0 ? northTickPaint : minorTickPaint);
     }
 
     if (!compact) {
@@ -1076,19 +1202,17 @@ class _Watch3DPainter extends CustomPainter {
           ringR * 1.12 * math.cos(rad),
           ringZ,
         );
-        final tp = TextPainter(
-          text: TextSpan(
-            text: ch,
-            style: TextStyle(
-              fontSize: isN ? 11.5 : 10,
-              fontWeight: FontWeight.w700,
-              color: isN
-                  ? (dark ? AppPalette.mint : AppPalette.mintDeep)
-                  : (dark ? AppPalette.muted : const Color(0xFF54635C)),
-            ),
+        final tp = scratch.cachedText(
+          ('cardinal', ch, dark),
+          ch,
+          TextStyle(
+            fontSize: isN ? 11.5 : 10,
+            fontWeight: FontWeight.w700,
+            color: isN
+                ? (dark ? AppPalette.mint : AppPalette.mintDeep)
+                : (dark ? AppPalette.muted : const Color(0xFF54635C)),
           ),
-          textDirection: TextDirection.ltr,
-        )..layout();
+        );
         tp.paint(canvas, pos - Offset(tp.width * 0.5, tp.height * 0.5));
       }
     }
@@ -1100,6 +1224,7 @@ class _Watch3DPainter extends CustomPainter {
     double cy,
     double scale,
     List<double> vMat,
+    double pulsePhase,
   ) {
     final ready = calPhase == MagCalPhase.readyToFinish;
     final pulse = 0.55 + 0.45 * math.sin(pulsePhase * 4.2);
@@ -1148,6 +1273,10 @@ class _Watch3DPainter extends CustomPainter {
     double scale,
     List<double> fullMat,
     WatchGlbModel m,
+    double rollDeg,
+    double pitchDeg,
+    double headingDeg,
+    String timeText,
   ) {
     // 屏幕外法线 Body +Z = (0, 0, 1)，经 fullMat 变换后得相机空间法线 Z 分量 m[8]。
     final screenFaceZ = fullMat[8];
@@ -1237,34 +1366,30 @@ class _Watch3DPainter extends CustomPainter {
       );
       canvas.restore();
 
-      final tpTime = TextPainter(
-        text: TextSpan(
-          text: timeText,
-          style: const TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.w700,
-            color: AppPalette.warmWhite,
-            letterSpacing: -0.5,
-          ),
+      final tpTime = scratch.cachedText(
+        ('time', timeText),
+        timeText,
+        const TextStyle(
+          fontSize: 28,
+          fontWeight: FontWeight.w700,
+          color: AppPalette.warmWhite,
+          letterSpacing: -0.5,
         ),
-        textDirection: TextDirection.ltr,
-      )..layout();
+      );
       tpTime.paint(canvas, Offset((w - tpTime.width) * 0.5, 22));
 
       final sub = liveSensor
           ? '${fusedAxes}DOF · ${headingDeg.round()}°'
           : 'AT32 IMU9';
-      final tpSub = TextPainter(
-        text: TextSpan(
-          text: sub,
-          style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-            color: AppPalette.mint,
-          ),
+      final tpSub = scratch.cachedText(
+        ('sub', sub),
+        sub,
+        const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: AppPalette.mint,
         ),
-        textDirection: TextDirection.ltr,
-      )..layout();
+      );
       tpSub.paint(canvas, Offset((w - tpSub.width) * 0.5, 134));
     }
 
@@ -1338,17 +1463,15 @@ class _Watch3DPainter extends CustomPainter {
           ..color = col.withValues(alpha: 0.85),
       );
       canvas.drawCircle(p1, 2.6, Paint()..color = col);
-      final tp = TextPainter(
-        text: TextSpan(
-          text: lbl,
-          style: TextStyle(
-            fontSize: 9.5,
-            fontWeight: FontWeight.w700,
-            color: col,
-          ),
+      final tp = scratch.cachedText(
+        ('axis', lbl),
+        lbl,
+        TextStyle(
+          fontSize: 9.5,
+          fontWeight: FontWeight.w700,
+          color: col,
         ),
-        textDirection: TextDirection.ltr,
-      )..layout();
+      );
       tp.paint(canvas, pLbl - Offset(tp.width * 0.5, tp.height * 0.5));
     }
   }
@@ -1361,16 +1484,14 @@ class _Watch3DPainter extends CustomPainter {
     List<double> vMat,
     bool failed,
   ) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: failed ? '3D 模型加载失败' : '载入 3D 装配体...',
-        style: TextStyle(
-          fontSize: 11,
-          color: dark ? AppPalette.muted : const Color(0xFF54635C),
-        ),
+    final tp = scratch.cachedText(
+      ('placeholder', failed, dark),
+      failed ? '3D 模型加载失败' : '载入 3D 装配体...',
+      TextStyle(
+        fontSize: 11,
+        color: dark ? AppPalette.muted : const Color(0xFF54635C),
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     tp.paint(canvas, Offset(cx - tp.width * 0.5, cy - tp.height * 0.5));
   }
 
@@ -1457,19 +1578,15 @@ class _Watch3DPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _Watch3DPainter oldDelegate) {
-    return oldDelegate.model != model ||
-        oldDelegate.rollDeg != rollDeg ||
-        oldDelegate.pitchDeg != pitchDeg ||
-        oldDelegate.headingDeg != headingDeg ||
-        oldDelegate.orbitYawDeg != orbitYawDeg ||
-        oldDelegate.orbitPitchDeg != orbitPitchDeg ||
-        oldDelegate.zoom != zoom ||
+    return oldDelegate.pose != pose ||
+        oldDelegate.model != model ||
+        oldDelegate.loadFailed != loadFailed ||
         oldDelegate.dark != dark ||
+        oldDelegate.compact != compact ||
         oldDelegate.calPhase != calPhase ||
-        oldDelegate.pulsePhase != pulsePhase ||
         oldDelegate.deviceScreen != deviceScreen ||
-        oldDelegate.timeText != timeText ||
         oldDelegate.liveSensor != liveSensor ||
-        oldDelegate.fusedAxes != fusedAxes;
+        oldDelegate.fusedAxes != fusedAxes ||
+        oldDelegate.showAxesTriad != showAxesTriad;
   }
 }

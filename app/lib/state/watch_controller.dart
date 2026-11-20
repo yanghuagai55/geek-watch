@@ -60,6 +60,14 @@ class WatchController extends ChangeNotifier {
   /// 当由单元测试以 `startTicker: false` 构造时为 false，关闭后台空闲循环动画。
   bool get ambientTickEnabled => _autoTick;
 
+  /// 高频局部订阅源：把 1 Hz 时钟与 5~9 Hz 九轴姿态从主 ChangeNotifier 拆出，
+  /// 避免设置页/媒体页/底栏玻璃被高频状态刷新拖入整页重建。
+  final _SignalNotifier _clockNotifier = _SignalNotifier();
+  final _SignalNotifier _sensorNotifier = _SignalNotifier();
+
+  Listenable get clockListenable => _clockNotifier;
+  Listenable get sensorListenable => _sensorNotifier;
+
   Timer? _ticker;
   Timer? _sensorTimer;
   _AndroidLifecycleObserver? _lifecycleObserver;
@@ -939,6 +947,17 @@ class WatchController extends ChangeNotifier {
   }
 
   void _applySensor(WatchSensorData data) {
+    final prevLive = liveSensor;
+    final prevMpu = mpuOk;
+    final prevMag = magOk;
+    final prevAxes = fusedAxes;
+    final prevBat = batteryMv;
+    final prevPhase = magCalPhase;
+    final prevNote = calStatusNote;
+    final prevSpanX = magSpanX;
+    final prevSpanY = magSpanY;
+    final prevSpanZ = magSpanZ;
+
     sensor = data;
     liveSensor = true;
     mpuOk = data.mpuOk;
@@ -973,7 +992,21 @@ class WatchController extends ChangeNotifier {
         magCalPhase == MagCalPhase.readyToFinish) {
       _updateMagCalibrationBounds(mx, my, mz);
     }
-    notifyListeners();
+    _sensorNotifier.pulse();
+    final structuralChanged =
+        !prevLive ||
+        mpuOk != prevMpu ||
+        magOk != prevMag ||
+        fusedAxes != prevAxes ||
+        (batteryMv - prevBat).abs() >= 20 ||
+        magCalPhase != prevPhase ||
+        calStatusNote != prevNote ||
+        magSpanX != prevSpanX ||
+        magSpanY != prevSpanY ||
+        magSpanZ != prevSpanZ;
+    if (structuralChanged) {
+      notifyListeners();
+    }
   }
 
   void _updateMagCalibrationBounds(int x, int y, int z) {
@@ -1065,6 +1098,7 @@ class WatchController extends ChangeNotifier {
       pitchDeg = 0;
       headingDeg = 0;
       calStatusNote = '预览模式：已将姿态归零（实机下对应 KEY3 zero/reset）';
+      _sensorNotifier.pulse();
       notifyListeners();
       return true;
     }
@@ -1424,11 +1458,16 @@ class WatchController extends ChangeNotifier {
   void _tick() {
     _ticks += 1;
     now = DateTime.now();
+    _clockNotifier.pulse();
+    var stateChanged = false;
     if (!connected) {
       // 没连接就老实显示 0，不再跑演示数据。
-      ramUsed = 0;
-      cpu = 0;
-      fps = 0;
+      if (ramUsed != 0 || cpu != 0 || fps != 0) {
+        ramUsed = 0;
+        cpu = 0;
+        fps = 0;
+        stateChanged = true;
+      }
     } else if (session == null && demoStreaming && !_liveTelemetry) {
       // 仅用于没有硬件会话的纯界面预览。
       final phase = _ticks / 3;
@@ -1438,6 +1477,7 @@ class WatchController extends ChangeNotifier {
       _append(ramHistory, ramUsed / ramTotal);
       _append(cpuHistory, cpu / 100);
       _append(fpsHistory, fps / 61);
+      stateChanged = true;
     }
     // 运动数据 5 秒一次；抓屏或原生通知点阵下发期间让路，避免把帧插进图像流或串口拥塞。
     final activeSession = session;
@@ -1457,7 +1497,9 @@ class WatchController extends ChangeNotifier {
         unawaited(_maybeReattach());
       }
     }
-    notifyListeners();
+    if (stateChanged) {
+      notifyListeners();
+    }
   }
 
   bool _reattaching = false;
@@ -1485,7 +1527,7 @@ class WatchController extends ChangeNotifier {
 
   bool _pollingAndroidMedia = false;
 
-  /// Android 没有 SMTC，改为每秒向原生服务要一次当前媒体与进度。
+  /// Android 没有 SMTC，改为每秒向原生服务要一次当前媒体与进度；仅在字段真实变化时通知 UI。
   Future<void> _pollAndroidMedia() async {
     if (!Platform.isAndroid || _pollingAndroidMedia) return;
     _pollingAndroidMedia = true;
@@ -1497,6 +1539,13 @@ class WatchController extends ChangeNotifier {
       final isPlaying = info['playing'] == true;
       final position = ((info['positionMs'] as num?)?.toDouble() ?? 0) / 1000.0;
       final duration = ((info['durationMs'] as num?)?.toDouble() ?? 0) / 1000.0;
+      final changed =
+          title != mediaTitle ||
+          artist != mediaArtist ||
+          isPlaying != playing ||
+          (position - mediaPosition).abs() >= 0.4 ||
+          (duration - mediaDuration).abs() >= 0.4;
+      if (!changed) return;
       mediaTitle = title;
       mediaArtist = artist;
       playing = isPlaying;
@@ -1816,9 +1865,15 @@ class WatchController extends ChangeNotifier {
     _sportSub?.cancel();
     _sensorSub?.cancel();
     deviceScreen?.dispose();
+    _clockNotifier.dispose();
+    _sensorNotifier.dispose();
     unawaited(session?.dispose());
     super.dispose();
   }
+}
+
+class _SignalNotifier extends ChangeNotifier {
+  void pulse() => notifyListeners();
 }
 
 class _AndroidLifecycleObserver with WidgetsBindingObserver {

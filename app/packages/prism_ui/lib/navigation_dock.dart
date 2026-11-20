@@ -270,8 +270,13 @@ class _DockSurface extends StatelessWidget {
     if (glass) {
       return ValueListenableBuilder(
         valueListenable: glow,
-        builder: (_, glow, child) =>
-            LiquidGlass(style: style, glow: glow, child: child),
+        builder: (_, glow, child) => LiquidGlass(
+          style: style,
+          glow: glow,
+          steadyFrost: true,
+          holdInsets: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          child: child,
+        ),
         child: child,
       );
     }
@@ -915,6 +920,10 @@ class _FloatingNavigationBarState extends State<FloatingNavigationBar>
   VelocityTracker? _tracker;
   Offset? _cursor;
   final ValueNotifier<double?> _hoverAt = ValueNotifier(null);
+  Object? _labelMeasureKey;
+  List<({double width, double height})> _measuredLabels = const [];
+  double _widestLabel = 0;
+  double _labelLineHeight = 0;
 
   int get _lastIndex => math.max(0, widget.destinations.length - 1);
 
@@ -1254,18 +1263,31 @@ class _FloatingNavigationBarState extends State<FloatingNavigationBar>
       leading: _labelLeading,
       weight: FontWeight.w500,
     );
-    final labels = [
-      for (final destination in widget.destinations)
-        _measureLabel(context, destination.label, labelStyle),
-    ];
-    final widest = labels.fold(
-      0.0,
-      (width, label) => math.max(width, label.width),
+    final measureKey = Object.hash(
+      labelStyle,
+      MediaQuery.textScalerOf(context),
+      Directionality.of(context),
+      Object.hashAll([for (final d in widget.destinations) d.label]),
     );
-    final lineHeight = labels.fold(
-      0.0,
-      (height, label) => math.max(height, label.height),
-    );
+    if (_labelMeasureKey != measureKey ||
+        _measuredLabels.length != widget.destinations.length) {
+      _labelMeasureKey = measureKey;
+      _measuredLabels = [
+        for (final destination in widget.destinations)
+          _measureLabel(context, destination.label, labelStyle),
+      ];
+      _widestLabel = _measuredLabels.fold(
+        0.0,
+        (width, label) => math.max(width, label.width),
+      );
+      _labelLineHeight = _measuredLabels.fold(
+        0.0,
+        (height, label) => math.max(height, label.height),
+      );
+    }
+    final labels = _measuredLabels;
+    final widest = _widestLabel;
+    final lineHeight = _labelLineHeight;
     final glass = LiquidGlassScope.of(context);
     final ultra =
         LiquidGlassScope.qualityOf(context) == LiquidGlassQuality.ultra;
@@ -1370,8 +1392,11 @@ class _FloatingNavigationBarState extends State<FloatingNavigationBar>
                         if (glass && widget.destinations.isNotEmpty)
                           AnimatedBuilder(
                             animation: _motion,
-                            builder: (_, _) =>
-                                _GlassLens(rect: lensRect(), lift: _lift.value),
+                            builder: (_, _) => _GlassLens(
+                              rect: lensRect(),
+                              barSize: constraints.biggest,
+                              lift: _lift.value,
+                            ),
                           ),
                         items(lensed ? _LensPart.outside : _LensPart.both),
                         if (lensed)
@@ -1443,6 +1468,23 @@ class _HoverHighlight extends StatelessWidget {
   }
 }
 
+final _lensPlatters = <int, Color>{};
+
+Color _lensPlatterOf(ColorScheme colorScheme) {
+  final dark = colorScheme.brightness == Brightness.dark;
+  final argb = colorScheme.secondary.toARGB32();
+  final key = (argb << 1) | (dark ? 1 : 0);
+  if (_lensPlatters.length > 8) {
+    _lensPlatters.clear();
+  }
+  return _lensPlatters.putIfAbsent(key, () {
+    final tone = dark ? 4.0 : 90.0;
+    final secondary = Hct.fromInt(argb);
+    final hct = Hct.from(secondary.hue, secondary.chroma, tone);
+    return Color(hct.toInt()).withValues(alpha: 0.85);
+  });
+}
+
 class _Lens extends StatelessWidget {
   const _Lens({required this.rect, required this.lift, required this.glass});
 
@@ -1458,10 +1500,7 @@ class _Lens extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = context.colorScheme;
     final lifted = lift.clamp(0.0, 1.0);
-    final tone = colorScheme.brightness == Brightness.dark ? 4.0 : 90.0;
-    final secondary = Hct.fromInt(colorScheme.secondary.toARGB32());
-    final hct = Hct.from(secondary.hue, secondary.chroma, tone);
-    final platter = Color(hct.toInt()).withValues(alpha: 0.85);
+    final platter = _lensPlatterOf(colorScheme);
     return PositionedDirectional(
       start: rect.left,
       top: rect.top,
@@ -1487,9 +1526,14 @@ class _Lens extends StatelessWidget {
 /// The clear lens a lifted selection becomes on glass. The destinations stand
 /// on it, as iOS draws them over its lens, so it bends only the bar.
 class _GlassLens extends StatelessWidget {
-  const _GlassLens({required this.rect, required this.lift});
+  const _GlassLens({
+    required this.rect,
+    required this.barSize,
+    required this.lift,
+  });
 
   final Rect rect;
+  final Size barSize;
   final double lift;
 
   @override
@@ -1498,8 +1542,19 @@ class _GlassLens extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final colorScheme = context.colorScheme;
+    final textDirection = Directionality.of(context);
+    final physicalLeft = textDirection == TextDirection.ltr
+        ? rect.left
+        : barSize.width - rect.right;
+    const pad = _barPadding + _lensGrowth;
+    final hold = Rect.fromLTWH(
+      -physicalLeft - pad,
+      -rect.top - pad,
+      barSize.width + pad * 2,
+      barSize.height + pad * 2,
+    );
     return Positioned.directional(
-      textDirection: Directionality.of(context),
+      textDirection: textDirection,
       start: rect.left,
       top: rect.top,
       width: rect.width,
@@ -1508,6 +1563,8 @@ class _GlassLens extends StatelessWidget {
         child: LiquidGlass(
           style: LiquidGlassStyle.lens(colorScheme).scale(lift),
           shadows: _lensShadows(colorScheme, lift),
+          hold: hold,
+          steadyFrost: true,
         ),
       ),
     );

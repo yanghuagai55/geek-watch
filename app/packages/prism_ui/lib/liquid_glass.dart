@@ -728,6 +728,7 @@ class LiquidGlass extends StatelessWidget {
     this.pressed = false,
     this.glow,
     this.hold,
+    this.holdInsets,
     this.steadyFrost = false,
     this.child,
   });
@@ -736,6 +737,9 @@ class LiquidGlass extends StatelessWidget {
 
   /// As [LiquidGlassPane.paint] takes it, but from the pane's top left.
   final Rect? hold;
+
+  /// Inflates the pane's live bounds to form a hold rect when [hold] is null.
+  final EdgeInsets? holdInsets;
   final bool steadyFrost;
 
   /// Rounds each corner on its own in place of the pill.
@@ -791,6 +795,7 @@ class LiquidGlass extends StatelessWidget {
         fading: false,
         glow: glow,
         hold: hold,
+        holdInsets: holdInsets,
         steadyFrost: steadyFrost,
         child: child,
       );
@@ -809,6 +814,7 @@ class LiquidGlass extends StatelessWidget {
         fading: !pressed,
         glow: null,
         hold: hold,
+        holdInsets: holdInsets,
         steadyFrost: steadyFrost,
         child: child,
       ),
@@ -828,6 +834,7 @@ class _LiquidGlassPane extends SingleChildRenderObjectWidget {
     required this.fading,
     required this.glow,
     required this.hold,
+    required this.holdInsets,
     required this.steadyFrost,
     super.child,
   });
@@ -841,6 +848,7 @@ class _LiquidGlassPane extends SingleChildRenderObjectWidget {
   final bool fading;
   final LiquidGlassGlow? glow;
   final Rect? hold;
+  final EdgeInsets? holdInsets;
   final bool steadyFrost;
 
   @override
@@ -855,6 +863,7 @@ class _LiquidGlassPane extends SingleChildRenderObjectWidget {
       fading: fading,
       glow: glow,
       hold: hold,
+      holdInsets: holdInsets,
       steadyFrost: steadyFrost,
     );
   }
@@ -874,6 +883,7 @@ class _LiquidGlassPane extends SingleChildRenderObjectWidget {
       ..fading = fading
       ..glow = glow
       ..hold = hold
+      ..holdInsets = holdInsets
       ..steadyFrost = steadyFrost;
   }
 }
@@ -889,8 +899,10 @@ class _RenderLiquidGlass extends RenderProxyBox {
     required bool fading,
     required LiquidGlassGlow? glow,
     required Rect? hold,
+    required EdgeInsets? holdInsets,
     required bool steadyFrost,
   }) : _hold = hold,
+       _holdInsets = holdInsets,
        _steadyFrost = steadyFrost,
        _group = group,
        _style = style,
@@ -909,6 +921,15 @@ class _RenderLiquidGlass extends RenderProxyBox {
       return;
     }
     _hold = value;
+    markNeedsPaint();
+  }
+
+  EdgeInsets? _holdInsets;
+  set holdInsets(EdgeInsets? value) {
+    if (value == _holdInsets) {
+      return;
+    }
+    _holdInsets = value;
     markNeedsPaint();
   }
 
@@ -1080,7 +1101,9 @@ class _RenderLiquidGlass extends RenderProxyBox {
         style: _style,
         shadows: _shadows,
         group: _group,
-        hold: _hold?.shift(offset),
+        hold:
+            _hold?.shift(offset) ??
+            (_holdInsets == null ? null : _holdInsets!.inflateRect(offset & size)),
         steadyFrost: _steadyFrost,
         glow:
             _glow ??
@@ -1361,6 +1384,17 @@ class _LiquidGlassLayer extends Layer {
   ui.Picture? _captured;
   ui.FragmentShader? _captureShader;
   (ui.Image, Path?, BlendMode, ui.FragmentProgram?, List<double>)? _captureKey;
+  (Size, BorderRadius)? _curvesKey;
+  List<double>? _curvesCache;
+
+  List<double> _cornerCurves() {
+    final key = (rect.size, corners);
+    if (_curvesKey == key && _curvesCache != null) {
+      return _curvesCache!;
+    }
+    _curvesKey = key;
+    return _curvesCache = liquidGlassCornerCurves(rect.size, corners);
+  }
 
   @override
   bool get alwaysNeedsAddToScene => true;
@@ -1398,7 +1432,7 @@ class _LiquidGlassLayer extends Layer {
     corners.topRight.x,
     corners.bottomRight.x,
     corners.bottomLeft.x,
-    ...liquidGlassCornerCurves(rect.size, corners),
+    ..._cornerCurves(),
     style.refraction,
     style.saturation,
     style.brightness,

@@ -158,9 +158,14 @@ class _AttitudeStageCard extends StatelessWidget {
           onTapExpand: () => _openFullscreen3D(context, controller),
         ),
         const SizedBox(height: 12),
-        _TelemetryStrip(
-          controller: controller,
-          fourCols: wide ? false : fourColTelemetry,
+        RepaintBoundary(
+          child: ListenableBuilder(
+            listenable: controller.sensorListenable,
+            builder: (context, _) => _TelemetryStrip(
+              controller: controller,
+              fourCols: wide ? false : fourColTelemetry,
+            ),
+          ),
         ),
       ],
     );

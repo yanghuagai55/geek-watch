@@ -673,6 +673,9 @@ object MediaBridge {
     @Volatile
     private var lastLoggedTitle = ""
 
+    @Volatile
+    private var lastRefreshMs = 0L
+
     fun updateFrom(controller: MediaController) {
         sessionController = controller
         val snapshot = snapshotOf(controller)
@@ -684,9 +687,16 @@ object MediaBridge {
         )
     }
 
-    /** App 每秒拉一次：标题、歌手、播放态和进度。 */
+    /** App 每秒拉一次：标题、歌手、播放态和进度。空闲时节流系统会话查询，避免主线程每秒 Binder IPC。 */
     fun nowPlaying(context: Context): Map<String, Any?> {
-        val controller = sessionController ?: refresh(context)
+        var controller = sessionController
+        if (controller == null) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastRefreshMs >= 5_000L) {
+                lastRefreshMs = now
+                controller = refresh(context)
+            }
+        }
         val snapshot = if (controller != null) snapshotOf(controller) else current
         if (snapshot.title.isNotEmpty() && snapshot.title != lastLoggedTitle) {
             lastLoggedTitle = snapshot.title

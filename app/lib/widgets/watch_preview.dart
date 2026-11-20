@@ -21,19 +21,27 @@ class WatchPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final image = controller.deviceScreen;
     if (image == null) {
-      return SizedBox(
-        width: width,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            WatchFace(now: controller.now, use24Hour: controller.use24Hour),
-            if (controller.capturingPreview)
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+      return RepaintBoundary(
+        child: SizedBox(
+          width: width,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              ListenableBuilder(
+                listenable: controller.clockListenable,
+                builder: (context, _) => WatchFace(
+                  now: controller.now,
+                  use24Hour: controller.use24Hour,
+                ),
               ),
-          ],
+              if (controller.capturingPreview)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
         ),
       );
     }

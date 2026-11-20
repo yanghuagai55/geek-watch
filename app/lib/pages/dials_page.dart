@@ -125,6 +125,9 @@ const _wallpaperPresets = <(String id, String label)>[
 ];
 
 class _DialsPageState extends State<DialsPage> {
+  static final Map<Object, (EncodedWatchImage, WatchImageProfile)>
+  _builtInCache = <Object, (EncodedWatchImage, WatchImageProfile)>{};
+
   String _wallpaperId = 'aurora';
   String? _pickedImageName;
   Uint8List? _pickedFileBytes;
@@ -152,7 +155,39 @@ class _DialsPageState extends State<DialsPage> {
   @override
   void initState() {
     super.initState();
-    unawaited(_rebuildImagePreview());
+    final cached = _builtInCache[_builtInCacheKey()];
+    if (cached != null) {
+      _encoded = cached.$1;
+      _profile = cached.$2;
+      widget.controller.customDialPreviewRgba = cached.$1.previewRgba;
+      unawaited(_decodeCachedPreview(cached.$1.previewRgba));
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_rebuildImagePreview());
+      });
+    }
+  }
+
+  Object _builtInCacheKey() => (
+    _wallpaperId,
+    _format,
+    _dither,
+    (_brightness * 1000).round(),
+    (_contrast * 1000).round(),
+    _format == WatchExtImgFormat.mono1bpp
+        ? widget.controller.dialAccentColor
+        : 0,
+  );
+
+  Future<void> _decodeCachedPreview(Uint8List previewRgba) async {
+    final img = await rgbaToUiImage(previewRgba);
+    if (!mounted) {
+      img.dispose();
+      return;
+    }
+    final old = _previewImage;
+    setState(() => _previewImage = img);
+    old?.dispose();
   }
 
   @override
@@ -274,40 +309,58 @@ class _DialsPageState extends State<DialsPage> {
     try {
       do {
         _encodePending = false;
-        Uint8List rgba;
         final fileBytes = _pickedFileBytes;
+        final EncodedWatchImage encoded;
+        final WatchImageProfile profile;
         if (fileBytes != null) {
-          rgba = await cropImageBytesToRgba(
+          final rgba = await cropImageBytesToRgba(
             fileBytes,
             cropRectNorm: _cropRectNorm,
             brightness: _brightness,
             contrast: _contrast,
           );
+          encoded = encodeWatchImageAdaptive(
+            rgba,
+            format: _format,
+            dither: _dither,
+            accentArgb: widget.controller.dialAccentColor,
+          );
+          profile = analyzeWatchImageProfile(rgba, encoded);
         } else {
-          rgba = generateBuiltInWallpaperRgba(_wallpaperId);
-          if (_brightness.abs() > 0.001 || (_contrast - 1.0).abs() > 0.001) {
-            final bShift = _brightness * 255.0;
-            for (var i = 0; i < rgba.length; i += 4) {
-              rgba[i] = (((rgba[i] - 128) * _contrast + 128 + bShift)
-                  .round()
-                  .clamp(0, 255));
-              rgba[i + 1] = (((rgba[i + 1] - 128) * _contrast + 128 + bShift)
-                  .round()
-                  .clamp(0, 255));
-              rgba[i + 2] = (((rgba[i + 2] - 128) * _contrast + 128 + bShift)
-                  .round()
-                  .clamp(0, 255));
+          final cacheKey = _builtInCacheKey();
+          final hit = _builtInCache[cacheKey];
+          if (hit != null) {
+            encoded = hit.$1;
+            profile = hit.$2;
+          } else {
+            final rgba = generateBuiltInWallpaperRgba(_wallpaperId);
+            if (_brightness.abs() > 0.001 || (_contrast - 1.0).abs() > 0.001) {
+              final bShift = _brightness * 255.0;
+              for (var i = 0; i < rgba.length; i += 4) {
+                rgba[i] = (((rgba[i] - 128) * _contrast + 128 + bShift)
+                    .round()
+                    .clamp(0, 255));
+                rgba[i + 1] = (((rgba[i + 1] - 128) * _contrast + 128 + bShift)
+                    .round()
+                    .clamp(0, 255));
+                rgba[i + 2] = (((rgba[i + 2] - 128) * _contrast + 128 + bShift)
+                    .round()
+                    .clamp(0, 255));
+              }
             }
+            encoded = encodeWatchImageAdaptive(
+              rgba,
+              format: _format,
+              dither: _dither,
+              accentArgb: widget.controller.dialAccentColor,
+            );
+            profile = analyzeWatchImageProfile(rgba, encoded);
+            if (_builtInCache.length > 16) {
+              _builtInCache.clear();
+            }
+            _builtInCache[cacheKey] = (encoded, profile);
           }
         }
-
-        final encoded = encodeWatchImageAdaptive(
-          rgba,
-          format: _format,
-          dither: _dither,
-          accentArgb: widget.controller.dialAccentColor,
-        );
-        final profile = analyzeWatchImageProfile(rgba, encoded);
         if (!mounted) return;
         setState(() {
           _encoded = encoded;
@@ -741,13 +794,6 @@ class _DialStageCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final colors = context.appColors;
-    final now = controller.now;
-    final dispHour = controller.use24Hour
-        ? now.hour
-        : ((now.hour % 12) == 0 ? 12 : (now.hour % 12));
-    final hh = dispHour.toString().padLeft(2, '0');
-    final mm = now.minute.toString().padLeft(2, '0');
-    final ss = now.second.toString().padLeft(2, '0');
     final pct = controller.stepGoal > 0
         ? (controller.steps / controller.stepGoal).clamp(0.0, 1.0)
         : 0.0;
@@ -773,14 +819,33 @@ class _DialStageCard extends StatelessWidget {
               width: 128 * screenScale,
               height: 160 * screenScale,
               bgColor: bgColor,
-              child: _buildDialCanvas(
-                hh,
-                mm,
-                ss,
-                pct,
-                fgColor,
-                acColor,
-                bgColor,
+              child: RepaintBoundary(
+                child: LayoutBuilder(
+                  builder: (_, _) => ListenableBuilder(
+                    listenable: Listenable.merge([
+                      controller.clockListenable,
+                      controller.sensorListenable,
+                    ]),
+                    builder: (context, _) {
+                      final now = controller.now;
+                      final dispHour = controller.use24Hour
+                          ? now.hour
+                          : ((now.hour % 12) == 0 ? 12 : (now.hour % 12));
+                      final hh = dispHour.toString().padLeft(2, '0');
+                      final mm = now.minute.toString().padLeft(2, '0');
+                      final ss = now.second.toString().padLeft(2, '0');
+                      return _buildDialCanvas(
+                        hh,
+                        mm,
+                        ss,
+                        pct,
+                        fgColor,
+                        acColor,
+                        bgColor,
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),

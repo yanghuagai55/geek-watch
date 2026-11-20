@@ -40,6 +40,12 @@ class _AppShellState extends State<AppShell>
   /// 所以单独记一份值，只在真的变化时 setState。
   late bool _liquidGlass = widget.controller.liquidGlass;
 
+  /// 缓存给 prism_ui 的 ThemeData：prism.ThemeData 未覆写 ==，
+  /// 每次 build 新建会让 InheritedTheme 误触发整个液态玻璃底栏重建。
+  ColorScheme? _cachedMaterialScheme;
+  TargetPlatform? _cachedPlatform;
+  prism.ThemeData? _cachedPrismTheme;
+
   static const _items = [
     _NavItem(
       Icons.home_outlined,
@@ -72,6 +78,53 @@ class _AppShellState extends State<AppShell>
       CompanionGlyphs.settings,
     ),
   ];
+
+  static final List<prism.NavigationDockDestination> _dockDestinations =
+      List.unmodifiable([
+        for (final item in _items)
+          prism.NavigationDockDestination(glyph: item.glyph, label: item.label),
+      ]);
+
+  prism.ThemeData _resolvePrismTheme(ThemeData materialTheme) {
+    final materialScheme = materialTheme.colorScheme;
+    final platform = materialTheme.platform;
+    if (_cachedPrismTheme != null &&
+        _cachedMaterialScheme == materialScheme &&
+        _cachedPlatform == platform) {
+      return _cachedPrismTheme!;
+    }
+    _cachedMaterialScheme = materialScheme;
+    _cachedPlatform = platform;
+    return _cachedPrismTheme = prism.ThemeData(
+      colorScheme: prism.ColorScheme(
+        brightness: materialScheme.brightness,
+        primary: materialScheme.primary,
+        onPrimary: materialScheme.onPrimary,
+        secondary: materialScheme.secondary,
+        onSecondary: materialScheme.onSecondary,
+        error: materialScheme.error,
+        onError: materialScheme.onError,
+        surface: materialScheme.surface,
+        onSurface: materialScheme.onSurface,
+        onSurfaceVariant: materialScheme.onSurfaceVariant,
+        surfaceContainerLow: materialScheme.surfaceContainerLow,
+        surfaceContainer: materialScheme.surfaceContainer,
+        surfaceContainerHigh: materialScheme.surfaceContainerHigh,
+        surfaceContainerHighest: materialScheme.surfaceContainerHighest,
+        outline: materialScheme.outline,
+        outlineVariant: materialScheme.outlineVariant,
+        shadow: materialScheme.shadow,
+        scrim: materialScheme.scrim,
+        inverseSurface: materialScheme.inverseSurface,
+        onInverseSurface: materialScheme.onInverseSurface,
+        inversePrimary: materialScheme.inversePrimary,
+        surfaceTint: materialScheme.surfaceTint,
+      ),
+      platform: platform,
+      fontFamily: AppFonts.han,
+      fontFamilyFallback: AppFonts.systemFallback,
+    );
+  }
 
   @override
   void initState() {
@@ -142,40 +195,13 @@ class _AppShellState extends State<AppShell>
             );
           }
           final materialTheme = Theme.of(context);
-          final materialScheme = materialTheme.colorScheme;
           return prism.Theme(
-            data: prism.ThemeData(
-              colorScheme: prism.ColorScheme(
-                brightness: materialScheme.brightness,
-                primary: materialScheme.primary,
-                onPrimary: materialScheme.onPrimary,
-                secondary: materialScheme.secondary,
-                onSecondary: materialScheme.onSecondary,
-                error: materialScheme.error,
-                onError: materialScheme.onError,
-                surface: materialScheme.surface,
-                onSurface: materialScheme.onSurface,
-                onSurfaceVariant: materialScheme.onSurfaceVariant,
-                surfaceContainerLow: materialScheme.surfaceContainerLow,
-                surfaceContainer: materialScheme.surfaceContainer,
-                surfaceContainerHigh: materialScheme.surfaceContainerHigh,
-                surfaceContainerHighest: materialScheme.surfaceContainerHighest,
-                outline: materialScheme.outline,
-                outlineVariant: materialScheme.outlineVariant,
-                shadow: materialScheme.shadow,
-                scrim: materialScheme.scrim,
-                inverseSurface: materialScheme.inverseSurface,
-                onInverseSurface: materialScheme.onInverseSurface,
-                inversePrimary: materialScheme.inversePrimary,
-                surfaceTint: materialScheme.surfaceTint,
-              ),
-              platform: materialTheme.platform,
-              fontFamily: AppFonts.han,
-              fontFamilyFallback: AppFonts.systemFallback,
-            ),
+            data: _resolvePrismTheme(materialTheme),
             child: prism.LiquidGlassScope(
               enabled: true,
-              quality: prism.LiquidGlassQuality.ultra,
+              // Android 移动端使用 standard 档：单层 1/8 降采样模糊图集（较 ultra 减少约 64× 像素抓帧与 3× 片元采样），
+              // 并去掉按压抬起时的第三级 Clip.antiAliasWithSaveLayer + 重复折射捕获，同时保持底栏文字更清晰。
+              quality: prism.LiquidGlassQuality.standard,
               child: prism.LiquidGlassHost(
                 enabled: true,
                 child: Scaffold(
@@ -183,13 +209,7 @@ class _AppShellState extends State<AppShell>
                   body: SafeArea(bottom: false, child: content),
                   bottomNavigationBar: prism.NavigationDock(
                     key: const Key('mobile-liquid-nav'),
-                    destinations: [
-                      for (final item in _items)
-                        prism.NavigationDockDestination(
-                          glyph: item.glyph,
-                          label: item.label,
-                        ),
-                    ],
+                    destinations: _dockDestinations,
                     selectedIndex: _index,
                     onSelected: _select,
                   ),
@@ -272,24 +292,31 @@ class _AppShellState extends State<AppShell>
     );
   }
 
-  /// 只有页面内容订阅 1 Hz 数据；底栏、侧边栏、液态玻璃都不再每秒重建。
-  /// 页面必须在 builder 内构造，否则同一个 widget 实例会被 Element 直接复用，
-  /// 通知只会走到这里而不会让页面重新 build。
+  Widget _buildPage(int index) => switch (index) {
+    0 => HomePage(controller: widget.controller, onNavigate: _select),
+    1 => SportPage(controller: widget.controller),
+    2 => MediaPage(controller: widget.controller),
+    3 => DialsPage(controller: widget.controller),
+    _ => SettingsPage(controller: widget.controller),
+  };
+
+  /// 只有页面内容订阅状态变化；底栏、侧边栏、液态玻璃不随业务数据重建。
+  /// 页面在 builder 内按当前索引按需构造并用 RepaintBoundary 隔离过渡绘制。
   Widget _buildContent() {
     return ListenableBuilder(
       listenable: widget.controller,
       builder: (context, _) {
-        final pages = [
-          HomePage(controller: widget.controller, onNavigate: _select),
-          SportPage(controller: widget.controller),
-          MediaPage(controller: widget.controller),
-          DialsPage(controller: widget.controller),
-          SettingsPage(controller: widget.controller),
-        ];
         return AnimatedSwitcher(
           duration: widget.controller.animations
-              ? const Duration(milliseconds: 220)
+              ? const Duration(milliseconds: 200)
               : Duration.zero,
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              ...previousChildren,
+              ?currentChild,
+            ],
+          ),
           transitionBuilder: (child, animation) => FadeTransition(
             opacity: animation,
             child: SlideTransition(
@@ -300,7 +327,10 @@ class _AppShellState extends State<AppShell>
               child: child,
             ),
           ),
-          child: KeyedSubtree(key: ValueKey(_index), child: pages[_index]),
+          child: KeyedSubtree(
+            key: ValueKey(_index),
+            child: RepaintBoundary(child: _buildPage(_index)),
+          ),
         );
       },
     );
@@ -436,6 +466,110 @@ class _ExpandedOverlay extends StatelessWidget {
 
     final brandReveal = reveal(0.58);
     final panelReveal = reveal(0.48);
+    final scrimChild = Container(
+      color: const Color(
+        0xFF0A0F10,
+      ).withValues(alpha: (isDark ? 0.16 : 0.08) * progress),
+    );
+    final panelChild = OverflowBox(
+      alignment: Alignment.centerLeft,
+      minWidth: 236,
+      maxWidth: 236,
+      child: SizedBox(
+        width: 236,
+        child: Container(
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerLow.withValues(
+              alpha: (isDark ? 0.92 : 0.9) * progress,
+            ),
+            border: Border(
+              right: BorderSide(
+                color: scheme.outlineVariant.withValues(alpha: 0.75 * progress),
+              ),
+            ),
+            boxShadow: progress > 0.05
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: (isDark ? 0.28 : 0.12) * progress,
+                      ),
+                      blurRadius: 24,
+                    ),
+                  ]
+                : null,
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 18, 14, 18),
+          child: Opacity(
+            opacity: progress,
+            child: Material(
+              color: Colors.transparent,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final short = constraints.maxHeight < 520;
+                  final column = Column(
+                    children: [
+                      SizedBox(
+                        height: 44,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              onPressed: onClose,
+                              tooltip: '收起侧边栏',
+                              icon: AnimatedIcon(
+                                icon: AnimatedIcons.menu_close,
+                                progress: animation,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 3),
+                        child: AppBrand(
+                          compact: false,
+                          textOpacity: brandReveal,
+                        ),
+                      ),
+                      SizedBox(height: short ? 16 : 26),
+                      for (var i = 0; i < items.length; i++) ...[
+                        _SideNavItem(
+                          item: items[i],
+                          extended: true,
+                          progress: progress,
+                          selected: selected == i,
+                          onTap: () => onSelected(i),
+                        ),
+                        const SizedBox(height: 6),
+                      ],
+                      if (short)
+                        const SizedBox(height: 16)
+                      else
+                        const Spacer(),
+                      Opacity(
+                        opacity: panelReveal,
+                        child: Transform.translate(
+                          offset: Offset(0, 10 * (1 - panelReveal)),
+                          child: _ConnectionPanel(
+                            controller: controller,
+                            onConnectionChanged: onConnectionChanged,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                  if (short) {
+                    return SingleChildScrollView(child: column);
+                  }
+                  return column;
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final activeBlur = animation.status != AnimationStatus.dismissed || progress > 0;
     return IgnorePointer(
       ignoring: progress == 0,
       child: Stack(
@@ -444,13 +578,15 @@ class _ExpandedOverlay extends StatelessWidget {
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: onClose,
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: scrimBlur, sigmaY: scrimBlur),
-                child: Container(
-                  color: const Color(0xFF0A0F10)
-                      .withValues(alpha: (isDark ? 0.16 : 0.08) * progress),
-                ),
-              ),
+              child: activeBlur
+                  ? BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: scrimBlur,
+                        sigmaY: scrimBlur,
+                      ),
+                      child: scrimChild,
+                    )
+                  : scrimChild,
             ),
           ),
           Positioned(
@@ -459,110 +595,12 @@ class _ExpandedOverlay extends StatelessWidget {
             bottom: 0,
             width: width,
             child: ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-                child: OverflowBox(
-                  alignment: Alignment.centerLeft,
-                  minWidth: 236,
-                  maxWidth: 236,
-                  child: SizedBox(
-                    width: 236,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerLow.withValues(
-                          alpha: (isDark ? 0.92 : 0.9) * progress,
-                        ),
-                        border: Border(
-                          right: BorderSide(
-                            color: scheme.outlineVariant.withValues(
-                              alpha: 0.75 * progress,
-                            ),
-                          ),
-                        ),
-                        boxShadow: progress > 0.05
-                            ? [
-                                BoxShadow(
-                                  color: Colors.black.withValues(
-                                    alpha: (isDark ? 0.28 : 0.12) * progress,
-                                  ),
-                                  blurRadius: 24,
-                                ),
-                              ]
-                            : null,
-                      ),
-                      padding: const EdgeInsets.fromLTRB(14, 18, 14, 18),
-                      child: Opacity(
-                        opacity: progress,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final short = constraints.maxHeight < 520;
-                              final column = Column(
-                                children: [
-                                  SizedBox(
-                                    height: 44,
-                                    child: Row(
-                                      children: [
-                                        IconButton(
-                                          onPressed: onClose,
-                                          tooltip: '收起侧边栏',
-                                          icon: AnimatedIcon(
-                                            icon: AnimatedIcons.menu_close,
-                                            progress: animation,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 3),
-                                    child: AppBrand(
-                                      compact: false,
-                                      textOpacity: brandReveal,
-                                    ),
-                                  ),
-                                  SizedBox(height: short ? 16 : 26),
-                                  for (var i = 0; i < items.length; i++) ...[
-                                    _SideNavItem(
-                                      item: items[i],
-                                      extended: true,
-                                      progress: progress,
-                                      selected: selected == i,
-                                      onTap: () => onSelected(i),
-                                    ),
-                                    const SizedBox(height: 6),
-                                  ],
-                                  if (short)
-                                    const SizedBox(height: 16)
-                                  else
-                                    const Spacer(),
-                                  Opacity(
-                                    opacity: panelReveal,
-                                    child: Transform.translate(
-                                      offset: Offset(0, 10 * (1 - panelReveal)),
-                                      child: _ConnectionPanel(
-                                        controller: controller,
-                                        onConnectionChanged:
-                                            onConnectionChanged,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                              if (short) {
-                                return SingleChildScrollView(child: column);
-                              }
-                              return column;
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              child: activeBlur
+                  ? BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+                      child: panelChild,
+                    )
+                  : panelChild,
             ),
           ),
         ],

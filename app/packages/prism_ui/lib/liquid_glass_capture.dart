@@ -605,7 +605,7 @@ class _LiquidGlassHostLayer extends ContainerLayer {
     if (hold != null &&
         held != null &&
         held.texelsPerDp == scale &&
-        held.blurSigma >= blurSigma &&
+        held.blurSigma + 1e-6 >= blurSigma &&
         blurSigma >= held.blurSigma * _heldFrostShare &&
         _encloses(held.slot, needed)) {
       placement = held;
@@ -655,7 +655,7 @@ class _LiquidGlassHostLayer extends ContainerLayer {
     }
     double step(double extent) => (extent / _atlasStep).ceil() * _atlasStep;
     final bands = <_Band>[];
-    final pictures = <ui.Picture>[];
+    final bandEntries = <List<_Behind>>[];
     var top = 0.0;
     for (final entries in classes.values) {
       var bottom = 0.0;
@@ -668,33 +668,18 @@ class _LiquidGlassHostLayer extends ContainerLayer {
       final rect = Rect.fromLTWH(0, top, step(width), step(bottom));
       final sigma = entries.first.blurSigma;
       final drawn = <Object?>[sigma, rect.size];
-      final recorder = ui.PictureRecorder();
-      // Impeller scales a wide blur to what its layer covers (architecture.md).
-      final canvas = Canvas(recorder)
-        ..drawRect(
-          Offset.zero & rect.size,
-          Paint()
-            ..color = Colors.transparent
-            ..blendMode = BlendMode.src,
-        );
       for (final entry in entries) {
         final place = entry.place.shift(-rect.topLeft);
         drawn
           ..add(place)
           ..add(entry.slot)
           ..addAll(entry.rootToHost.storage);
-        canvas
-          ..save()
-          ..clipRect(place)
-          ..translate(place.left, place.top)
-          ..scale(entry.texelsPerDp)
-          ..translate(-entry.slot.left, -entry.slot.top)
-          ..transform(entry.rootToHost.storage);
-        entry.veil = _Replay(canvas, drawn, entry).run();
-        canvas.restore();
+        // Dry-run signature pass: avoids allocating PictureRecorder/Canvas when
+        // the backdrop under the glass hasn't changed.
+        entry.veil = _Replay(null, drawn, entry).run();
       }
       bands.add((rect: rect, sigma: sigma, drawn: drawn));
-      pictures.add(recorder.endRecording());
+      bandEntries.add(entries);
       top = rect.bottom;
     }
     final size = Size(
@@ -712,9 +697,6 @@ class _LiquidGlassHostLayer extends ContainerLayer {
               band.$2.rect == last[band.$1].rect &&
               listEquals(band.$2.drawn, last[band.$1].drawn),
         )) {
-      for (final picture in pictures) {
-        picture.dispose();
-      }
       return (atlas: previous.image, taken: false, kept: 0);
     }
     // Skia keeps what an image was drawn from for as long as the image lives,
@@ -726,7 +708,6 @@ class _LiquidGlassHostLayer extends ContainerLayer {
     final canvas = Canvas(recorder);
     var kept = 0;
     for (final (index, band) in bands.indexed) {
-      final picture = pictures[index];
       final old = carry
           ? last.where((old) => listEquals(old.drawn, band.drawn)).firstOrNull
           : null;
@@ -741,6 +722,28 @@ class _LiquidGlassHostLayer extends ContainerLayer {
         );
         kept++;
       } else {
+        final bandRecorder = ui.PictureRecorder();
+        // Impeller scales a wide blur to what its layer covers (architecture.md).
+        final bandCanvas = Canvas(bandRecorder)
+          ..drawRect(
+            Offset.zero & band.rect.size,
+            Paint()
+              ..color = Colors.transparent
+              ..blendMode = BlendMode.src,
+          );
+        for (final entry in bandEntries[index]) {
+          final place = entry.place.shift(-band.rect.topLeft);
+          bandCanvas
+            ..save()
+            ..clipRect(place)
+            ..translate(place.left, place.top)
+            ..scale(entry.texelsPerDp)
+            ..translate(-entry.slot.left, -entry.slot.top)
+            ..transform(entry.rootToHost.storage);
+          _Replay(bandCanvas, null, entry).run();
+          bandCanvas.restore();
+        }
+        final picture = bandRecorder.endRecording();
         final sigma = band.sigma;
         canvas
           ..save()
@@ -767,8 +770,8 @@ class _LiquidGlassHostLayer extends ContainerLayer {
           canvas.restore();
         }
         canvas.restore();
+        picture.dispose();
       }
-      picture.dispose();
     }
     final picture = recorder.endRecording();
     final image = picture.toImageSync(size.width.toInt(), size.height.toInt());
@@ -948,8 +951,8 @@ bool _drawsOffscreen(Layer layer) {
 class _Replay {
   _Replay(this.canvas, this.drawn, this.entry) : _toHost = [entry.rootToHost];
 
-  final Canvas canvas;
-  final List<Object?> drawn;
+  final Canvas? canvas;
+  final List<Object?>? drawn;
   final _Behind entry;
   final List<Matrix4> _toHost;
 
@@ -1026,7 +1029,7 @@ class _Replay {
     }
     for (final (index, (layer, _, root)) in _entered.indexed) {
       final clip = layer.describeClipBounds();
-      if (!root && _effectOf(layer) != null ||
+      if (!root && _hasEffect(layer) ||
           clip != null &&
               !_encloses(
                 MatrixUtils.transformRect(_toHost[index + 1], clip),
@@ -1042,20 +1045,22 @@ class _Replay {
     // What the canvas has applied so far lay over the veil too, and neither
     // tints nor cuts it.
     if (_veil case final veil?) {
-      canvas.drawPaint(Paint()..color = veil);
-      drawn.add(veil);
+      canvas?.drawPaint(Paint()..color = veil);
+      drawn?.add(veil);
       _veil = null;
     }
     while (_saves.length < _entered.length) {
       _saves.add(_apply(_entered[_saves.length]));
     }
-    final shift = _wholeTexelShift();
-    canvas
-      ..save()
-      ..translate(shift.dx, shift.dy)
-      ..drawPicture(picture)
-      ..restore();
-    drawn.add(picture);
+    if (canvas case final active?) {
+      final shift = _wholeTexelShift();
+      active
+        ..save()
+        ..translate(shift.dx, shift.dy)
+        ..drawPicture(picture)
+        ..restore();
+    }
+    drawn?.add(picture);
   }
 
   Offset _wholeTexelShift() {
@@ -1078,18 +1083,21 @@ class _Replay {
     final (layer, geometry, root) = entered;
     var saves = 0;
     if (geometry != null) {
-      canvas
-        ..save()
-        ..transform(geometry.storage);
-      drawn.addAll(geometry.storage);
+      if (canvas case final active?) {
+        active
+          ..save()
+          ..transform(geometry.storage);
+      }
+      drawn?.addAll(geometry.storage);
       saves++;
     }
-    final effect = root ? null : _effectOf(layer);
-    if (effect case (final paint, final key)?) {
-      canvas.saveLayer(null, paint);
+    if (!root && _hasEffect(layer)) {
+      if (canvas case final active?) {
+        active.saveLayer(null, _effectPaint(layer));
+      }
       drawn
-        ..add(layer.runtimeType)
-        ..add(key);
+        ?..add(layer.runtimeType)
+        ..add(_effectKey(layer));
       saves++;
     }
     if (_clip(layer)) {
@@ -1098,21 +1106,27 @@ class _Replay {
     return saves;
   }
 
-  static (Paint, Object?)? _effectOf(ContainerLayer layer) => switch (layer) {
-    OpacityLayer(:final alpha?) when alpha < 255 => (
-      Paint()..color = Color.fromARGB(alpha, 0, 0, 0),
-      alpha,
-    ),
-    ColorFilterLayer(:final colorFilter?) => (
-      Paint()..colorFilter = colorFilter,
-      colorFilter,
-    ),
-    ImageFilterLayer(:final imageFilter?) => (
-      Paint()..imageFilter = imageFilter,
-      imageFilter,
-    ),
-    ShaderMaskLayer(:final shader) => (Paint(), shader),
+  static bool _hasEffect(ContainerLayer layer) => switch (layer) {
+    OpacityLayer(:final alpha?) => alpha < 255,
+    ColorFilterLayer(:final colorFilter) => colorFilter != null,
+    ImageFilterLayer(:final imageFilter) => imageFilter != null,
+    ShaderMaskLayer() => true,
+    _ => false,
+  };
+
+  static Object? _effectKey(ContainerLayer layer) => switch (layer) {
+    OpacityLayer(:final alpha?) => alpha,
+    ColorFilterLayer(:final colorFilter?) => colorFilter,
+    ImageFilterLayer(:final imageFilter?) => imageFilter,
+    ShaderMaskLayer(:final shader) => shader,
     _ => null,
+  };
+
+  static Paint _effectPaint(ContainerLayer layer) => switch (layer) {
+    OpacityLayer(:final alpha?) => Paint()..color = Color.fromARGB(alpha, 0, 0, 0),
+    ColorFilterLayer(:final colorFilter?) => Paint()..colorFilter = colorFilter,
+    ImageFilterLayer(:final imageFilter?) => Paint()..imageFilter = imageFilter,
+    _ => Paint(),
   };
 
   bool _clip(ContainerLayer layer) {
@@ -1121,7 +1135,7 @@ class _Replay {
       case ClipRectLayer(:final clipRect?, :final clipBehavior)
           when clipBehavior != Clip.none:
         canvas
-          ..save()
+          ?..save()
           ..clipRect(clipRect, doAntiAlias: clipBehavior != Clip.hardEdge);
         clip = clipRect;
       case ClipRSuperellipseLayer(
@@ -1130,7 +1144,7 @@ class _Replay {
           )
           when clipBehavior != Clip.none:
         canvas
-          ..save()
+          ?..save()
           ..clipRSuperellipse(
             clipRSuperellipse,
             doAntiAlias: clipBehavior != Clip.hardEdge,
@@ -1139,7 +1153,7 @@ class _Replay {
       case ClipPathLayer(:final clipPath?, :final clipBehavior)
           when clipBehavior != Clip.none:
         canvas
-          ..save()
+          ?..save()
           ..clipPath(clipPath, doAntiAlias: clipBehavior != Clip.hardEdge);
         clip = clipPath;
       default:
@@ -1150,11 +1164,11 @@ class _Replay {
           return false;
         }
         canvas
-          ..save()
+          ?..save()
           ..clipRect(bounds);
         clip = bounds;
     }
-    drawn.add(clip);
+    drawn?.add(clip);
     return true;
   }
 
@@ -1170,7 +1184,7 @@ class _Replay {
       :final blendMode?,
     ) when !root) {
       canvas
-        ..translate(maskRect.left, maskRect.top)
+        ?..translate(maskRect.left, maskRect.top)
         ..drawRect(
           Offset.zero & maskRect.size,
           Paint()
@@ -1178,12 +1192,14 @@ class _Replay {
             ..blendMode = blendMode,
         );
       drawn
-        ..add(maskRect)
+        ?..add(maskRect)
         ..add(blendMode);
     }
-    for (var index = 0; index < saves; index++) {
-      canvas.restore();
+    if (canvas case final active?) {
+      for (var index = 0; index < saves; index++) {
+        active.restore();
+      }
     }
-    drawn.add(saves);
+    drawn?.add(saves);
   }
 }

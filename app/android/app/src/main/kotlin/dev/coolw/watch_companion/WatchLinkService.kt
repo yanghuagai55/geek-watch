@@ -57,6 +57,9 @@ class WatchLinkService : Service() {
         private val offlineStoreLock = Any()
 
         @Volatile
+        private var offlineCountCache: Int = -1
+
+        @Volatile
         var instance: WatchLinkService? = null
             private set
 
@@ -103,7 +106,11 @@ class WatchLinkService : Service() {
 
         private fun loadOfflineList(context: Context): MutableList<CachedMessage> {
             val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val raw = prefs.getString(KEY_MESSAGES, null) ?: return mutableListOf()
+            val raw = prefs.getString(KEY_MESSAGES, null)
+            if (raw == null) {
+                offlineCountCache = 0
+                return mutableListOf()
+            }
             val out = mutableListOf<CachedMessage>()
             try {
                 val arr = org.json.JSONArray(raw)
@@ -127,10 +134,12 @@ class WatchLinkService : Service() {
                 }
             } catch (_: Exception) {
             }
+            offlineCountCache = out.size
             return out
         }
 
         private fun saveOfflineList(context: Context, list: List<CachedMessage>) {
+            offlineCountCache = list.size
             val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val arr = org.json.JSONArray()
             for (entry in list) {
@@ -243,10 +252,14 @@ class WatchLinkService : Service() {
             }
         }
 
-        fun cachedMessageCount(context: Context): Int =
-            instance?.messageCount() ?: synchronized(offlineStoreLock) {
-                loadOfflineList(context).size
+        fun cachedMessageCount(context: Context): Int {
+            instance?.let { return it.messageCount() }
+            val cached = offlineCountCache
+            if (cached >= 0) return cached
+            return synchronized(offlineStoreLock) {
+                if (offlineCountCache >= 0) offlineCountCache else loadOfflineList(context).size
             }
+        }
 
         fun setMediaFollow(context: Context, enabled: Boolean) {
             val svc = instance

@@ -730,26 +730,32 @@ class _PortraitWatchCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      '${controller.now.month}月${controller.now.day}日 · 周${weekdays[controller.now.weekday - 1]}',
-                      style: TextStyle(
-                        color: colors.heroTextSecondary,
-                        fontSize: 10.5,
+                    ListenableBuilder(
+                      listenable: controller.clockListenable,
+                      builder: (context, _) => Text(
+                        '${controller.now.month}月${controller.now.day}日 · 周${weekdays[controller.now.weekday - 1]}',
+                        style: TextStyle(
+                          color: colors.heroTextSecondary,
+                          fontSize: 10.5,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Text(
-                      controller.liveSensor
-                          ? 'R ${controller.rollDeg.round()}° · P ${controller.pitchDeg.round()}° · H ${controller.headingDeg.round()}°'
-                          : '${controller.transportLabel} · ${controller.connectionLabel}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: controller.connected || controller.liveSensor
-                            ? colors.accent
-                            : colors.heroTextSecondary,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
+                    ListenableBuilder(
+                      listenable: controller.sensorListenable,
+                      builder: (context, _) => Text(
+                        controller.liveSensor
+                            ? 'R ${controller.rollDeg.round()}° · P ${controller.pitchDeg.round()}° · H ${controller.headingDeg.round()}°'
+                            : '${controller.transportLabel} · ${controller.connectionLabel}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: controller.connected || controller.liveSensor
+                              ? colors.accent
+                              : colors.heroTextSecondary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -928,10 +934,13 @@ class _DeviceQuickStrip extends StatelessWidget {
                 label: '步数 ${controller.steps}',
                 color: colors.accent,
               ),
-              _MiniStatusTag(
-                icon: Icons.explore_outlined,
-                label: '航向 ${controller.headingDeg.round()}°',
-                color: colors.info,
+              ListenableBuilder(
+                listenable: controller.sensorListenable,
+                builder: (context, _) => _MiniStatusTag(
+                  icon: Icons.explore_outlined,
+                  label: '航向 ${controller.headingDeg.round()}°',
+                  color: colors.info,
+                ),
               ),
               _MiniStatusTag(
                 icon: Icons.battery_charging_full_rounded,
