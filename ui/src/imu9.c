@@ -48,44 +48,31 @@ static int32_t clamp32(int32_t v, int32_t lo, int32_t hi) {
 #define IMU_NOINLINE
 #endif
 
-IMU_NOINLINE static int32_t div_s64_u32(int64_t num, uint32_t den) {
-    int neg = 0;
-    uint64_t n, q = 0u, rem = 0u;
-    int bit;
-    if (den == 0u) return 0;
-    if (num < 0) {
-        neg = 1;
-        n = (uint64_t)(0 - num);
-    } else {
-        n = (uint64_t)num;
-    }
-    for (bit = 63; bit >= 0; bit--) {
-        rem = (rem << 1) | ((n >> bit) & 1u);
-        if (rem >= den) {
-            rem -= den;
-            q |= ((uint64_t)1u << bit);
-        }
-    }
-    return neg ? -(int32_t)q : (int32_t)q;
-}
+IMU_NOINLINE static uint32_t isqrt32(uint32_t op) {
+    uint32_t res = 0u;
+    uint32_t one;
 
-IMU_NOINLINE static uint32_t isqrt64(uint64_t x) {
-    uint64_t op = x;
-    uint64_t res = 0;
-    uint64_t one = (x >> 32) ? ((uint64_t)1 << 62) : ((uint64_t)1 << 30);
-
+    if (op == 0u) {
+        return 0u;
+    }
+#if defined(__GNUC__)
+    one = 1u << ((31u - (unsigned)__builtin_clz(op)) & ~1u);
+#else
+    one = 1u << 30;
     while (one > op) {
         one >>= 2;
     }
-    while (one != 0) {
+#endif
+    while (one != 0u) {
         if (op >= res + one) {
             op -= res + one;
-            res += one << 1;
+            res = (res >> 1) + one;
+        } else {
+            res >>= 1;
         }
-        res >>= 1;
         one >>= 2;
     }
-    return (uint32_t)res;
+    return res;
 }
 
 IMU_NOINLINE static int16_t atan2_d10(int32_t y, int32_t x) {
@@ -138,7 +125,7 @@ IMU_NOINLINE static int vec_norm_q14(int32_t x, int32_t y, int32_t z, int32_t ou
     if (n2 == 0u) {
         return 0;
     }
-    n = (int32_t)isqrt64(n2);
+    n = (int32_t)isqrt32(n2);
     if (n <= 0) {
         return 0;
     }
@@ -156,21 +143,36 @@ static void cross_q14(const int32_t a[3], const int32_t b[3], int32_t out[3]) {
 
 IMU_NOINLINE static void quat_normalize_q24(void) {
     int32_t *q = &g_ctx.q0;
-    uint64_t n2 = 0u;
-    uint32_t n;
-    int i;
+    int i, iter;
 
-    for (i = 0; i < 4; i++) {
-        n2 += (uint64_t)((int64_t)q[i] * q[i]);
-    }
-    n = isqrt64(n2);
-    if (n == 0u) {
-        g_ctx.q0 = Q24_ONE;
-        g_ctx.q1 = g_ctx.q2 = g_ctx.q3 = 0;
-        return;
-    }
-    for (i = 0; i < 4; i++) {
-        q[i] = div_s64_u32((int64_t)q[i] * Q24_ONE, n);
+    for (iter = 0; iter < 16; iter++) {
+        uint64_t n2 = (uint64_t)((int64_t)q[0] * q[0] + (int64_t)q[1] * q[1] +
+                                 (int64_t)q[2] * q[2] + (int64_t)q[3] * q[3]);
+        uint32_t hi = (uint32_t)(n2 >> 32);
+        int32_t k, err;
+        if (n2 == 0u) {
+            q[0] = Q24_ONE;
+            q[1] = q[2] = q[3] = 0;
+            return;
+        }
+        if (hi >= 0x18000u) {
+            k = Q24_ONE >> 1;
+            err = Q24_ONE;
+        } else if (hi < 0x8000u) {
+            k = Q24_ONE << 1;
+            err = Q24_ONE;
+        } else {
+            /* Q24 Newton-Raphson inverse sqrt: q *= (3 - ||q||^2) / 2 (zero division). */
+            int32_t s2 = (int32_t)(uint32_t)(n2 >> 24);
+            k = (3 * Q24_ONE - s2) >> 1;
+            err = abs32(s2 - Q24_ONE);
+        }
+        for (i = 0; i < 4; i++) {
+            q[i] = (int32_t)(((int64_t)q[i] * (int64_t)k) >> 24);
+        }
+        if (err < 4096) {
+            return;
+        }
     }
 }
 
@@ -181,14 +183,14 @@ IMU_NOINLINE static void rot_to_quat(const int32_t r[3][3]) {
     int32_t q[4];
 
     if (tr > 0) {
-        s = (int32_t)isqrt64((uint32_t)Q14_ONE * (uint32_t)(Q14_ONE + tr));
+        s = (int32_t)isqrt32((uint32_t)Q14_ONE * (uint32_t)(Q14_ONE + tr));
         if (s == 0) s = 1;
         q[0] = (s << 9);
         q[1] = ((r[2][1] - r[1][2]) << 15) / s * 256;
         q[2] = ((r[0][2] - r[2][0]) << 15) / s * 256;
         q[3] = ((r[1][0] - r[0][1]) << 15) / s * 256;
     } else if (r[0][0] >= r[1][1] && r[0][0] >= r[2][2]) {
-        s = (int32_t)isqrt64((uint32_t)Q14_ONE *
+        s = (int32_t)isqrt32((uint32_t)Q14_ONE *
             (uint32_t)(Q14_ONE + r[0][0] - r[1][1] - r[2][2]));
         if (s == 0) s = 1;
         q[1] = (s << 9);
@@ -196,7 +198,7 @@ IMU_NOINLINE static void rot_to_quat(const int32_t r[3][3]) {
         q[2] = ((r[0][1] + r[1][0]) << 15) / s * 256;
         q[3] = ((r[0][2] + r[2][0]) << 15) / s * 256;
     } else if (r[1][1] >= r[2][2]) {
-        s = (int32_t)isqrt64((uint32_t)Q14_ONE *
+        s = (int32_t)isqrt32((uint32_t)Q14_ONE *
             (uint32_t)(Q14_ONE + r[1][1] - r[0][0] - r[2][2]));
         if (s == 0) s = 1;
         q[2] = (s << 9);
@@ -204,7 +206,7 @@ IMU_NOINLINE static void rot_to_quat(const int32_t r[3][3]) {
         q[1] = ((r[0][1] + r[1][0]) << 15) / s * 256;
         q[3] = ((r[1][2] + r[2][1]) << 15) / s * 256;
     } else {
-        s = (int32_t)isqrt64((uint32_t)Q14_ONE *
+        s = (int32_t)isqrt32((uint32_t)Q14_ONE *
             (uint32_t)(Q14_ONE + r[2][2] - r[0][0] - r[1][1]));
         if (s == 0) s = 1;
         q[3] = (s << 9);
@@ -284,7 +286,7 @@ static void extract_euler(void) {
     int32_t horiz, hd10, yaw_d10, hdeg;
 
     quat_to_rot(r);
-    horiz = (int32_t)isqrt64((uint32_t)(r[2][0] * r[2][0] + r[2][2] * r[2][2]));
+    horiz = (int32_t)isqrt32((uint32_t)(r[2][0] * r[2][0] + r[2][2] * r[2][2]));
     g_ctx.st.pitch_d10 = atan2_d10(r[2][1], horiz);
     g_ctx.st.roll_d10 = atan2_d10(-r[2][0], r[2][2]);
 
@@ -421,10 +423,10 @@ void imu9_feed(const hal_imu_t *imu, const hal_mag_t *mag, uint32_t now_ms) {
     g_ctx.last_feed_ms = now_ms;
 
     if (imu) {
-        uint64_t a2 = (uint64_t)((int64_t)imu->ax * imu->ax +
-                                 (int64_t)imu->ay * imu->ay +
-                                 (int64_t)imu->az * imu->az);
-        a_norm = isqrt64(a2);
+        uint32_t a2 = (uint32_t)((int32_t)imu->ax * (int32_t)imu->ax) +
+                      (uint32_t)((int32_t)imu->ay * (int32_t)imu->ay) +
+                      (uint32_t)((int32_t)imu->az * (int32_t)imu->az);
+        a_norm = isqrt32(a2);
         learn_gyro_bias(imu, a_norm);
         g_ctx.prev_g[0] = imu->gx;
         g_ctx.prev_g[1] = imu->gy;
@@ -511,7 +513,7 @@ void imu9_feed(const hal_imu_t *imu, const hal_mag_t *mag, uint32_t now_ms) {
             if (vec_norm_q14(mc[0], mc[1], mc[2], m_hat)) {
                 h[0] = (r[0][0] * m_hat[0] + r[0][1] * m_hat[1] + r[0][2] * m_hat[2]) >> 14;
                 h[1] = (r[1][0] * m_hat[0] + r[1][1] * m_hat[1] + r[1][2] * m_hat[2]) >> 14;
-                by_ref = (int32_t)isqrt64((uint32_t)(h[0] * h[0] + h[1] * h[1]));
+                by_ref = (int32_t)isqrt32((uint32_t)(h[0] * h[0] + h[1] * h[1]));
                 bz_ref = (r[2][0] * m_hat[0] + r[2][1] * m_hat[1] + r[2][2] * m_hat[2]) >> 14;
                 w_hat[0] = (r[1][0] * by_ref + r[2][0] * bz_ref) >> 14;
                 w_hat[1] = (r[1][1] * by_ref + r[2][1] * bz_ref) >> 14;

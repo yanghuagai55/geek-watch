@@ -480,56 +480,81 @@ void ui_text_fit(char *out, int capacity, const char *utf8,
     }
 }
 
+#define RGB565_PACK(c)   (((uint32_t)(c) | ((uint32_t)(c) << 16)) & 0x07E0F81Fu)
+#define RGB565_UNPACK(x) ((uint16_t)((x) | ((x) >> 16)))
+
 static void pixel(int x, int y, int band_y, uint16_t color, uint8_t opacity) {
     uint16_t *dst;
-    uint16_t d;
-    int inv;
-    int dr, dg, db, sr, sg, sb;
-    int r, g, b;
+    uint32_t a5, res;
 
     if (x < clip_x0 || x >= clip_x1 || y < band_y || y >= clip_y1 || !opacity) {
         return;
     }
     dst = &band[(y - band_y) * UI_W + x];
-    if (opacity == 255) {
+    if (opacity >= 252) {
         *dst = color;
         return;
     }
-    d = *dst;
-    inv = 256 - opacity;
-    dr = (d >> 11) & 31;
-    dg = (d >> 5) & 63;
-    db = d & 31;
-    sr = (color >> 11) & 31;
-    sg = (color >> 5) & 63;
-    sb = color & 31;
-    r = (dr * inv + sr * opacity) >> 8;
-    g = (dg * inv + sg * opacity) >> 8;
-    b = (db * inv + sb * opacity) >> 8;
-    *dst = (uint16_t)((r << 11) | (g << 5) | b);
+    a5 = ((uint32_t)opacity + 4u) >> 3;
+    if (a5 == 0u) {
+        return;
+    }
+    res = ((RGB565_PACK(*dst) * (32u - a5) + RGB565_PACK(color) * a5) >> 5) & 0x07E0F81Fu;
+    *dst = RGB565_UNPACK(res);
 }
 
 static void span(int x0, int x1, int y, int band_y, uint16_t color, uint8_t a) {
     uint16_t *p;
     int n;
-    unsigned inv = 256u - a;
-    unsigned r = ((color >> 11) & 31u) * a;
-    unsigned g = ((color >> 5) & 63u) * a;
-    unsigned b = (color & 31u) * a;
+
     if (x0 < clip_x0) x0 = clip_x0;
     if (x1 > clip_x1) x1 = clip_x1;
     if (y < band_y || y >= clip_y1 || x0 >= x1 || !a) return;
     p = band + (y - band_y) * UI_W + x0;
     n = x1 - x0;
-    if (a == 255) {
-        while (n--) *p++ = color;
-    } else {
-        while (n--) {
-            unsigned d = *p;
-            *p++ = (uint16_t)((((((d >> 11) & 31u) * inv + r) >> 8) << 11) |
-                              (((((d >> 5) & 63u) * inv + g) >> 8) << 5) |
-                              (((d & 31u) * inv + b) >> 8));
+    if (a >= 252) {
+        if (((uintptr_t)p & 2u) != 0u) {
+            *p++ = color;
+            n--;
         }
+        if (n >= 2) {
+            uint32_t pair = (uint32_t)color | ((uint32_t)color << 16);
+            uint32_t *p32 = (uint32_t *)p;
+            int w = n >> 1;
+            while (w--) *p32++ = pair;
+            p = (uint16_t *)p32;
+            n &= 1;
+        }
+        if (n) *p = color;
+    } else {
+        uint32_t a5 = ((uint32_t)a + 4u) >> 3;
+        uint32_t inv5, sc;
+        if (a5 == 0u) return;
+        inv5 = 32u - a5;
+        sc = RGB565_PACK(color) * a5;
+        while (n--) {
+            uint32_t res = ((RGB565_PACK(*p) * inv5 + sc) >> 5) & 0x07E0F81Fu;
+            *p++ = RGB565_UNPACK(res);
+        }
+    }
+}
+
+static void band_zero(uint16_t *dst, unsigned px_cnt) {
+    uint32_t *p32 = (uint32_t *)dst;
+    unsigned w = px_cnt >> 1;
+    while (w >= 4u) {
+        p32[0] = 0u;
+        p32[1] = 0u;
+        p32[2] = 0u;
+        p32[3] = 0u;
+        p32 += 4;
+        w -= 4u;
+    }
+    while (w--) {
+        *p32++ = 0u;
+    }
+    if (px_cnt & 1u) {
+        *(uint16_t *)p32 = 0u;
     }
 }
 
@@ -578,8 +603,14 @@ static void raster_fill(const draw_item_t *it, int band_y) {
 
 static unsigned isqrt(unsigned n) {
     unsigned result = 0;
-    unsigned bit = 1u << 30;
+    unsigned bit;
+    if (n == 0u) return 0u;
+#if defined(__GNUC__)
+    bit = 1u << ((31u - (unsigned)__builtin_clz(n)) & ~1u);
+#else
+    bit = 1u << 30;
     while (bit > n) bit >>= 2;
+#endif
     while (bit) {
         if (n >= result + bit) {
             n -= result + bit;
@@ -1741,7 +1772,7 @@ void ui_draw_flush(void) {
             }
         }
         if (!skip_clear) {
-            memset(band, 0, (unsigned)h * (unsigned)UI_W * 2u);
+            band_zero(band, (unsigned)h * (unsigned)UI_W);
         }
         for (n = first; n < item_n; n++) {
             const bounds_t *b = &history[n].box;

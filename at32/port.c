@@ -98,9 +98,12 @@ void SysTick_Handler(void) {
     beep_tick(now);
 }
 
+/* DMA1_CH3(SPI1_TX): fdtien|dtd(M2P)|mincm|16bit->16bit|priority=high */
+#define DMA_SPI_TX_CTRL 0x2592u
+
 void DMA1_Channel3_2_IRQHandler(void) {
     /* 只关中断源，FDT 标志留着给 hal_display_busy() 判断。 */
-    dma_interrupt_enable(DMA1_CHANNEL3, DMA_FDT_INT, FALSE);
+    DMA1_CHANNEL3->ctrl_bit.fdtien = 0;
 }
 
 static void systick_on(uint32_t cycles_per_ms) {
@@ -156,12 +159,14 @@ static void clock_setup(void) {
         crm_ahb_div_set(CRM_AHB_DIV_1);
         crm_apb2_div_set(CRM_APB2_DIV_1);
         crm_apb1_div_set(CRM_APB1_DIV_1);
+        CRM->misc2_bit.auto_step_en = CRM_AUTO_STEP_MODE_ENABLE;
         crm_sysclk_switch(CRM_SCLK_PLL);
         for(n = 0; n < 400000u; n++) {
             if(crm_sysclk_switch_status_get() == CRM_SCLK_PLL) {
                 break;
             }
         }
+        CRM->misc2_bit.auto_step_en = CRM_AUTO_STEP_MODE_DISABLE;
     }
 
     /* 3) 按“真实生效”的时钟设 SysTick。任何回退都不能让节拍跑偏。 */
@@ -227,9 +232,10 @@ static void spi_setup(void) {
     SPI1->ctrl2 = 0u;
     SPI1->ctrl1 = (uint16_t)(0x0344u | ((uint32_t)SPI_CLK_DIV << 3));
 
-    /* 像素走 DMA1 通道 3（SPI1_TX，固定映射） */
-    dma_reset(DMA1_CHANNEL3);
-    dma_flag_clear(DMA1_FDT3_FLAG);
+    /* 像素走 DMA1 通道 3（SPI1_TX，固定映射）；固定外设地址只配一次。 */
+    DMA1_CHANNEL3->ctrl = 0u;
+    DMA1->clr = DMA1_GL3_FLAG;
+    DMA1_CHANNEL3->paddr = (uint32_t)&SPI1->dt;
     nvic_irq_enable(DMA1_Channel3_2_IRQn, 1, 0);
 }
 
@@ -299,27 +305,14 @@ static void spi_byte(unsigned char data) {
 }
 
 static void spi_dma(const uint16_t *px, int n) {
-    dma_init_type dma_init_struct;
-
-    dma_reset(DMA1_CHANNEL3);
-    dma_flag_clear(DMA1_FDT3_FLAG);
-    dma_default_para_init(&dma_init_struct);
-    dma_init_struct.peripheral_base_addr = (uint32_t)&SPI1->dt;
-    dma_init_struct.memory_base_addr = (uint32_t)px;
-    dma_init_struct.direction = DMA_DIR_MEMORY_TO_PERIPHERAL;
-    dma_init_struct.buffer_size = (uint16_t)n;
-    dma_init_struct.peripheral_inc_enable = FALSE;
-    dma_init_struct.memory_inc_enable = TRUE;
-    dma_init_struct.peripheral_data_width = DMA_PERIPHERAL_DATA_WIDTH_HALFWORD;
-    dma_init_struct.memory_data_width = DMA_MEMORY_DATA_WIDTH_HALFWORD;
-    dma_init_struct.loop_mode_enable = FALSE;
-    dma_init_struct.priority = DMA_PRIORITY_HIGH;
-    dma_init(DMA1_CHANNEL3, &dma_init_struct);
-    dma_interrupt_enable(DMA1_CHANNEL3, DMA_FDT_INT, TRUE);
+    DMA1_CHANNEL3->ctrl = 0u;
+    DMA1->clr = DMA1_FDT3_FLAG;
+    DMA1_CHANNEL3->maddr = (uint32_t)px;
+    DMA1_CHANNEL3->dtcnt = (uint16_t)n;
     display_active = 1;
     __asm volatile("dmb" ::: "memory");
-    spi_i2s_dma_transmitter_enable(SPI1, TRUE);
-    dma_channel_enable(DMA1_CHANNEL3, TRUE);
+    SPI1->ctrl2_bit.dmaten = 1;
+    DMA1_CHANNEL3->ctrl = DMA_SPI_TX_CTRL | 1u;
 }
 
 static void lcd_cmd(unsigned char cmd) {
@@ -334,6 +327,16 @@ static void lcd_data(unsigned char data) {
     spi_wait();
 }
 
+static void lcd_range(unsigned char cmd, unsigned char a, unsigned char b) {
+    lcd_cmd(cmd);
+    gpio_bits_set(GPIOA, PIN_DC);
+    spi_byte(0);
+    spi_byte(a);
+    spi_byte(0);
+    spi_byte(b);
+    spi_wait();
+}
+
 static void lcd_window(int x, int y, int w, int h) {
     /* 这块 CTC180 面板：起始地址不加偏移，终点列 +2、行 +1。
        改成对称偏移会把起始点也移走，每行少 2 像素，带会变成梳齿。 */
@@ -342,16 +345,8 @@ static void lcd_window(int x, int y, int w, int h) {
     unsigned int x1 = x0 + (unsigned int)w - 1u;
     unsigned int y1 = y0 + (unsigned int)h - 1u;
 
-    lcd_cmd(0x2A);
-    lcd_data(0);
-    lcd_data((unsigned char)x0);
-    lcd_data(0);
-    lcd_data((unsigned char)(x1 + 2u));
-    lcd_cmd(0x2B);
-    lcd_data(0);
-    lcd_data((unsigned char)y0);
-    lcd_data(0);
-    lcd_data((unsigned char)(y1 + 1u));
+    lcd_range(0x2A, (unsigned char)x0, (unsigned char)(x1 + 2u));
+    lcd_range(0x2B, (unsigned char)y0, (unsigned char)(y1 + 1u));
     lcd_cmd(0x2C);
 }
 
@@ -458,7 +453,7 @@ void hal_idle(void) {
     uint32_t mask = irq_save();
     uint32_t before;
 
-    if(rx_n || (display_active && dma_flag_get(DMA1_FDT3_FLAG) != RESET)) {
+    if(rx_n || (display_active && (DMA1->sts & DMA1_FDT3_FLAG) != 0u)) {
         irq_restore(mask);
         return;
     }
@@ -529,17 +524,17 @@ int hal_display_busy(void) {
     if(!display_active) {
         return 0;
     }
-    if(dma_flag_get(DMA1_FDT3_FLAG) == RESET) {
+    if((DMA1->sts & DMA1_FDT3_FLAG) == 0u) {
         return 1;
     }
     /* FDT 只说明最后一个半字进了 DR，还没移出。两个都要等。 */
     if(SPI1->sts_bit.tdbe == 0 || SPI1->sts_bit.bf) {
         return 1;
     }
-    dma_channel_enable(DMA1_CHANNEL3, FALSE);
-    spi_i2s_dma_transmitter_enable(SPI1, FALSE);
+    DMA1_CHANNEL3->ctrl_bit.chen = 0;
+    SPI1->ctrl2_bit.dmaten = 0;
     spi_bits(0);
-    dma_flag_clear(DMA1_FDT3_FLAG);
+    DMA1->clr = DMA1_FDT3_FLAG;
     __asm volatile("dmb" ::: "memory");
     display_active = 0;
     return 0;
